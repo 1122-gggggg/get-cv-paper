@@ -15,8 +15,8 @@ async function fetchPapers() {
     loader.classList.remove('hidden');
 
     try {
-        // 取得多一點論文才能在前端分類篩選
-        const res = await fetch('/api/papers?max_results=80');
+        // 一次拿1000篇(大約一週的量)，後端已有快取機制
+        const res = await fetch('/api/papers?max_results=1000');
         if (!res.ok) throw new Error('Failed to fetch data');
         const data = await res.json();
         allPapers = data.papers;
@@ -41,6 +41,20 @@ function renderPapers(papers) {
     noResults.classList.add('hidden');
     papersGrid.classList.remove('hidden');
     loader.classList.add('hidden');
+
+    // 加入一個橫跨整行的資訊標題
+    let themeTitle = "這週的相關文章";
+    if (currentCategory === "all") themeTitle = "本週所有最新論文";
+    else if (currentCategory === "top_conf") themeTitle = "本週入選三大頂會與權威期刊的高手論文";
+    else themeTitle = `本週關於與 "${document.querySelector('.category-btn.active').innerText}" 相關的文章`;
+
+    const countHeader = document.createElement('div');
+    countHeader.style.gridColumn = '1 / -1';
+    countHeader.style.padding = '1rem 0';
+    countHeader.style.borderBottom = '1px solid var(--card-border)';
+    countHeader.style.marginBottom = '1rem';
+    countHeader.innerHTML = `<h3 style="color:#a855f7; font-size:1.4rem;">📚 ${themeTitle}：共找到 ${papers.length} 篇</h3>`;
+    papersGrid.appendChild(countHeader);
 
     papers.forEach((paper, index) => {
         const card = document.createElement('div');

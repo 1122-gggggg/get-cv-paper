@@ -15,53 +15,75 @@ os.makedirs("static", exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/api/papers")
-def get_papers(max_results: int = 30):
-    import feedparser
-    import re
-    from datetime import datetime
-    
-    url = 'https://export.arxiv.org/rss/cs.CV'
-    try:
-        feed = feedparser.parse(url)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-        
-    papers = []
-    # If feed is empty or failed
-    if not feed.entries:
-        raise HTTPException(status_code=500, detail="Failed to fetch RSS feed or feed is empty.")
+import time
+from typing import Dict, Any
+from datetime import datetime, timedelta
 
-    for i, entry in enumerate(feed.entries):
-        if i >= max_results:
-            break
-            
-        # 標題通常會有 "(arXiv:xxxx.xxxxx [cs.CV])"，我們稍微清理一下
-        title = entry.get('title', 'Unknown Title')
+cache: Dict[str, Any] = {"timestamp": 0, "papers": []}
+CACHE_TTL = 3600 # Cache for 1 hour to prevent 429 Too Many Requests
+
+@app.get("/api/papers")
+def get_papers(max_results: int = 1000):
+    global cache
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    # Return cached data if valid
+    if time.time() - cache["timestamp"] < CACHE_TTL and len(cache["papers"]) > 0:
+        return {"papers": cache["papers"]}
+
+    # Fetch 1000 papers which usually covers the entire week in cs.CV
+    url = f'http://export.arxiv.org/api/query?search_query=cat:cs.CV&sortBy=submittedDate&sortOrder=descending&max_results={max_results}'
+    try:
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 DesktopDashboard/1.0'}
+        )
+        with urllib.request.urlopen(req, timeout=20) as response:
+            xml_data = response.read()
+    except Exception as e:
+        if cache["papers"]: return {"papers": cache["papers"]}
+        raise HTTPException(status_code=500, detail=str(e))
+
+    root = ET.fromstring(xml_data)
+    ns = {'atom': 'http://www.w3.org/2005/Atom', 'arxiv': 'http://arxiv.org/schemas/atom'}
+    
+    papers = []
+    one_week_ago = datetime.now() - timedelta(days=7)
+
+    for entry in root.findall('atom:entry', ns):
+        title = entry.find('atom:title', ns).text.strip().replace('\n', ' ')
+        
+        # Clean up (arXiv:...) from titles
+        import re
         title = re.sub(r'\(arXiv:.*?\)', '', title).strip()
         
-        link = entry.get('link', '')
+        summary = entry.find('atom:summary', ns).text.strip().replace('\n', ' ')
+        url_link = entry.find('atom:id', ns).text
         
-        # RSS 摘要會被 <p> 包裝
-        raw_desc = entry.get('description', '')
-        summary = re.sub(r'<[^>]+>', '', raw_desc).strip()
-        
-        # 作者也可能被 <a> 包裝
-        raw_creator = entry.get('creator', entry.get('author', 'Unknown Author'))
-        clean_authors_str = re.sub(r'<[^>]+>', '', raw_creator).strip()
-        authors = [a.strip() for a in clean_authors_str.split(',') if a.strip()]
-        
-        # 日期 (RSS 通常沒有各篇的時間，只共用 feed 更新時間，所以用當天代替)
-        published_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        raw_published = entry.find('atom:published', ns).text
+        try:
+            pub_date = datetime.strptime(raw_published, '%Y-%m-%dT%H:%M:%SZ')
+            # 確保只保留一週內的論文
+            if pub_date < one_week_ago:
+                continue
+            published_str = pub_date.strftime('%Y-%m-%d %H:%M')
+        except:
+            published_str = raw_published
+
+        authors = [author.find('atom:name', ns).text for author in entry.findall('atom:author', ns)]
         
         papers.append({
             'title': title,
             'summary': summary,
-            'url': link,
+            'url': url_link,
             'published': published_str,
             'authors': authors
         })
         
+    cache["papers"] = papers
+    cache["timestamp"] = time.time()
+    
     return {"papers": papers}
 
 @app.get("/")
