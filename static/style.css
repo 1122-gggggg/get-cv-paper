@@ -488,6 +488,32 @@ header {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
+    cursor: context-menu;
+}
+
+/* Toast 通知 */
+.toast {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: rgba(30, 41, 59, 0.95);
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    color: #c4b5fd;
+    padding: 0.6rem 1.4rem;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    backdrop-filter: blur(12px);
+    opacity: 0;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    pointer-events: none;
+    z-index: 9999;
+    white-space: nowrap;
+}
+
+.toast.toast-show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 }
 
 .remove-topic {

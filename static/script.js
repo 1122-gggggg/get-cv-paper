@@ -262,6 +262,30 @@ function saveCustomTopics() {
     localStorage.setItem(CUSTOM_TOPICS_KEY, JSON.stringify(topics));
 }
 
+function removeCustomTopic(btn, label) {
+    if (currentCategory === label) {
+        currentCategory = 'all';
+        document.querySelector('.category-btn[data-filter="all"]').classList.add('active');
+        filterPapers();
+    }
+    btn.remove();
+    saveCustomTopics();
+    bindCategoryBtns();
+    showToast(`已移除「${label}」`);
+}
+
+function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    requestAnimationFrame(() => t.classList.add('toast-show'));
+    setTimeout(() => {
+        t.classList.remove('toast-show');
+        setTimeout(() => t.remove(), 300);
+    }, 1800);
+}
+
 function addTopicBtn(topic, save = true) {
     const label = topic.trim();
     if (!label) return;
@@ -290,15 +314,13 @@ function addTopicBtn(topic, save = true) {
     removeBtn.title = '移除此主題';
     removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (currentCategory === label) {
-            // 切回 All
-            currentCategory = 'all';
-            document.querySelector('.category-btn[data-filter="all"]').classList.add('active');
-            filterPapers();
-        }
-        btn.remove();
-        saveCustomTopics();
-        bindCategoryBtns();
+        removeCustomTopic(btn, label);
+    });
+
+    // 右鍵刪除
+    btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        removeCustomTopic(btn, label);
     });
 
     btn.appendChild(labelSpan);
@@ -309,23 +331,23 @@ function addTopicBtn(topic, save = true) {
     bindCategoryBtns();
 }
 
-document.getElementById('addTopicBtn').addEventListener('click', () => {
-    const input = document.getElementById('customTopicInput');
-    addTopicBtn(input.value);
-    input.value = '';
-    input.focus();
-});
-
-document.getElementById('customTopicInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        addTopicBtn(e.target.value);
-        e.target.value = '';
-    }
-});
-
 // Initial Load
 document.addEventListener('DOMContentLoaded', () => {
     loadCustomTopics();
     bindCategoryBtns();
     fetchPapers();
+
+    document.getElementById('addTopicBtn').addEventListener('click', () => {
+        const input = document.getElementById('customTopicInput');
+        addTopicBtn(input.value);
+        input.value = '';
+        input.focus();
+    });
+
+    document.getElementById('customTopicInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            addTopicBtn(e.target.value);
+            e.target.value = '';
+        }
+    });
 });
