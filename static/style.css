@@ -250,7 +250,32 @@ header {
     line-clamp: 5;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    margin-bottom: 2rem;
+    margin-bottom: 0.8rem;
+}
+
+.zh-summary-block {
+    background: rgba(99, 102, 241, 0.08);
+    border-left: 3px solid rgba(168, 85, 247, 0.6);
+    border-radius: 0 0.6rem 0.6rem 0;
+    padding: 0.7rem 1rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.88rem;
+    line-height: 1.7;
+    color: #c4b5fd;
+}
+
+.zh-summary-block .zh-label {
+    font-size: 0.75rem;
+    color: #a855f7;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.3rem;
+    display: block;
+}
+
+.zh-summary-block.loading {
+    color: #64748b;
+    font-style: italic;
 }
 
 .paper-footer {
@@ -371,6 +396,78 @@ header {
     color: white;
     border-color: transparent;
     box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+}
+
+/* 新增主題輸入區 */
+.add-topic-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: 0.4rem;
+}
+
+.add-topic-wrapper input {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    padding: 0.45rem 1rem;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.9rem;
+    width: 160px;
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+    outline: none;
+}
+
+.add-topic-wrapper input:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 12px rgba(99,102,241,0.3);
+    width: 200px;
+}
+
+.add-topic-wrapper input::placeholder {
+    color: var(--text-secondary);
+}
+
+.add-topic-btn {
+    background: rgba(99, 102, 241, 0.2);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    border-radius: 999px;
+    padding: 0.45rem 1rem;
+    color: #a5b4fc;
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+
+.add-topic-btn:hover {
+    background: rgba(99, 102, 241, 0.4);
+    color: white;
+    transform: translateY(-2px);
+}
+
+/* 自訂主題按鈕 */
+.custom-topic-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.remove-topic {
+    font-size: 1rem;
+    line-height: 1;
+    color: rgba(255, 255, 255, 0.5);
+    transition: color 0.2s;
+    cursor: pointer;
+    margin-left: 2px;
+}
+
+.custom-topic-btn:hover .remove-topic,
+.custom-topic-btn.active .remove-topic {
+    color: rgba(255, 255, 255, 0.9);
 }
 
 @media (max-width: 768px) {

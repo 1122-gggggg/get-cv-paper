@@ -1,12 +1,69 @@
 let allPapers = [];
 let currentCategory = 'all';
 
+// ── 中文摘要翻譯系統 ──────────────────────────────────────────
+const ZH_CACHE_KEY = 'zh_summary_v1';
+let zhCache = {};
+try { zhCache = JSON.parse(localStorage.getItem(ZH_CACHE_KEY) || '{}'); } catch(e) {}
+
+const translateQueue = [];
+let translateBusy = false;
+
+async function processTranslateQueue() {
+    if (translateBusy || translateQueue.length === 0) return;
+    translateBusy = true;
+    const { text, cacheKey, el } = translateQueue.shift();
+
+    try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const translated = data[0].map(item => item[0]).join('');
+        zhCache[cacheKey] = translated;
+        try { localStorage.setItem(ZH_CACHE_KEY, JSON.stringify(zhCache)); } catch(e) {}
+        el.textContent = translated;
+        el.closest('.zh-summary-block').classList.remove('loading');
+    } catch(e) {
+        el.textContent = '（翻譯暫時無法取得）';
+    }
+
+    translateBusy = false;
+    setTimeout(processTranslateQueue, 150); // 150ms 間隔防止頻率限制
+}
+
+function queueTranslation(summary, cacheKey, textEl) {
+    if (zhCache[cacheKey]) {
+        textEl.textContent = zhCache[cacheKey];
+        textEl.closest('.zh-summary-block').classList.remove('loading');
+        return;
+    }
+    // 截取前 600 字元避免請求過長
+    const text = summary.length > 600 ? summary.substring(0, 600) + '...' : summary;
+    translateQueue.push({ text, cacheKey, el: textEl });
+    processTranslateQueue();
+}
+
+// IntersectionObserver：卡片進入視野才翻譯
+const translateObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const card = entry.target;
+            const textEl = card.querySelector('.zh-summary-text');
+            if (textEl && !textEl.dataset.queued) {
+                textEl.dataset.queued = '1';
+                queueTranslation(card.dataset.summary, card.dataset.cacheKey, textEl);
+            }
+            translateObserver.unobserve(card);
+        }
+    });
+}, { rootMargin: '200px' });
+
 const papersGrid = document.getElementById('papersGrid');
 const loader = document.getElementById('loader');
 const searchInput = document.getElementById('searchInput');
 const refreshBtn = document.getElementById('refreshBtn');
 const noResults = document.getElementById('noResults');
-const categoryBtns = document.querySelectorAll('.category-btn');
+let categoryBtns = document.querySelectorAll('.category-btn');
 
 async function fetchPapers() {
     // Show loader
@@ -59,14 +116,19 @@ function renderPapers(papers) {
     papers.forEach((paper, index) => {
         const card = document.createElement('div');
         card.className = 'paper-card';
-        // Remove animation delay so it doesn't staggered slow down on quick filter changes
-        card.style.animationDelay = `${(index % 20) * 0.03}s`; 
-        
+        card.style.animationDelay = `${(index % 20) * 0.03}s`;
+        card.dataset.summary = paper.summary;
+        card.dataset.cacheKey = paper.url;
+
         card.innerHTML = `
             <div>
                 <h2 class="paper-title">${paper.title}</h2>
                 <p class="paper-authors">${paper.authors.join(', ')}</p>
                 <p class="paper-summary">${paper.summary}</p>
+                <div class="zh-summary-block loading">
+                    <span class="zh-label">🀄 重點摘要（中文）</span>
+                    <span class="zh-summary-text">載入中文摘要…</span>
+                </div>
             </div>
             <div class="paper-footer">
                 <span class="paper-date">${paper.published}</span>
@@ -77,6 +139,7 @@ function renderPapers(papers) {
             </div>
         `;
         papersGrid.appendChild(card);
+        translateObserver.observe(card);
     });
 }
 
@@ -134,19 +197,96 @@ refreshBtn.addEventListener('click', fetchPapers);
 searchInput.addEventListener('input', filterPapers);
 document.getElementById('sortFilter').addEventListener('change', filterPapers);
 
-// 綁定所有分類按鈕事件
-categoryBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-        // 移除其他 active
-        categoryBtns.forEach(b => b.classList.remove('active'));
-        // 標記目前的按鈕為 active
-        btn.classList.add('active');
-        // 更新當前分類
-        currentCategory = btn.dataset.filter;
-        // 觸發篩選
-        filterPapers();
+function bindCategoryBtns() {
+    categoryBtns = document.querySelectorAll('.category-btn');
+    categoryBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            categoryBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentCategory = btn.dataset.filter;
+            filterPapers();
+        });
     });
+}
+
+// 自訂主題功能
+const CUSTOM_TOPICS_KEY = 'visionary_custom_topics';
+
+function loadCustomTopics() {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_TOPICS_KEY) || '[]');
+    saved.forEach(topic => addTopicBtn(topic, false));
+}
+
+function saveCustomTopics() {
+    const customBtns = document.querySelectorAll('.category-btn[data-custom="true"]');
+    const topics = Array.from(customBtns).map(b => b.dataset.filter);
+    localStorage.setItem(CUSTOM_TOPICS_KEY, JSON.stringify(topics));
+}
+
+function addTopicBtn(topic, save = true) {
+    const label = topic.trim();
+    if (!label) return;
+
+    // 避免重複
+    const existing = document.querySelector(`.category-btn[data-filter="${CSS.escape(label)}"]`);
+    if (existing) {
+        existing.scrollIntoView({ behavior: 'smooth', inline: 'center' });
+        return;
+    }
+
+    const filtersDiv = document.querySelector('.category-filters');
+    const wrapper = document.querySelector('.add-topic-wrapper');
+
+    const btn = document.createElement('button');
+    btn.className = 'category-btn custom-topic-btn';
+    btn.dataset.filter = label;
+    btn.dataset.custom = 'true';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = label;
+
+    const removeBtn = document.createElement('span');
+    removeBtn.className = 'remove-topic';
+    removeBtn.textContent = '×';
+    removeBtn.title = '移除此主題';
+    removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (currentCategory === label) {
+            // 切回 All
+            currentCategory = 'all';
+            document.querySelector('.category-btn[data-filter="all"]').classList.add('active');
+            filterPapers();
+        }
+        btn.remove();
+        saveCustomTopics();
+        bindCategoryBtns();
+    });
+
+    btn.appendChild(labelSpan);
+    btn.appendChild(removeBtn);
+    filtersDiv.insertBefore(btn, wrapper);
+
+    if (save) saveCustomTopics();
+    bindCategoryBtns();
+}
+
+document.getElementById('addTopicBtn').addEventListener('click', () => {
+    const input = document.getElementById('customTopicInput');
+    addTopicBtn(input.value);
+    input.value = '';
+    input.focus();
+});
+
+document.getElementById('customTopicInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        addTopicBtn(e.target.value);
+        e.target.value = '';
+    }
 });
 
 // Initial Load
-document.addEventListener('DOMContentLoaded', fetchPapers);
+document.addEventListener('DOMContentLoaded', () => {
+    loadCustomTopics();
+    bindCategoryBtns();
+    fetchPapers();
+});
