@@ -1,6 +1,29 @@
 let allPapers = [];
 let currentCategory = 'all';
 
+// ── 收藏夾系統 ─────────────────────────────────────────────────
+const FAVORITES_KEY = 'visionary_favorites';
+let favorites = new Set(JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]'));
+
+function saveFavorites() {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
+}
+
+function toggleFavorite(url, starEl) {
+    if (favorites.has(url)) {
+        favorites.delete(url);
+        starEl.classList.remove('starred');
+        starEl.title = '加入收藏';
+    } else {
+        favorites.add(url);
+        starEl.classList.add('starred');
+        starEl.title = '取消收藏';
+    }
+    saveFavorites();
+    // 若目前在收藏夾視圖，移除後立即重新渲染
+    if (currentCategory === 'favorites') filterPapers();
+}
+
 // ── 中文摘要翻譯系統 ──────────────────────────────────────────
 const ZH_CACHE_KEY = 'zh_summary_v1';
 let zhCache = {};
@@ -103,6 +126,7 @@ function renderPapers(papers) {
     let themeTitle = "這週的相關文章";
     if (currentCategory === "all") themeTitle = "本週所有最新論文";
     else if (currentCategory === "top_conf") themeTitle = "本週入選三大頂會與權威期刊的高手論文";
+    else if (currentCategory === "favorites") themeTitle = "⭐ 我的收藏論文";
     else themeTitle = `本週關於與 "${document.querySelector('.category-btn.active').innerText}" 相關的文章`;
 
     const countHeader = document.createElement('div');
@@ -120,7 +144,11 @@ function renderPapers(papers) {
         card.dataset.summary = paper.summary;
         card.dataset.cacheKey = paper.url;
 
+        const isStarred = favorites.has(paper.url);
         card.innerHTML = `
+            <button class="star-btn${isStarred ? ' starred' : ''}" title="${isStarred ? '取消收藏' : '加入收藏'}">
+                <svg xmlns="http://www.w3.org/2005/svg" width="18" height="18" viewBox="0 0 24 24" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            </button>
             <div>
                 <h2 class="paper-title">${paper.title}</h2>
                 <p class="paper-authors">${paper.authors.join(', ')}</p>
@@ -138,6 +166,15 @@ function renderPapers(papers) {
                 </a>
             </div>
         `;
+
+        const starBtn = card.querySelector('.star-btn');
+        starBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const svg = starBtn.querySelector('svg');
+            toggleFavorite(paper.url, starBtn);
+            svg.setAttribute('fill', favorites.has(paper.url) ? 'currentColor' : 'none');
+        });
+
         papersGrid.appendChild(card);
         translateObserver.observe(card);
     });
@@ -167,7 +204,9 @@ function filterPapers() {
             
         // 類別按鈕搜尋
         let matchesCategory = true;
-        if (currentCategory === 'top_conf') {
+        if (currentCategory === 'favorites') {
+            matchesCategory = favorites.has(paper.url);
+        } else if (currentCategory === 'top_conf') {
             const topConfs = ['cvpr', 'iccv', 'eccv', 'neurips', 'iclr', 'siggraph', 'tpami', 'siggraph asia', 'aaai', 'ijcai'];
             matchesCategory = topConfs.some(conf => 
                 paper.title.toLowerCase().includes(conf) || 

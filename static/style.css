@@ -219,6 +219,40 @@ header {
     height: 100%;
     opacity: 0;
     animation: fadeIn 0.6s ease-out forwards;
+    position: relative;
+}
+
+/* Star / 收藏按鈕 */
+.star-btn {
+    position: absolute;
+    top: 1.1rem;
+    right: 1.1rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.25);
+    padding: 4px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s, transform 0.2s, background 0.2s;
+    z-index: 1;
+}
+
+.star-btn:hover {
+    color: #facc15;
+    background: rgba(250, 204, 21, 0.12);
+    transform: scale(1.2);
+}
+
+.star-btn.starred {
+    color: #facc15;
+}
+
+.star-btn.starred:hover {
+    color: #fbbf24;
+    background: rgba(250, 204, 21, 0.15);
 }
 
 .paper-card:hover {
