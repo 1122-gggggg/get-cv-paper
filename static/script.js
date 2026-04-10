@@ -411,6 +411,7 @@ function detectVenue(paper) {
     return null;
 }
 
+let _pwcPageFetching = false;
 function renderPapers(papers, customTitle) {
     currentFilteredPapers = papers;
     lastCustomTitle = customTitle ?? null;
@@ -470,8 +471,16 @@ function renderPapers(papers, customTitle) {
         const isRead = readSet.has(paper.url);
         const hasNote = !!notesMap[paper.url];
         const citCount = getCitationCount(paper.url);
-        const citBadge = citCount >= 0
+        const inflCount = getInfluentialCitations(paper.url);
+        const refCount  = getRefCount(paper.url);
+        const citBadge  = citCount >= 0
             ? `<span class="citation-badge">📈 ${citCount} 引用</span>`
+            : '';
+        const inflBadge = inflCount > 0
+            ? `<span class="influential-badge" title="高影響引用：被後續研究大量採用">💡 ${inflCount} 高影響</span>`
+            : '';
+        const refBadge  = refCount > 100
+            ? `<span class="survey-badge" title="引用文獻數 ${refCount}，可能為綜述論文">📚 綜述</span>`
             : '';
 
         if (isRead) card.classList.add('is-read');
@@ -479,13 +488,18 @@ function renderPapers(papers, customTitle) {
         const readIconHTML = isRead ? ICONS.read + ' 已讀' : ICONS.unread + ' 未讀';
         const noteIconHTML = hasNote ? ICONS.noteFilled + ' 筆記' : ICONS.noteEmpty + ' 筆記';
 
-        // 偵測 GitHub 連結
+        // 偵測 GitHub 連結（優先使用 PwC 快取，其次從摘要中偵測）
+        const pwcData = getPwcData(paper.url);
         const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-\.]+/i);
-        const githubUrl = githubMatch ? githubMatch[0] : null;
+        const githubUrl = pwcData?.github_url || (githubMatch ? githubMatch[0] : null);
+        const pwcStars  = pwcData?.stars || 0;
+        const starsText = pwcStars > 0
+            ? ` ⭐${pwcStars >= 1000 ? (pwcStars / 1000).toFixed(1) + 'k' : pwcStars}`
+            : '';
         const githubBtnHTML = githubUrl
             ? `<a href="${githubUrl}" target="_blank" class="github-link-btn" title="查看程式碼">
                 <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-                Code
+                Code${starsText}
                </a>`
             : '';
 
@@ -523,6 +537,8 @@ function renderPapers(papers, customTitle) {
             <div class="paper-footer">
                 <span class="paper-date">${paper.published}</span>
                 ${citBadge}
+                ${inflBadge}
+                ${refBadge}
                 ${githubBtnHTML}
                 <button class="note-btn${hasNote ? ' has-note' : ''}" title="個人筆記">${noteIconHTML}</button>
                 <a href="${paper.url}" target="_blank" class="paper-link">
@@ -585,6 +601,15 @@ function renderPapers(papers, customTitle) {
     });
 
     renderPagination(papers.length);
+
+    // 背景抓取當前頁面的 PwC 資料（code availability + stars）
+    if (!_pwcPageFetching) {
+        _pwcPageFetching = true;
+        fetchPwcData(pagePapers).then(updated => {
+            _pwcPageFetching = false;
+            if (updated) renderPapers(currentFilteredPapers, lastCustomTitle);
+        });
+    }
 }
 
 // ── Semantic Scholar 引用次數 ──────────────────────────────────
@@ -673,6 +698,58 @@ async function fetchCitationCounts(papers) {
         progressBar.style.width = '100%';
         setTimeout(() => { progressBar.classList.remove('active'); progressBar.style.width = '0%'; }, 600);
     }
+}
+
+// ── Papers with Code ──────────────────────────────────────────
+const PWC_CACHE_KEY = 'pwc_cache_v1';
+const PWC_TTL = 24 * 3600 * 1000; // 24 小時
+let pwcCache = {};
+try { pwcCache = JSON.parse(localStorage.getItem(PWC_CACHE_KEY) || '{}'); } catch(e) {}
+
+function getPwcData(url) {
+    const id = getArxivId(url);
+    return (id && pwcCache[id]) ? pwcCache[id] : null;
+}
+
+async function fetchPwcData(papers) {
+    const toFetch = papers.filter(p => {
+        const id = getArxivId(p.url);
+        if (!id) return false;
+        const cached = pwcCache[id];
+        return !cached || (Date.now() - cached.at) > PWC_TTL;
+    });
+    if (!toFetch.length) return false;
+
+    for (const paper of toFetch) {
+        const id = getArxivId(paper.url);
+        try {
+            const res = await fetch(`https://paperswithcode.com/api/v1/papers/?arxiv_id=${id}`);
+            if (!res.ok) { pwcCache[id] = { at: Date.now() }; continue; }
+            const data = await res.json();
+            const result = data.results?.[0];
+            if (!result) { pwcCache[id] = { at: Date.now() }; continue; }
+            pwcCache[id] = { github_url: result.github_url || null, stars: 0, at: Date.now() };
+            // 從 PwC repositories 取得 star 數
+            if (result.id) {
+                try {
+                    const rr = await fetch(`https://paperswithcode.com/api/v1/paper/${result.id}/repositories/`);
+                    if (rr.ok) {
+                        const rd = await rr.json();
+                        const top = rd.results?.find(r => r.is_official) || rd.results?.[0];
+                        if (top) {
+                            pwcCache[id].stars = top.stars || 0;
+                            pwcCache[id].github_url = top.url || pwcCache[id].github_url;
+                        }
+                    }
+                } catch(e) {}
+            }
+        } catch(e) {
+            pwcCache[id] = { at: Date.now() };
+        }
+        await new Promise(r => setTimeout(r, 150));
+    }
+    try { localStorage.setItem(PWC_CACHE_KEY, JSON.stringify(pwcCache)); } catch(e) {}
+    return true;
 }
 
 function applyFilter(pool, query) {
