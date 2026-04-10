@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Visionary | 電腦視覺最新論文</title>
-    <meta name="description" content="A beautiful dashboard for tracking the latest Computer Vision papers.">
+    <meta name="description" content="每日自動追蹤 arXiv 電腦視覺最新論文，附中文摘要與引用統計。">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,6 +12,8 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <!-- 頂部進度條 -->
+    <div id="topProgressBar" class="top-progress-bar"></div>
     <div class="background-blobs">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
@@ -22,54 +24,152 @@
         <header>
             <div class="header-content">
                 <h1 class="logo">Visionary<span>.</span></h1>
-                <p class="subtitle">第一手掌握 Computer Vision 的前沿發展</p>
+                <p class="subtitle">每日自動追蹤 arXiv 電腦視覺最新論文，附中文摘要與引用統計</p>
+                <div class="header-badges">
+                    <span class="header-badge">📡 每日自動更新</span>
+                    <span class="header-badge">🀄 AI 中文摘要</span>
+                    <span class="header-badge">📈 引用次數</span>
+                    <span class="header-badge">⭐ 收藏管理</span>
+                    <span class="header-badge">🔍 全庫搜尋</span>
+                </div>
             </div>
             <div class="controls">
                 <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="搜尋標題或作者...">
+                    <input type="text" id="searchInput" placeholder="搜尋標題、作者或關鍵字（Enter 搜全庫）">
                     <svg class="search-icon" xmlns="http://www.w3.org/2005/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <button id="pinSearchBtn" class="pin-search-btn" title="釘選此搜尋為主題標籤">📌</button>
                 </div>
-                <select id="sortFilter" class="glass-select">
-                    <option value="latest">本日最新 (Latest)</option>
-                    <option value="hot_week">本週熱門 (Trending Week)</option>
-                    <option value="hot_month">本月熱門 (Trending Month)</option>
+                <div class="sort-wrapper" id="sortWrapper">
+                    <button class="sort-trigger" id="sortTrigger">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                        <span id="sortLabel">本日最新</span>
+                        <svg class="sort-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="sort-submenu" id="sortSubmenu">
+                        <button class="sort-item active" data-value="latest">⚡ 本日最新 <span>Latest</span></button>
+                        <button class="sort-item" data-value="hot_week">🔥 本週熱門 <span>Trending Week</span></button>
+                        <button class="sort-item" data-value="hot_month">📈 本月熱門 <span>Trending Month</span></button>
+                    </div>
+                </div>
+                <!-- hidden select kept for JS compatibility -->
+                <select id="sortFilter" style="display:none">
+                    <option value="latest">latest</option>
+                    <option value="hot_week">hot_week</option>
+                    <option value="hot_month">hot_month</option>
                 </select>
+                <!-- 每頁筆數選擇器 -->
+                <div class="per-page-wrapper">
+                    <label class="per-page-label">每頁</label>
+                    <select id="perPageSelect" class="per-page-select">
+                        <option value="9">9 篇</option>
+                        <option value="18">18 篇</option>
+                        <option value="36">36 篇</option>
+                    </select>
+                </div>
             </div>
         </header>
 
         <main>
-            <div class="category-filters">
-                <button class="category-btn active" data-filter="all">All</button>
-                <button class="category-btn" data-filter="favorites">⭐ 收藏夾</button>
-                <button class="category-btn" data-filter="top_conf">⭐ 頂會嚴選 (Top Conf)</button>
-                <button class="category-btn" data-filter="depth estimation">Depth Estimation</button>
-                <button class="category-btn" data-filter="segment">Segmentation</button>
-                <button class="category-btn" data-filter="slam">SLAM</button>
-                <button class="category-btn" data-filter="object detection">Object Detection</button>
-                <button class="category-btn" data-filter="gaussian">Gaussian Splatting</button>
-                <button class="category-btn" data-filter="feature match">Feature Match</button>
-                <button class="category-btn" data-filter="generation">Generation</button>
-                <button class="category-btn" data-filter="transformer">Transformer</button>
-                <div class="add-topic-wrapper">
-                    <input type="text" id="customTopicInput" placeholder="輸入自訂主題..." />
-                    <button id="addTopicBtn" class="add-topic-btn">＋ 新增</button>
+            <!-- 閱讀統計面板 -->
+            <div id="statsPanel" class="stats-panel">
+                <span class="stats-item stats-read" id="statRead">📖 已讀 0</span>
+                <span class="stats-divider">·</span>
+                <span class="stats-item stats-fav" id="statFav">⭐ 收藏 0</span>
+                <span class="stats-divider">·</span>
+                <span class="stats-item stats-notes" id="statNotes">📝 筆記 0</span>
+                <span class="stats-divider">·</span>
+                <span class="stats-item stats-total" id="statTotal">📚 本週 0 篇</span>
+            </div>
+            <!-- 分類標籤：左右箭頭換頁 -->
+            <div class="category-filters-wrapper">
+                <button class="filter-arrow filter-arrow-left" id="filterArrowLeft" aria-label="向左捲動">&#8249;</button>
+                <div class="category-filters">
+                    <button class="category-btn active" data-filter="all">All</button>
+                    <button class="category-btn" data-filter="favorites">⭐ 收藏夾</button>
+                    <!-- 頂會嚴選 + 子選單 -->
+                    <div class="top-conf-wrapper">
+                        <button class="category-btn top-conf-btn" data-filter="top_conf" id="topConfBtn">
+                            🏆 頂會嚴選
+                            <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                        <div class="conf-submenu" id="confSubmenu">
+                            <button class="conf-item" data-filter="conf_cvpr">CVPR</button>
+                            <button class="conf-item" data-filter="conf_iccv">ICCV</button>
+                            <button class="conf-item" data-filter="conf_eccv">ECCV</button>
+                            <button class="conf-item" data-filter="conf_neurips">NeurIPS</button>
+                            <button class="conf-item" data-filter="conf_iclr">ICLR</button>
+                            <button class="conf-item" data-filter="conf_icml">ICML</button>
+                            <button class="conf-item" data-filter="conf_tpami">TPAMI</button>
+                            <button class="conf-item" data-filter="conf_wacv">WACV</button>
+                        </div>
+                    </div>
+                    <button class="category-btn" data-filter="diffusion">Diffusion Model</button>
+                    <button class="category-btn" data-filter="nerf">NeRF</button>
+                    <button class="category-btn" data-filter="gaussian">Gaussian Splatting</button>
+                    <button class="category-btn" data-filter="depth estimation">Depth Estimation</button>
+                    <button class="category-btn" data-filter="segment">Segmentation</button>
+                    <button class="category-btn" data-filter="object detection">Object Detection</button>
+                    <button class="category-btn" data-filter="3d reconstruction">3D Reconstruction</button>
+                    <button class="category-btn" data-filter="pose estimation">Pose Estimation</button>
+                    <button class="category-btn" data-filter="slam">SLAM</button>
+                    <button class="category-btn" data-filter="optical flow">Optical Flow</button>
+                    <button class="category-btn" data-filter="feature match">Feature Matching</button>
+                    <button class="category-btn" data-filter="super resolution">Super Resolution</button>
+                    <button class="category-btn" data-filter="video">Video Understanding</button>
+                    <button class="category-btn" data-filter="point cloud">Point Cloud</button>
+                    <button class="category-btn" data-filter="multimodal">Multimodal</button>
+                    <button class="category-btn" data-filter="transformer">Transformer</button>
+                    <button class="category-btn" data-filter="generation">Generation</button>
+                    <button class="category-btn" data-filter="medical">Medical Imaging</button>
+                    <button class="category-btn" data-filter="self-supervised">Self-Supervised</button>
+                    <button class="category-btn" data-filter="autonomous driving">Autonomous Driving</button>
+                    <div class="add-topic-wrapper">
+                        <input type="text" id="customTopicInput" placeholder="新增主題..." />
+                        <button id="addTopicBtn" class="add-topic-btn">＋</button>
+                    </div>
                 </div>
+                <button class="filter-arrow filter-arrow-right" id="filterArrowRight" aria-label="向右捲動">&#8250;</button>
             </div>
 
             <div id="loader" class="loader-container">
                 <div class="spinner"></div>
                 <p>正在自動為您抓取最新論文...</p>
             </div>
-            
+
             <div id="papersGrid" class="papers-grid hidden">
                 <!-- Papers injected here via JS -->
             </div>
+
+            <!-- 空狀態：加入圖示與操作提示 -->
             <div id="noResults" class="hidden no-results">
-                <h2>沒有找到符合搜尋條件的論文。</h2>
+                <div class="no-results-icon">🔭</div>
+                <p class="no-results-title">沒有找到符合條件的論文</p>
+                <p class="no-results-hint">試試修改搜尋關鍵字、切換分類，或清空搜尋框以顯示所有論文。</p>
+                <button class="no-results-action" id="clearSearchBtn">清除搜尋，顯示全部</button>
             </div>
         </main>
     </div>
 
+    <!-- 右鍵選單 -->
+    <div id="ctxMenu" class="ctx-menu hidden">
+        <button id="ctxUnpin" class="ctx-item ctx-danger">📌 取消釘選</button>
+        <button id="ctxEdit" class="ctx-item">✏️ 編輯名稱</button>
+        <button id="ctxDelete" class="ctx-item ctx-danger">🗑️ 刪除</button>
+    </div>
+
+    <!-- 鍵盤快捷鍵提示 -->
+    <div id="kbdHint" class="kbd-hint">
+        <div><kbd>J</kbd> / <kbd>K</kbd> 下一頁 / 上一頁</div>
+        <div><kbd>F</kbd> 收藏當前卡片</div>
+        <div><kbd>R</kbd> 標記已讀</div>
+        <div><kbd>N</kbd> 開啟筆記</div>
+        <div><kbd>?</kbd> 顯示/隱藏提示</div>
+    </div>
+
+
+    <button id="kbdHintBtn" class="kbd-hint-btn" title="鍵盤快捷鍵說明">?</button>
+    <button id="themeToggleBtn" class="theme-toggle-btn" title="切換深色/淺色模式">🌙</button>
+    <button id="backToTopBtn" class="back-to-top" title="回到頂部">↑</button>
     <script src="/static/script.js"></script>
 </body>
 </html>
