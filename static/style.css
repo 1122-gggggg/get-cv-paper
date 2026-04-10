@@ -727,6 +727,15 @@ header {
     padding-right: 3rem;
     letter-spacing: 0.01em;
 }
+.paper-title-link {
+    color: inherit;
+    text-decoration: none;
+}
+.paper-title-link:hover {
+    text-decoration: underline;
+    text-decoration-color: rgba(148, 163, 184, 0.6);
+    text-underline-offset: 3px;
+}
 
 .paper-authors {
     font-size: 0.82rem;

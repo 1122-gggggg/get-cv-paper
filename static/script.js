@@ -6,6 +6,17 @@ let currentPage = 1;
 let currentFilteredPapers = [];
 let lastCustomTitle = null;
 
+// ── SVG 圖示常數（避免重複字串、加速 parse）─────────────────────
+const ICONS = {
+    unread:     `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle></svg>`,
+    read:       `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+    noteEmpty:  `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
+    noteFilled: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
+};
+
+// ── 頂會關鍵字（hoisted，避免每次 filter 重建 array）────────────
+const TOP_CONF_KEYWORDS = ['cvpr', 'iccv', 'eccv', 'neurips', 'iclr', 'icml', 'tpami', 'wacv', 'ijcv', 'ijcai'];
+
 // ── 收藏夾系統 ─────────────────────────────────────────────────
 const FAVORITES_KEY = 'visionary_favorites';
 let favorites = new Set(JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]'));
@@ -59,7 +70,6 @@ function addPinnedBtn(topic, save = true) {
         savePinnedTopics();
         showToast(`已釘選「${label}」`);
     }
-    bindCategoryBtns();
 }
 
 function deletePinnedBtn(btn) {
@@ -73,7 +83,6 @@ function deletePinnedBtn(btn) {
         filterPapers();
     }
     btn.remove();
-    bindCategoryBtns();
     savePinnedTopics();
 }
 
@@ -90,13 +99,13 @@ function toggleRead(url, card) {
     if (readSet.has(url)) {
         readSet.delete(url);
         card.classList.remove('is-read');
-        readBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle></svg> 未讀`;
+        readBtn.innerHTML = ICONS.unread + ' 未讀';
         readBtn.classList.remove('is-read');
         showToast('已標記為未讀');
     } else {
         readSet.add(url);
         card.classList.add('is-read');
-        readBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> 已讀`;
+        readBtn.innerHTML = ICONS.read + ' 已讀';
         readBtn.classList.add('is-read');
         showToast('已標記為已讀');
     }
@@ -131,12 +140,12 @@ function saveNote(url, card) {
     if (text) {
         notesMap[url] = text;
         noteBtn.classList.add('has-note');
-        noteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 筆記`;
+        noteBtn.innerHTML = ICONS.noteFilled + ' 筆記';
         showToast('筆記已儲存');
     } else {
         delete notesMap[url];
         noteBtn.classList.remove('has-note');
-        noteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 筆記`;
+        noteBtn.innerHTML = ICONS.noteEmpty + ' 筆記';
         showToast('筆記已清除');
     }
     saveNotes();
@@ -467,13 +476,8 @@ function renderPapers(papers, customTitle) {
 
         if (isRead) card.classList.add('is-read');
 
-        const readIconHTML = isRead
-            ? `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> 已讀`
-            : `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle></svg> 未讀`;
-
-        const noteIconHTML = hasNote
-            ? `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 筆記`
-            : `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 筆記`;
+        const readIconHTML = isRead ? ICONS.read + ' 已讀' : ICONS.unread + ' 未讀';
+        const noteIconHTML = hasNote ? ICONS.noteFilled + ' 筆記' : ICONS.noteEmpty + ' 筆記';
 
         // 偵測 GitHub 連結
         const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-\.]+/i);
@@ -498,7 +502,7 @@ function renderPapers(papers, customTitle) {
             <button class="read-btn${isRead ? ' is-read' : ''}" title="切換已讀狀態">${readIconHTML}</button>
             <div>
                 ${venueBadge}
-                <h2 class="paper-title">${paper.title}</h2>
+                <h2 class="paper-title"><a href="${paper.url}" target="_blank" rel="noopener noreferrer" class="paper-title-link">${paper.title}</a></h2>
                 <p class="paper-authors">${paper.authors.map(a => `<button class="author-btn" data-author="${a.replace(/"/g, '&quot;')}">${a}</button>`).join('<span class="author-sep">, </span>')}</p>
                 <div class="summary-collapse-wrapper">
                     <p class="paper-summary collapsed">${paper.summary}</p>
@@ -603,6 +607,16 @@ function getS2Venue(url) {
     const id = getArxivId(url);
     return (id && s2Cache[id]) ? (s2Cache[id].venue || '') : '';
 }
+function getInfluentialCitations(url) {
+    const id = getArxivId(url);
+    return (id && s2Cache[id] !== undefined) ? (s2Cache[id].influential ?? 0) : -1;
+}
+function getRefCount(url) {
+    const id = getArxivId(url);
+    return (id && s2Cache[id] !== undefined) ? (s2Cache[id].refs ?? 0) : -1;
+}
+
+const _s2Fetching = new Set(); // 防止同一論文同時送出多次請求
 
 async function fetchCitationCounts(papers) {
     // 顯示進度條
@@ -610,7 +624,7 @@ async function fetchCitationCounts(papers) {
     if (progressBar) { progressBar.style.width = '0%'; progressBar.classList.add('active'); }
     const toFetch = papers.filter(p => {
         const id = getArxivId(p.url);
-        if (!id) return false;
+        if (!id || _s2Fetching.has(id)) return false;
         const cached = s2Cache[id];
         return !cached || (Date.now() - cached.at) > S2_TTL;
     });
@@ -625,23 +639,28 @@ async function fetchCitationCounts(papers) {
     const CHUNK = 500;
     for (let i = 0; i < toFetch.length; i += CHUNK) {
         const chunk = toFetch.slice(i, i + CHUNK);
-        const ids = chunk.map(p => `ArXiv:${getArxivId(p.url)}`);
+        const chunkIds = chunk.map(p => getArxivId(p.url));
+        const ids = chunkIds.map(id => `ArXiv:${id}`);
+        chunkIds.forEach(id => _s2Fetching.add(id));
         try {
             const res = await fetch(
-                'https://api.semanticscholar.org/graph/v1/paper/batch?fields=citationCount,venue,publicationVenue',
+                'https://api.semanticscholar.org/graph/v1/paper/batch?fields=citationCount,influentialCitationCount,referenceCount,venue,publicationVenue',
                 { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) }
             );
-            if (!res.ok) break;
+            if (!res.ok) { chunkIds.forEach(id => _s2Fetching.delete(id)); break; }
             const data = await res.json();
             data.forEach((item, idx) => {
-                const id = getArxivId(chunk[idx].url);
+                const id = chunkIds[idx];
                 if (id) s2Cache[id] = {
                     count: item?.citationCount ?? 0,
+                    influential: item?.influentialCitationCount ?? 0,
+                    refs: item?.referenceCount ?? 0,
                     venue: item?.publicationVenue?.name || item?.venue || '',
                     at: Date.now()
                 };
             });
-        } catch (e) { break; }
+        } catch (e) { chunkIds.forEach(id => _s2Fetching.delete(id)); break; }
+        chunkIds.forEach(id => _s2Fetching.delete(id));
         // 更新進度百分比
         if (progressBar && progressBar.classList.contains('active')) {
             const progress = Math.min(95, Math.round(((i + CHUNK) / toFetch.length) * 95));
@@ -667,8 +686,7 @@ function applyFilter(pool, query) {
         if (currentCategory === 'favorites') {
             matchesCategory = favorites.has(paper.url);
         } else if (currentCategory === 'top_conf') {
-            const topConfs = ['cvpr', 'iccv', 'eccv', 'neurips', 'iclr', 'icml', 'tpami', 'wacv', 'ijcv', 'ijcai'];
-            matchesCategory = topConfs.some(c =>
+            matchesCategory = TOP_CONF_KEYWORDS.some(c =>
                 paper.title.toLowerCase().includes(c) || paper.summary.toLowerCase().includes(c)
             );
         } else if (CONF_FILTERS.has(currentCategory)) {
@@ -705,6 +723,26 @@ async function filterPapers() {
     currentPage = 1;
     const query = searchInput.value.toLowerCase().trim();
     const sortValue = document.getElementById('sortFilter').value;
+
+    // 會議篩選：搜尋全 arXiv，不受 7 天視窗限制
+    if (CONF_FILTERS.has(currentCategory)) {
+        const keyword = CONF_FILTERS.get(currentCategory);
+        const confName = document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim() || keyword.toUpperCase();
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            const searchQ = query ? `${keyword} ${query}` : keyword;
+            const res = await fetch(`/api/search?q=${encodeURIComponent(searchQ)}&max_results=100`);
+            if (!res.ok) throw new Error('Search failed');
+            const data = await res.json();
+            renderPapers(data.papers, `${confName} 相關論文（全網搜尋）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('搜尋失敗：' + e.message);
+        }
+        return;
+    }
 
     let pool = allPapers;
     let titleSuffix = '';
@@ -948,58 +986,43 @@ function deleteCategoryBtn(btn) {
     showToast(`已刪除「${label}」`);
 }
 
-// ── 分類按鈕綁定（含右鍵） ──────────────────────────────────────
+// ── 分類按鈕綁定（事件委派，只綁一次，動態新增按鈕自動生效）────
 function syncTopConfActiveState() {
     const topConfBtn = document.getElementById('topConfBtn');
     if (!topConfBtn) return;
     const isConfActive = CONF_FILTERS.has(currentCategory) || currentCategory === 'top_conf';
-    if (isConfActive) {
-        topConfBtn.classList.add('active');
-    } else {
-        topConfBtn.classList.remove('active');
-    }
-    // sync each conf-item
+    topConfBtn.classList.toggle('active', isConfActive);
     document.querySelectorAll('.conf-item').forEach(item => {
         item.classList.toggle('active', item.dataset.filter === currentCategory);
     });
 }
 
-function bindCategoryBtns() {
-    categoryBtns = document.querySelectorAll('.category-btn');
-    categoryBtns.forEach(btn => {
-        const fresh = btn.cloneNode(true);
-        btn.replaceWith(fresh);
-        fresh.addEventListener('click', () => {
-            document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
-            fresh.classList.add('active');
-            currentCategory = fresh.dataset.filter;
-            localStorage.setItem('visionary_last_category', currentCategory);
-            syncTopConfActiveState();
-            filterPapers();
-        });
-        fresh.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            showCtxMenu(fresh, e.pageX, e.pageY);
-        });
-    });
-    categoryBtns = document.querySelectorAll('.category-btn');
+function _selectCategory(filter, activeEl) {
+    document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
+    if (activeEl) activeEl.classList.add('active');
+    currentCategory = filter;
+    localStorage.setItem('visionary_last_category', filter);
+    syncTopConfActiveState();
+    filterPapers();
+}
 
-    // ── conf-item 子選單按鈕 ──
-    document.querySelectorAll('.conf-item').forEach(item => {
-        // 重新 clone 以清除舊 listener
-        const fresh = item.cloneNode(true);
-        item.replaceWith(fresh);
-        fresh.addEventListener('click', (e) => {
-            e.stopPropagation();
-            document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
-            fresh.classList.add('active');
-            currentCategory = fresh.dataset.filter;
-            localStorage.setItem('visionary_last_category', currentCategory);
-            syncTopConfActiveState();
-            filterPapers();
-        });
+function bindCategoryBtns() {
+    const filtersDiv = document.querySelector('.category-filters');
+    if (!filtersDiv || filtersDiv._delegated) return;
+    filtersDiv._delegated = true;
+
+    filtersDiv.addEventListener('click', (e) => {
+        const btn = e.target.closest('.category-btn');
+        if (!btn || btn.classList.contains('top-conf-btn')) return;
+        _selectCategory(btn.dataset.filter, btn);
+    });
+
+    filtersDiv.addEventListener('contextmenu', (e) => {
+        const btn = e.target.closest('.category-btn');
+        if (!btn) return;
+        e.preventDefault();
+        showCtxMenu(btn, e.pageX, e.pageY);
     });
 }
 
@@ -1056,7 +1079,6 @@ function addTopicBtn(topic, save = true) {
     filtersDiv.insertBefore(btn, wrapper);
 
     if (save) saveCustomTopics();
-    bindCategoryBtns();
 }
 
 // Initial Load
@@ -1127,6 +1149,15 @@ document.addEventListener('DOMContentLoaded', () => {
         topConfWrapper.addEventListener('mouseleave', closeConfSubmenu);
         confSubmenu.addEventListener('mouseenter', () => clearTimeout(confSubmenuTimer));
         confSubmenu.addEventListener('mouseleave', closeConfSubmenu);
+
+        // conf-item 點擊委派（confSubmenu 已移至 body，在此統一綁定）
+        confSubmenu.addEventListener('click', (e) => {
+            const item = e.target.closest('.conf-item');
+            if (!item) return;
+            e.stopPropagation();
+            closeConfSubmenu();
+            _selectCategory(item.dataset.filter, item);
+        });
     }
 
     // ── 排序下拉選單 hover 定位 ──
@@ -1350,11 +1381,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 捲動時清除卡片聚焦（避免視覺混淆）
+    // 捲動時清除聚焦 + 更新回到頂部按鈕（RAF 節流，合併兩個 scroll 監聽）
+    let _scrollRaf = null;
     window.addEventListener('scroll', () => {
-        if (focusedCardIdx >= 0) {
-            getVisibleCards().forEach(c => c.style.outline = '');
-        }
+        if (_scrollRaf) return;
+        _scrollRaf = requestAnimationFrame(() => {
+            _scrollRaf = null;
+            if (focusedCardIdx >= 0) {
+                getVisibleCards().forEach(c => c.style.outline = '');
+                focusedCardIdx = -1;
+            }
+            backToTopBtn?.classList.toggle('visible', window.scrollY > 400);
+        });
     }, { passive: true });
 
     // ── 每頁筆數 ──────────────────────────────────────────────────
@@ -1413,23 +1451,30 @@ document.querySelector('.category-filters')?.addEventListener('click', () => {
     }, 50);
 });
 
-// ── 閱讀統計面板 ──────────────────────────────────────────────
+// ── 閱讀統計面板（快取 DOM refs，僅在資料變動時更新）────────────
+const _statsEls = {};
+let _statsSnapshot = '';
+
 function updateStats() {
-    const statRead = document.getElementById('statRead');
-    const statFav = document.getElementById('statFav');
-    const statNotes = document.getElementById('statNotes');
-    const statTotal = document.getElementById('statTotal');
-    if (!statRead) return;
-    statRead.textContent = `📖 已讀 ${readSet.size}`;
-    statFav.textContent = `⭐ 收藏 ${favorites.size}`;
-    statNotes.textContent = `📝 筆記 ${Object.keys(notesMap).length}`;
-    statTotal.textContent = `📚 本週 ${allPapers.length} 篇`;
+    if (!_statsEls.read) {
+        _statsEls.read  = document.getElementById('statRead');
+        _statsEls.fav   = document.getElementById('statFav');
+        _statsEls.notes = document.getElementById('statNotes');
+        _statsEls.total = document.getElementById('statTotal');
+    }
+    if (!_statsEls.read) return;
+
+    const snapshot = `${readSet.size}|${favorites.size}|${Object.keys(notesMap).length}|${allPapers.length}`;
+    if (snapshot === _statsSnapshot) return;
+    _statsSnapshot = snapshot;
+
+    _statsEls.read.textContent  = `📖 已讀 ${readSet.size}`;
+    _statsEls.fav.textContent   = `⭐ 收藏 ${favorites.size}`;
+    _statsEls.notes.textContent = `📝 筆記 ${Object.keys(notesMap).length}`;
+    _statsEls.total.textContent = `📚 本週 ${allPapers.length} 篇`;
 }
 
-// 在 DOMContentLoaded 之後，用 setTimeout 確保資料已初始化再更新
 setTimeout(updateStats, 300);
-
-// 每 2 秒刷新一次（簡單可靠）
 setInterval(updateStats, 2000);
 
 // ── 主題切換 ──────────────────────────────────────────────────
@@ -1453,9 +1498,6 @@ themeToggleBtn?.addEventListener('click', () => {
 
 // ── 回到頂部 ──────────────────────────────────────────────────
 const backToTopBtn = document.getElementById('backToTopBtn');
-window.addEventListener('scroll', () => {
-    backToTopBtn?.classList.toggle('visible', window.scrollY > 400);
-}, { passive: true });
 backToTopBtn?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 
 // ── 鍵盤快捷鍵說明按鈕 ────────────────────────────────────────
