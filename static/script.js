@@ -722,9 +722,13 @@ async function filterPapers() {
     if (sortValue === 'hot_week' || sortValue === 'hot_month') {
         await fetchCitationCounts(filtered);
         filtered.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
+    } else if (sortValue === 'citations') {
+        await fetchCitationCounts(filtered);
+        filtered.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
+        titleSuffix = '（依引用數排序）';
     }
 
-    renderPapers(filtered, titleSuffix ? `熱門論文 ${titleSuffix}` : null);
+    renderPapers(filtered, titleSuffix ? (sortValue === 'citations' ? `引用最多 ${titleSuffix}` : `熱門論文 ${titleSuffix}`) : null);
 }
 
 async function searchAllPapers(query) {
@@ -1133,7 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let sortTimer = null;
     if (sortSubmenu) document.body.appendChild(sortSubmenu);
 
-    const SORT_LABELS = { latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門' };
+    const SORT_LABELS = { latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門', citations: '引用最多' };
 
     function openSortSubmenu() {
         clearTimeout(sortTimer);
