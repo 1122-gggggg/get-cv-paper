@@ -85,6 +85,7 @@ body.light-mode .category-btn:hover {
     box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
 }
 body.light-mode .category-btn.active {
+    background: var(--accent-gradient);
     color: #ffffff;
     box-shadow: 0 3px 14px rgba(79, 70, 229, 0.4);
 }
