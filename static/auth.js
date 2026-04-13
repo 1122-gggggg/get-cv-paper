@@ -171,11 +171,25 @@ async function initAuth() {
         client_id: cfg.google_client_id,
         callback: handleCredential,
         auto_select: false,
+        use_fedcm_for_prompt: true,
     });
 
     const signInBtn = document.getElementById('signInBtn');
     if (signInBtn && !_idToken) {
-        signInBtn.addEventListener('click', () => google.accounts.id.prompt());
+        // 在自訂按鈕旁邊掛一個隱形的 Google 官方按鈕，點自訂按鈕時轉發點擊
+        let host = document.getElementById('gsiBtnHost');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'gsiBtnHost';
+            host.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:0;height:0;overflow:hidden;';
+            document.body.appendChild(host);
+        }
+        google.accounts.id.renderButton(host, { type: 'standard', theme: 'outline', size: 'large' });
+        signInBtn.addEventListener('click', () => {
+            const realBtn = host.querySelector('div[role=button], button');
+            if (realBtn) realBtn.click();
+            else google.accounts.id.prompt();
+        });
     }
 }
 
