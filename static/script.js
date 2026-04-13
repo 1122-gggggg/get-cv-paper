@@ -1,10 +1,43 @@
 let allPapers = [];      // 7 天
 let monthPapers = [];    // 30 天（懶加載）
 let currentCategory = 'all';
+let currentSortValue = 'latest';
 let PAPERS_PER_PAGE = parseInt(localStorage.getItem('visionary_per_page') || '9', 10);
 let currentPage = 1;
 let currentFilteredPapers = [];
 let lastCustomTitle = null;
+
+// ── 安全：HTML escape（防 XSS，arXiv 摘要可能含 <、> 等字元）─────
+function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// ── 防抖動 localStorage 寫入（累積大量資料時避免頻繁序列化）──────
+const _saveTimers = {};
+function scheduleSave(key, getVal, delay = 800) {
+    clearTimeout(_saveTimers[key]);
+    _saveTimers[key] = setTimeout(() => {
+        try { localStorage.setItem(key, JSON.stringify(getVal())); } catch (e) {}
+    }, delay);
+}
+
+// ── 預計算 lower-case 欄位以加速搜尋/分類篩選 ─────────────────────
+function indexPapers(papers) {
+    for (const p of papers) {
+        if (p._indexed) continue;
+        p._titleLc   = (p.title   || '').toLowerCase();
+        p._summaryLc = (p.summary || '').toLowerCase();
+        p._authorsLc = (p.authors || []).join(' ').toLowerCase();
+        p._indexed = true;
+    }
+    return papers;
+}
 
 // ── SVG 圖示常數（避免重複字串、加速 parse）─────────────────────
 const ICONS = {
@@ -213,8 +246,8 @@ async function processTranslateQueue() {
     try {
         const summary = await fetchSummaryFromGroq(text, arxivId);
         zhCache[cacheKey] = summary;
-        try { localStorage.setItem(ZH_CACHE_KEY, JSON.stringify(zhCache)); } catch (e) { }
-        el.innerHTML = summary.replace(/\n/g, '<br>');
+        scheduleSave(ZH_CACHE_KEY, () => zhCache);
+        el.innerHTML = escapeHtml(summary).replace(/\n/g, '<br>');
         el.closest('.zh-summary-block').classList.remove('loading');
     } catch (e) {
         // fallback：Google Translate
@@ -222,7 +255,7 @@ async function processTranslateQueue() {
             const short = text.length > 600 ? text.substring(0, 600) + '...' : text;
             const translated = await fetchSummaryFallback(short);
             zhCache[cacheKey] = translated;
-            try { localStorage.setItem(ZH_CACHE_KEY, JSON.stringify(zhCache)); } catch (e2) { }
+            scheduleSave(ZH_CACHE_KEY, () => zhCache);
             el.textContent = translated;
             el.closest('.zh-summary-block').classList.remove('loading');
         } catch (e2) {
@@ -267,7 +300,6 @@ const searchInput = document.getElementById('searchInput');
 const noResults = document.getElementById('noResults');
 
 let searchDebounceTimer = null;
-let categoryBtns = document.querySelectorAll('.category-btn');
 
 // loader 動態提示訊息（讓使用者感受到載入進度，而非呆呆等待）
 const LOADER_MESSAGES = [
@@ -307,7 +339,7 @@ async function fetchPapers() {
         const res = await fetch('/api/papers?max_results=1000');
         if (!res.ok) throw new Error('Failed to fetch data');
         const data = await res.json();
-        allPapers = data.papers;
+        allPapers = indexPapers(data.papers);
         filterPapers(); // Auto filter after fetch
         // 背景抓 S2 venue + 引用數，完成後重新渲染以顯示出處
         fetchCitationCounts(allPapers).then(() => renderPapers(currentFilteredPapers, lastCustomTitle));
@@ -412,7 +444,81 @@ function detectVenue(paper) {
 }
 
 let _pwcPageFetching = false;
+
+// ── 事件委派：所有卡片互動由 papersGrid 一個 listener 處理 ────────
+function _bindPapersGridDelegation() {
+    if (papersGrid._delegated) return;
+    papersGrid._delegated = true;
+
+    papersGrid.addEventListener('click', (e) => {
+        const card = e.target.closest('.paper-card');
+        if (!card) return;
+        const url = card.dataset.url;
+        if (!url) return;
+
+        const starBtn = e.target.closest('.star-btn');
+        if (starBtn && card.contains(starBtn)) {
+            e.stopPropagation();
+            const svg = starBtn.querySelector('svg');
+            toggleFavorite(url, starBtn);
+            if (svg) svg.setAttribute('fill', favorites.has(url) ? 'currentColor' : 'none');
+            return;
+        }
+
+        const readBtn = e.target.closest('.read-btn');
+        if (readBtn && card.contains(readBtn)) {
+            e.stopPropagation();
+            toggleRead(url, card);
+            return;
+        }
+
+        const noteBtn = e.target.closest('.note-btn');
+        if (noteBtn && card.contains(noteBtn)) {
+            e.stopPropagation();
+            openNotePanel(url, card);
+            return;
+        }
+
+        const saveBtn = e.target.closest('.note-save-btn');
+        if (saveBtn && card.contains(saveBtn)) {
+            e.stopPropagation();
+            saveNote(url, card);
+            return;
+        }
+
+        const cancelBtn = e.target.closest('.note-cancel-btn');
+        if (cancelBtn && card.contains(cancelBtn)) {
+            e.stopPropagation();
+            card.querySelector('.note-panel')?.classList.remove('open');
+            return;
+        }
+
+        const authorBtn = e.target.closest('.author-btn');
+        if (authorBtn && card.contains(authorBtn)) {
+            e.preventDefault();
+            const author = authorBtn.dataset.author;
+            if (author) {
+                searchInput.value = author;
+                searchAllPapers(author);
+            }
+            return;
+        }
+
+        const toggleBtn = e.target.closest('.summary-toggle-btn');
+        if (toggleBtn && card.contains(toggleBtn)) {
+            e.stopPropagation();
+            const summaryEl = card.querySelector('.paper-summary');
+            if (!summaryEl) return;
+            const isCollapsed = summaryEl.classList.contains('collapsed');
+            summaryEl.classList.toggle('collapsed', !isCollapsed);
+            toggleBtn.textContent = isCollapsed ? '收合摘要 ▴' : '展開原文摘要 ▾';
+            return;
+        }
+    });
+}
+
 function renderPapers(papers, customTitle) {
+    _bindPapersGridDelegation();
     currentFilteredPapers = papers;
     lastCustomTitle = customTitle ?? null;
     papersGrid.innerHTML = '';
@@ -460,12 +566,14 @@ function renderPapers(papers, customTitle) {
     const start = (currentPage - 1) * PAPERS_PER_PAGE;
     const pagePapers = papers.slice(start, start + PAPERS_PER_PAGE);
 
+    const frag = document.createDocumentFragment();
     pagePapers.forEach((paper, index) => {
         const card = document.createElement('div');
         card.className = 'paper-card';
         card.style.animationDelay = `${(index % 20) * 0.03}s`;
         card.dataset.summary = paper.summary;
         card.dataset.cacheKey = paper.url;
+        card.dataset.url = paper.url;
 
         const isStarred = favorites.has(paper.url);
         const isRead = readSet.has(paper.url);
@@ -488,25 +596,33 @@ function renderPapers(papers, customTitle) {
         const readIconHTML = isRead ? ICONS.read + ' 已讀' : ICONS.unread + ' 未讀';
         const noteIconHTML = hasNote ? ICONS.noteFilled + ' 筆記' : ICONS.noteEmpty + ' 筆記';
 
-        // 偵測 GitHub 連結（優先使用 PwC 快取，其次從摘要中偵測）
+        // 偵測 GitHub 連結（修正 regex，不吞結尾標點）
         const pwcData = getPwcData(paper.url);
-        const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-\.]+/i);
+        const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-](?:[\w\-.]*[\w\-])?/i);
         const githubUrl = pwcData?.github_url || (githubMatch ? githubMatch[0] : null);
         const pwcStars  = pwcData?.stars || 0;
         const starsText = pwcStars > 0
             ? ` ⭐${pwcStars >= 1000 ? (pwcStars / 1000).toFixed(1) + 'k' : pwcStars}`
             : '';
         const githubBtnHTML = githubUrl
-            ? `<a href="${githubUrl}" target="_blank" class="github-link-btn" title="查看程式碼">
+            ? `<a href="${escapeHtml(githubUrl)}" target="_blank" rel="noopener noreferrer" class="github-link-btn" title="查看程式碼">
                 <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-                Code${starsText}
+                Code${escapeHtml(starsText)}
                </a>`
             : '';
 
         const venue = detectVenue(paper);
         const venueBadge = venue
-            ? `<span class="venue-badge" style="--venue-color:${venue.color}">${venue.label}</span>`
+            ? `<span class="venue-badge" style="--venue-color:${escapeHtml(venue.color)}">${escapeHtml(venue.label)}</span>`
             : '';
+
+        const safeTitle   = escapeHtml(paper.title);
+        const safeSummary = escapeHtml(paper.summary);
+        const safeUrl     = escapeHtml(paper.url);
+        const safePublished = escapeHtml(paper.published);
+        const authorsHTML = paper.authors.map(a =>
+            `<button class="author-btn" data-author="${escapeHtml(a)}">${escapeHtml(a)}</button>`
+        ).join('<span class="author-sep">, </span>');
 
         card.innerHTML = `
             <div class="read-ribbon"></div>
@@ -516,14 +632,14 @@ function renderPapers(papers, customTitle) {
             <button class="read-btn${isRead ? ' is-read' : ''}" title="切換已讀狀態">${readIconHTML}</button>
             <div>
                 ${venueBadge}
-                <h2 class="paper-title"><a href="${paper.url}" target="_blank" rel="noopener noreferrer" class="paper-title-link">${paper.title}</a></h2>
-                <p class="paper-authors">${paper.authors.map(a => `<button class="author-btn" data-author="${a.replace(/"/g, '&quot;')}">${a}</button>`).join('<span class="author-sep">, </span>')}</p>
+                <h2 class="paper-title"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="paper-title-link">${safeTitle}</a></h2>
+                <p class="paper-authors">${authorsHTML}</p>
                 <div class="summary-collapse-wrapper">
-                    <p class="paper-summary collapsed">${paper.summary}</p>
+                    <p class="paper-summary collapsed">${safeSummary}</p>
                     <button class="summary-toggle-btn">展開原文摘要 ▾</button>
                 </div>
                 <div class="zh-summary-block loading">
-                    <span class="zh-label">🤖 AI 重點分析（Gemma 4 31B）</span>
+                    <span class="zh-label">🤖 AI 重點分析（Gemma）</span>
                     <span class="zh-summary-text">分析中…</span>
                 </div>
                 <div class="note-panel">
@@ -535,70 +651,23 @@ function renderPapers(papers, customTitle) {
                 </div>
             </div>
             <div class="paper-footer">
-                <span class="paper-date">${paper.published}</span>
+                <span class="paper-date">${safePublished}</span>
                 ${citBadge}
                 ${inflBadge}
                 ${refBadge}
                 ${githubBtnHTML}
                 <button class="note-btn${hasNote ? ' has-note' : ''}" title="個人筆記">${noteIconHTML}</button>
-                <a href="${paper.url}" target="_blank" class="paper-link">
+                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="paper-link">
                     閱讀論文
                     <svg xmlns="http://www.w3.org/2005/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg>
                 </a>
             </div>
         `;
 
-        const starBtn = card.querySelector('.star-btn');
-        starBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const svg = starBtn.querySelector('svg');
-            toggleFavorite(paper.url, starBtn);
-            svg.setAttribute('fill', favorites.has(paper.url) ? 'currentColor' : 'none');
-        });
-
-        const readBtn = card.querySelector('.read-btn');
-        readBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleRead(paper.url, card);
-        });
-
-        const noteBtn = card.querySelector('.note-btn');
-        noteBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openNotePanel(paper.url, card);
-        });
-
-        card.querySelector('.note-save-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            saveNote(paper.url, card);
-        });
-
-        card.querySelector('.note-cancel-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            card.querySelector('.note-panel').classList.remove('open');
-        });
-
-        card.querySelectorAll('.author-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                const author = btn.dataset.author;
-                searchInput.value = author;
-                searchAllPapers(author);
-            });
-        });
-
-        const summaryToggle = card.querySelector('.summary-toggle-btn');
-        const summaryEl = card.querySelector('.paper-summary');
-        summaryToggle.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isCollapsed = summaryEl.classList.contains('collapsed');
-            summaryEl.classList.toggle('collapsed', !isCollapsed);
-            summaryToggle.textContent = isCollapsed ? '收合摘要 ▴' : '展開原文摘要 ▾';
-        });
-
-        papersGrid.appendChild(card);
+        frag.appendChild(card);
         translateObserver.observe(card);
     });
+    papersGrid.appendChild(frag);
 
     renderPagination(papers.length);
 
@@ -641,63 +710,41 @@ function getRefCount(url) {
     return (id && s2Cache[id] !== undefined) ? (s2Cache[id].refs ?? 0) : -1;
 }
 
-const _s2Fetching = new Set(); // 防止同一論文同時送出多次請求
-
 async function fetchCitationCounts(papers) {
-    // 顯示進度條
     const progressBar = document.getElementById('topProgressBar');
     if (progressBar) { progressBar.style.width = '0%'; progressBar.classList.add('active'); }
-    const toFetch = papers.filter(p => {
-        const id = getArxivId(p.url);
-        if (!id || _s2Fetching.has(id)) return false;
-        const cached = s2Cache[id];
-        return !cached || (Date.now() - cached.at) > S2_TTL;
+
+    const now = Date.now();
+    const ids = [...new Set(papers.map(p => getArxivId(p.url)).filter(Boolean))];
+    const needed = ids.filter(id => {
+        const c = s2Cache[id];
+        return !c || (now - (c.at || 0)) > S2_TTL;
     });
-    if (toFetch.length === 0) {
+    const finish = () => {
         if (progressBar) {
             progressBar.style.width = '100%';
             setTimeout(() => { progressBar.classList.remove('active'); progressBar.style.width = '0%'; }, 600);
         }
-        return;
-    }
+    };
+    if (!needed.length) { finish(); return; }
 
-    const CHUNK = 500;
-    for (let i = 0; i < toFetch.length; i += CHUNK) {
-        const chunk = toFetch.slice(i, i + CHUNK);
-        const chunkIds = chunk.map(p => getArxivId(p.url));
-        const ids = chunkIds.map(id => `ArXiv:${id}`);
-        chunkIds.forEach(id => _s2Fetching.add(id));
-        try {
-            const res = await fetch(
-                'https://api.semanticscholar.org/graph/v1/paper/batch?fields=citationCount,influentialCitationCount,referenceCount,venue,publicationVenue',
-                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) }
-            );
-            if (!res.ok) { chunkIds.forEach(id => _s2Fetching.delete(id)); break; }
+    // Server proxies Semantic Scholar with shared cache
+    try {
+        const res = await fetch('/api/citations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ arxiv_ids: needed }),
+        });
+        if (res.ok) {
             const data = await res.json();
-            data.forEach((item, idx) => {
-                const id = chunkIds[idx];
-                if (id) s2Cache[id] = {
-                    count: item?.citationCount ?? 0,
-                    influential: item?.influentialCitationCount ?? 0,
-                    refs: item?.referenceCount ?? 0,
-                    venue: item?.publicationVenue?.name || item?.venue || '',
-                    at: Date.now()
-                };
-            });
-        } catch (e) { chunkIds.forEach(id => _s2Fetching.delete(id)); break; }
-        chunkIds.forEach(id => _s2Fetching.delete(id));
-        // 更新進度百分比
-        if (progressBar && progressBar.classList.contains('active')) {
-            const progress = Math.min(95, Math.round(((i + CHUNK) / toFetch.length) * 95));
-            progressBar.style.width = progress + '%';
+            const t = Date.now();
+            for (const [id, entry] of Object.entries(data.results || {})) {
+                s2Cache[id] = { ...entry, at: t };
+            }
+            scheduleSave(S2_CACHE_KEY, () => s2Cache);
         }
-    }
-    try { localStorage.setItem(S2_CACHE_KEY, JSON.stringify(s2Cache)); } catch (e) { }
-    // 隱藏進度條
-    if (progressBar) {
-        progressBar.style.width = '100%';
-        setTimeout(() => { progressBar.classList.remove('active'); progressBar.style.width = '0%'; }, 600);
-    }
+    } catch (e) { /* ignore */ }
+    finish();
 }
 
 // ── Papers with Code ──────────────────────────────────────────
@@ -712,68 +759,57 @@ function getPwcData(url) {
 }
 
 async function fetchPwcData(papers) {
-    const toFetch = papers.filter(p => {
-        const id = getArxivId(p.url);
-        if (!id) return false;
-        const cached = pwcCache[id];
-        return !cached || (Date.now() - cached.at) > PWC_TTL;
+    const now = Date.now();
+    const ids = [...new Set(papers.map(p => getArxivId(p.url)).filter(Boolean))];
+    const needed = ids.filter(id => {
+        const c = pwcCache[id];
+        return !c || (now - (c.at || 0)) > PWC_TTL;
     });
-    if (!toFetch.length) return false;
+    if (!needed.length) return false;
 
-    for (const paper of toFetch) {
-        const id = getArxivId(paper.url);
-        try {
-            const res = await fetch(`https://paperswithcode.com/api/v1/papers/?arxiv_id=${id}`);
-            if (!res.ok) { pwcCache[id] = { at: Date.now() }; continue; }
-            const data = await res.json();
-            const result = data.results?.[0];
-            if (!result) { pwcCache[id] = { at: Date.now() }; continue; }
-            pwcCache[id] = { github_url: result.github_url || null, stars: 0, at: Date.now() };
-            // 從 PwC repositories 取得 star 數
-            if (result.id) {
-                try {
-                    const rr = await fetch(`https://paperswithcode.com/api/v1/paper/${result.id}/repositories/`);
-                    if (rr.ok) {
-                        const rd = await rr.json();
-                        const top = rd.results?.find(r => r.is_official) || rd.results?.[0];
-                        if (top) {
-                            pwcCache[id].stars = top.stars || 0;
-                            pwcCache[id].github_url = top.url || pwcCache[id].github_url;
-                        }
-                    }
-                } catch(e) {}
+    try {
+        const res = await fetch(`/api/pwc?arxiv_ids=${encodeURIComponent(needed.join(','))}`);
+        if (!res.ok) return false;
+        const data = await res.json();
+        const t = Date.now();
+        for (const id of needed) {
+            const entry = data.results?.[id];
+            if (entry) {
+                pwcCache[id] = { github_url: entry.github_url || null, stars: entry.stars || 0, at: t };
+            } else {
+                pwcCache[id] = { at: t };  // 標記已探測避免重複呼叫
             }
-        } catch(e) {
-            pwcCache[id] = { at: Date.now() };
         }
-        await new Promise(r => setTimeout(r, 150));
+        scheduleSave(PWC_CACHE_KEY, () => pwcCache);
+        return true;
+    } catch (e) {
+        return false;
     }
-    try { localStorage.setItem(PWC_CACHE_KEY, JSON.stringify(pwcCache)); } catch(e) {}
-    return true;
 }
 
 function applyFilter(pool, query) {
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || CONF_FILTERS.has(currentCategory)
+        ? null
+        : currentCategory.toLowerCase();
+    const confKey = CONF_FILTERS.get(currentCategory);
+
     return pool.filter(paper => {
+        const tLc = paper._titleLc   ?? paper.title.toLowerCase();
+        const sLc = paper._summaryLc ?? paper.summary.toLowerCase();
+        const aLc = paper._authorsLc ?? paper.authors.join(' ').toLowerCase();
+
         const matchesQuery = !query ||
-            paper.title.toLowerCase().includes(query) ||
-            paper.authors.some(a => a.toLowerCase().includes(query)) ||
-            paper.summary.toLowerCase().includes(query);
+            tLc.includes(query) || aLc.includes(query) || sLc.includes(query);
 
         let matchesCategory = true;
         if (currentCategory === 'favorites') {
             matchesCategory = favorites.has(paper.url);
         } else if (currentCategory === 'top_conf') {
-            matchesCategory = TOP_CONF_KEYWORDS.some(c =>
-                paper.title.toLowerCase().includes(c) || paper.summary.toLowerCase().includes(c)
-            );
-        } else if (CONF_FILTERS.has(currentCategory)) {
-            const keyword = CONF_FILTERS.get(currentCategory);
-            matchesCategory =
-                paper.title.toLowerCase().includes(keyword) ||
-                paper.summary.toLowerCase().includes(keyword);
-        } else if (currentCategory !== 'all') {
-            const cat = currentCategory.toLowerCase();
-            matchesCategory = paper.title.toLowerCase().includes(cat) || paper.summary.toLowerCase().includes(cat);
+            matchesCategory = TOP_CONF_KEYWORDS.some(c => tLc.includes(c) || sLc.includes(c));
+        } else if (confKey) {
+            matchesCategory = tLc.includes(confKey) || sLc.includes(confKey);
+        } else if (cat) {
+            matchesCategory = tLc.includes(cat) || sLc.includes(cat);
         }
 
         return matchesQuery && matchesCategory;
@@ -787,7 +823,7 @@ async function ensureMonthPapers() {
     try {
         const res = await fetch('/api/papers?days=30');
         if (!res.ok) throw new Error();
-        monthPapers = (await res.json()).papers;
+        monthPapers = indexPapers((await res.json()).papers);
     } catch (e) {
         monthPapers = allPapers; // fallback
     } finally {
@@ -799,7 +835,7 @@ async function ensureMonthPapers() {
 async function filterPapers() {
     currentPage = 1;
     const query = searchInput.value.toLowerCase().trim();
-    const sortValue = document.getElementById('sortFilter').value;
+    const sortValue = currentSortValue;
 
     // 會議篩選：搜尋全 arXiv，不受 7 天視窗限制
     if (CONF_FILTERS.has(currentCategory)) {
@@ -813,7 +849,7 @@ async function filterPapers() {
             const res = await fetch(`/api/search?q=${encodeURIComponent(searchQ)}&max_results=100`);
             if (!res.ok) throw new Error('Search failed');
             const data = await res.json();
-            renderPapers(data.papers, `${confName} 相關論文（全網搜尋）`);
+            renderPapers(indexPapers(data.papers), `${confName} 相關論文（全網搜尋）`);
         } catch (e) {
             loader.classList.add('hidden');
             alert('搜尋失敗：' + e.message);
@@ -855,7 +891,7 @@ async function searchAllPapers(query) {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&max_results=50`);
         if (!res.ok) throw new Error('Search failed');
         const data = await res.json();
-        renderPapers(data.papers, `全網搜尋「${query}」`);
+        renderPapers(indexPapers(data.papers), `全網搜尋「${escapeHtml(query)}」`);
     } catch (e) {
         loader.classList.add('hidden');
         alert('搜尋失敗：' + e.message);
@@ -924,7 +960,6 @@ searchInput.addEventListener('blur', () => setTimeout(hideSuggestions, 150));
 
 // Event Listeners
 searchInput.addEventListener('input', handleSearchInput);
-document.getElementById('sortFilter').addEventListener('change', () => filterPapers());
 
 // ── 右鍵選單 ───────────────────────────────────────────────────
 let ctxTarget = null;
@@ -1241,7 +1276,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const sortWrapper = document.getElementById('sortWrapper');
     const sortSubmenu = document.getElementById('sortSubmenu');
     const sortLabel   = document.getElementById('sortLabel');
-    const sortFilterEl = document.getElementById('sortFilter');
     let sortTimer = null;
     if (sortSubmenu) document.body.appendChild(sortSubmenu);
 
@@ -1268,7 +1302,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sortSubmenu.querySelectorAll('.sort-item').forEach(item => {
             item.addEventListener('click', () => {
                 const val = item.dataset.value;
-                sortFilterEl.value = val;
+                currentSortValue = val;
                 sortLabel.textContent = SORT_LABELS[val] || val;
                 sortSubmenu.querySelectorAll('.sort-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');

@@ -277,6 +277,8 @@ header {
     flex-wrap: wrap;
     gap: 2rem;
     animation: slideDown 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    position: relative;
+    z-index: 10;
 }
 
 .logo {
@@ -1147,16 +1149,17 @@ body.light-mode .survey-badge {
 
 .category-filters {
     flex: 1;
+    min-width: 0;
     display: flex;
     gap: 0.65rem;
     margin-bottom: 0;
     flex-wrap: nowrap;
     overflow-x: auto;
-    overflow-y: visible;
+    overflow-y: hidden;
     animation: slideDown 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: 0.15s;
     opacity: 0;
-    padding-bottom: 0.6rem;
+    padding: 0.6rem 0.25rem;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
 }
@@ -2027,3 +2030,27 @@ body.light-mode .survey-badge {
     box-shadow: 0 2px 14px rgba(0,0,0,0.22);
 }
 .kbd-hint-btn:hover { transform: scale(1.1); color: var(--text-primary); }
+
+/* ── Google 登入 UI ─────────────────────────────────────────── */
+.header-content { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.auth-box { display: flex; align-items: center; }
+.sign-in-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-radius: 999px;
+    background: var(--card-bg); color: var(--text-primary);
+    border: 1px solid var(--card-border); cursor: pointer;
+    font-size: 14px; font-weight: 500; transition: background .15s;
+}
+.sign-in-btn:hover { background: var(--hover-bg); }
+.user-info {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 4px 10px 4px 4px; border-radius: 999px;
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    color: var(--text-primary); font-size: 13px;
+}
+.user-info img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+.sign-out-btn {
+    background: transparent; border: none; color: var(--text-secondary);
+    cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px;
+}
+.sign-out-btn:hover { color: var(--text-primary); background: var(--hover-bg); }
