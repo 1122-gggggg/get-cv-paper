@@ -764,6 +764,32 @@ function buildCard(paper, index) {
         s.textContent = '📚 綜述';
         badgeFrag.appendChild(s);
     }
+    // 引用速度（快速竄紅指標）
+    const speed = getCitationSpeed(paper);
+    if (speed >= 2) {
+        const s = document.createElement('span');
+        s.className = 'speed-badge';
+        s.title = '引用速度：每月新增的引用數';
+        s.textContent = `🚀 ${speed >= 10 ? speed.toFixed(0) : speed.toFixed(1)}/月`;
+        badgeFrag.appendChild(s);
+    }
+    // 頂會 h5 指標
+    const h5 = getVenueH5(paper);
+    if (h5 >= 100) {
+        const s = document.createElement('span');
+        s.className = 'h5-badge';
+        s.title = 'Google Scholar h5-index：期刊/會議近 5 年影響力指標';
+        s.textContent = `h5·${h5}`;
+        badgeFrag.appendChild(s);
+    }
+    // HF Daily 社群 upvote
+    if (paper.hf_upvotes >= 5) {
+        const s = document.createElement('span');
+        s.className = 'hf-badge';
+        s.title = 'HuggingFace Daily Papers 社群 upvote 數';
+        s.textContent = `🤗 ${paper.hf_upvotes}`;
+        badgeFrag.appendChild(s);
+    }
     badgeSlot.replaceWith(badgeFrag);
 
     // GitHub
@@ -814,10 +840,13 @@ function renderPapers(papers, customTitle) {
         noResults.classList.remove('hidden');
         papersGrid.classList.add('hidden');
         loader.classList.add('hidden');
+        const q = searchInput.value.trim() || currentCategory;
+        renderTopicSuggestions(q);
         return;
     }
 
     noResults.classList.add('hidden');
+    document.getElementById('topicSuggestions')?.classList.add('hidden');
     papersGrid.classList.remove('hidden');
     loader.classList.add('hidden');
 
@@ -913,6 +942,54 @@ function getRefCount(url) {
     return (id && s2Cache[id] !== undefined) ? (s2Cache[id].refs ?? 0) : -1;
 }
 
+// 以 arXiv id 推 (大約) 發表時間：yymm.nnnnn → 20yy-mm
+function approxArxivDate(url) {
+    const id = getArxivId(url);
+    if (!id) return null;
+    const m = id.match(/^(\d{2})(\d{2})\./);
+    if (!m) return null;
+    const year = 2000 + parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    if (month < 1 || month > 12) return null;
+    return new Date(year, month - 1, 15);
+}
+
+function daysSincePublication(paper) {
+    let d = null;
+    if (paper.published) {
+        const parsed = new Date(paper.published);
+        if (!isNaN(parsed.getTime())) d = parsed;
+    }
+    if (!d) d = approxArxivDate(paper.url);
+    if (!d) return null;
+    return Math.max(1, (Date.now() - d.getTime()) / 86400000);
+}
+
+// 引用速度：每 30 天引用數。越大越熱。
+function getCitationSpeed(paper) {
+    const cit = getCitationCount(paper.url);
+    if (cit <= 0) return 0;
+    const days = daysSincePublication(paper);
+    if (!days || days < 3) return 0;          // 太新 → 數據噪音
+    return (cit / days) * 30;
+}
+
+// 頂會 venue → Google Scholar h5 近似值（2024 公開榜單，用於顯示權重）
+const VENUE_H5 = {
+    'cvpr': 440, 'nature': 440, 'neurips': 378, 'iccv': 291, 'eccv': 240,
+    'icml': 268, 'iclr': 304, 'aaai': 220, 'acl': 192, 'emnlp': 156,
+    'tpami': 179, 'ijcv': 111, 'tip': 124, 'tmlr': 80, 'wacv': 96,
+    'bmvc': 66, 'siggraph': 101, 'miccai': 122, 'sigkdd': 150, 'kdd': 150,
+};
+function getVenueH5(paper) {
+    const v = (getS2Venue(paper.url) || '').toLowerCase();
+    if (!v) return 0;
+    for (const [k, h5] of Object.entries(VENUE_H5)) {
+        if (v.includes(k)) return h5;
+    }
+    return 0;
+}
+
 async function fetchCitationCounts(papers) {
     const progressBar = document.getElementById('topProgressBar');
     if (progressBar) { progressBar.style.width = '0%'; progressBar.classList.add('active'); }
@@ -1000,7 +1077,7 @@ async function fetchPwcData(papers) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -1044,10 +1121,38 @@ async function ensureMonthPapers() {
     }
 }
 
+let _hfDailyCache = null;
+async function ensureHfDaily() {
+    if (_hfDailyCache) return _hfDailyCache;
+    const res = await fetch('/api/trending?source=hf_daily&days=14');
+    if (!res.ok) throw new Error('HF Daily fetch failed');
+    const data = await res.json();
+    _hfDailyCache = indexPapers(data.papers || []);
+    return _hfDailyCache;
+}
+
 async function filterPapers() {
     currentPage = 1;
     const query = searchInput.value.toLowerCase().trim();
     const sortValue = currentSortValue;
+
+    // HF Daily：由後端拉 HuggingFace 每日精選
+    if (currentCategory === 'hf_daily') {
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            let papers = await ensureHfDaily();
+            if (query) papers = applyFilter(papers, query);
+            // 依社群 upvote 排序
+            papers = [...papers].sort((a, b) => (b.hf_upvotes || 0) - (a.hf_upvotes || 0));
+            renderPapers(papers, '🤗 HuggingFace 每日精選（依社群 upvote 排序）');
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('HF Daily 載入失敗：' + e.message);
+        }
+        return;
+    }
 
     // 會議篩選：搜尋全 arXiv，不受 7 天視窗限制
     if (CONF_FILTERS.has(currentCategory)) {
@@ -1139,6 +1244,97 @@ function handleSearchInput() {
         return;
     }
     searchDebounceTimer = setTimeout(() => searchAllPapers(query), 500);
+}
+
+// ── 模糊主題匹配（零結果時顯示「你是不是想搜尋」）─────────────
+const TOPIC_SYNONYMS = {
+    'nerf': ['neural radiance', 'radiance field', 'neural rendering'],
+    'gaussian': ['3dgs', 'gs', 'splat', 'splatting', '3d gaussian'],
+    'diffusion': ['ddpm', 'latent diffusion', 'stable diffusion', 'score-based'],
+    'transformer': ['attention', 'self-attention', 'vit', 'vision transformer'],
+    'segment': ['segmentation', 'sam', 'mask'],
+    'object detection': ['detector', 'detection', 'yolo', 'detr'],
+    'depth estimation': ['depth', 'monocular depth', 'stereo depth'],
+    'pose estimation': ['pose', 'keypoint', 'human pose', 'hand pose'],
+    '3d reconstruction': ['3d', 'reconstruction', 'mesh', 'sfm', 'mvs'],
+    'slam': ['localization', 'mapping', 'vslam', 'visual slam'],
+    'optical flow': ['flow', 'motion estimation'],
+    'feature match': ['feature matching', 'correspondence', 'local feature'],
+    'super resolution': ['sr', 'upscale', 'super-resolution'],
+    'video': ['video understanding', 'temporal', 'action recognition'],
+    'point cloud': ['pointcloud', 'lidar', 'point-cloud'],
+    'multimodal': ['vlm', 'vision-language', 'vision language', 'clip'],
+    'generation': ['generative', 'image generation', 'synthesis'],
+    'medical': ['medical imaging', 'mri', 'ct scan', 'pathology'],
+    'self-supervised': ['ssl', 'contrastive', 'masked image'],
+    'autonomous driving': ['self-driving', 'autonomous vehicle', 'ad', 'bev'],
+};
+
+function _lev(a, b) {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    let prev = new Array(b.length + 1).fill(0).map((_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+        const curr = [i];
+        for (let j = 1; j <= b.length; j++) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            curr.push(Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost));
+        }
+        prev = curr;
+    }
+    return prev[b.length];
+}
+
+function suggestTopics(query, limit = 3) {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return [];
+
+    const btnMap = new Map();
+    document.querySelectorAll('.category-btn').forEach(b => {
+        const f = b.dataset.filter;
+        if (!f || f === 'all' || f === 'favorites' || f === 'top_conf') return;
+        const label = (b.querySelector('.label-span')?.textContent || b.textContent || f).trim();
+        btnMap.set(f, label);
+    });
+
+    const scored = [];
+    for (const [filter, label] of btnMap) {
+        const candidates = [filter.toLowerCase(), label.toLowerCase(), ...(TOPIC_SYNONYMS[filter] || [])];
+        let best = Infinity;
+        for (const c of candidates) {
+            if (!c) continue;
+            if (c.includes(q) || q.includes(c)) { best = 0; break; }
+            const d = _lev(q, c);
+            const norm = d / Math.max(c.length, q.length);
+            if (norm < best) best = norm;
+        }
+        if (best <= 0.45) scored.push({ filter, label, score: best });
+    }
+    scored.sort((a, b) => a.score - b.score);
+    return scored.slice(0, limit);
+}
+
+function renderTopicSuggestions(query) {
+    const box = document.getElementById('topicSuggestions');
+    if (!box) return;
+    const chips = box.querySelector('.ts-chips');
+    chips.innerHTML = '';
+    const list = suggestTopics(query, 3);
+    if (list.length === 0) { box.classList.add('hidden'); return; }
+    for (const { filter, label } of list) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'ts-chip';
+        chip.textContent = label;
+        chip.addEventListener('click', () => {
+            searchInput.value = '';
+            const target = document.querySelector(`.category-btn[data-filter="${CSS.escape(filter)}"]`);
+            if (target) target.click();
+        });
+        chips.appendChild(chip);
+    }
+    box.classList.remove('hidden');
 }
 
 // ── 搜尋推薦詞 ───────────────────────────────────────────────

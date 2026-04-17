@@ -96,6 +96,7 @@
                 <div class="category-filters">
                     <button class="category-btn active" data-filter="all">All</button>
                     <button class="category-btn" data-filter="favorites">⭐ 收藏夾</button>
+                    <button class="category-btn" data-filter="hf_daily" title="HuggingFace 每日精選（社群 upvote）">🤗 HF Daily</button>
                     <!-- 頂會嚴選 + 子選單 -->
                     <div class="top-conf-wrapper">
                         <button class="category-btn top-conf-btn" data-filter="top_conf" id="topConfBtn">
@@ -174,7 +175,7 @@
                             <button class="summary-toggle-btn">展開原文摘要 ▾</button>
                         </div>
                         <div class="zh-summary-block loading">
-                            <span class="zh-label">🤖 AI 重點分析（Gemma）</span>
+                            <span class="zh-label">🤖 AI 重點分析（Qwen 2.5 72B）</span>
                             <span class="zh-summary-text">分析中…</span>
                         </div>
                         <div class="note-panel">
@@ -206,6 +207,10 @@
                 <div class="no-results-icon">🔭</div>
                 <p class="no-results-title">沒有找到符合條件的論文</p>
                 <p class="no-results-hint">試試修改搜尋關鍵字、切換分類，或清空搜尋框以顯示所有論文。</p>
+                <div id="topicSuggestions" class="topic-suggestions hidden">
+                    <span class="ts-label">你是不是想搜尋：</span>
+                    <div class="ts-chips"></div>
+                </div>
                 <button class="no-results-action" id="clearSearchBtn">清除搜尋，顯示全部</button>
             </div>
         </main>

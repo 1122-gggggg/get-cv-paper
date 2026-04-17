@@ -153,11 +153,14 @@ class HeadersMiddleware(BaseHTTPMiddleware):
 
 # ── 簡易 IP token bucket（免外部依賴，防濫用）────────────────────
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, rate: int = 60, burst: int = 120, cost_write: int = 5):
+    """
+    每 IP per-minute token bucket，僅對寫入 user data (PUT /api/me/data) 收高成本，
+    其他代理端點 (summarize/translate/citations/pwc) 以及 GET 統一 cost=1，
+    避免上游失敗的重試把 GET /api/papers 也擋成 429。
+    """
+    def __init__(self, app, burst: int = 600):
         super().__init__(app)
-        self.rate = rate  # tokens per minute
         self.burst = burst
-        self.cost_write = cost_write
         self._buckets: dict[str, deque] = {}
 
     def _client_ip(self, request: Request) -> str:
@@ -177,17 +180,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         dq = self._buckets.setdefault(ip, deque())
         while dq and now - dq[0] > window:
             dq.popleft()
-        cost = self.cost_write if request.method in ("PUT", "POST", "DELETE") else 1
+
+        cost = 3 if (request.method == "PUT" and path == "/api/me/data") else 1
         if len(dq) + cost > self.burst:
             return Response(
                 content=_json.dumps({"detail": "rate limited"}),
                 status_code=429,
                 media_type="application/json",
-                headers={"Retry-After": "30"},
+                headers={"Retry-After": "10"},
             )
-        for _ in range(cost):
-            dq.append(now)
-        return await call_next(request)
+
+        response = await call_next(request)
+        if response.status_code < 500:
+            for _ in range(cost):
+                dq.append(now)
+        return response
 
 
 app.add_middleware(RateLimitMiddleware)
@@ -295,6 +302,62 @@ async def get_papers(request: Request, max_results: int = 1000, days: int = 7):
     _papers_etag[cache_key] = etag
     return Response(content=body, media_type="application/json",
                     headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
+
+
+_trending_store = LRUStore("trending", maxsize=8, ttl=3 * 3600, persist=False)
+
+
+async def _fetch_hf_daily(days: int = 7) -> list[dict[str, Any]]:
+    """HuggingFace 每日精選論文（社群 upvote 過濾）"""
+    try:
+        r = await _client().get("https://huggingface.co/api/daily_papers", timeout=15.0)
+        if r.status_code != 200:
+            return []
+        raw = r.json()
+    except Exception as e:
+        logger.warning("HF daily fetch failed: %s", e)
+        return []
+
+    cutoff = datetime.now() - timedelta(days=days)
+    papers: list[dict[str, Any]] = []
+    for item in raw:
+        paper = item.get("paper") or {}
+        arxiv_id = paper.get("id") or ""
+        if not arxiv_id:
+            continue
+        pub_raw = item.get("publishedAt") or paper.get("publishedAt") or ""
+        try:
+            pub_date = datetime.fromisoformat(pub_raw.replace("Z", "+00:00")).replace(tzinfo=None)
+            if pub_date < cutoff:
+                continue
+            published_str = pub_date.strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            published_str = pub_raw[:16].replace("T", " ")
+        authors = [a.get("name", "") for a in (paper.get("authors") or []) if a.get("name")]
+        papers.append({
+            "title": (paper.get("title") or "").strip(),
+            "summary": (paper.get("summary") or "").strip(),
+            "url": f"http://arxiv.org/abs/{arxiv_id}",
+            "published": published_str,
+            "authors": authors,
+            "source": "hf_daily",
+            "hf_upvotes": item.get("upvotes") or paper.get("upvotes") or 0,
+        })
+    return papers
+
+
+@app.get("/api/trending")
+async def get_trending(source: str = "hf_daily", days: int = 7):
+    cache_key = f"{source}:{days}"
+    cached = _trending_store.get(cache_key)
+    if cached is not None:
+        return {"papers": cached, "source": source}
+    if source == "hf_daily":
+        papers = await _fetch_hf_daily(days)
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown source: {source}")
+    _trending_store.set(cache_key, papers)
+    return {"papers": papers, "source": source}
 
 
 @app.get("/api/search")
@@ -469,8 +532,8 @@ async def translate(req: TranslateRequest):
 # ── HuggingFace Gemma 中文摘要 ────────────────────────────────────
 _hf_client: InferenceClient | None = None
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HF_MODEL = os.environ.get("HF_MODEL", "google/gemma-2-27b-it")
-HF_PROVIDER = os.environ.get("HF_PROVIDER") or None
+HF_MODEL = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-72B-Instruct-Turbo")
+HF_PROVIDER = os.environ.get("HF_PROVIDER") or "together"
 
 
 SUMMARIZE_PROMPT = (

@@ -898,6 +898,52 @@ header {
     font-weight: 500;
     cursor: default;
 }
+.speed-badge {
+    font-size: 0.8rem;
+    color: #fb7185;
+    background: rgba(251, 113, 133, 0.1);
+    border: 1px solid rgba(251, 113, 133, 0.28);
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 500;
+    cursor: default;
+}
+.h5-badge {
+    font-size: 0.78rem;
+    color: #c084fc;
+    background: rgba(192, 132, 252, 0.1);
+    border: 1px solid rgba(192, 132, 252, 0.28);
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: default;
+}
+.hf-badge {
+    font-size: 0.8rem;
+    color: #facc15;
+    background: rgba(250, 204, 21, 0.1);
+    border: 1px solid rgba(250, 204, 21, 0.28);
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    cursor: default;
+}
+body.light-mode .speed-badge {
+    background: rgba(225, 29, 72, 0.08);
+    color: #9f1239;
+    border-color: rgba(225, 29, 72, 0.22);
+}
+body.light-mode .h5-badge {
+    background: rgba(126, 34, 206, 0.08);
+    color: #6b21a8;
+    border-color: rgba(126, 34, 206, 0.22);
+}
+body.light-mode .hf-badge {
+    background: rgba(202, 138, 4, 0.1);
+    color: #854d0e;
+    border-color: rgba(202, 138, 4, 0.25);
+}
 body.light-mode .influential-badge {
     background: rgba(217, 119, 6, 0.08);
     color: #92400e;
@@ -1112,6 +1158,39 @@ body.light-mode .survey-badge {
     color: #fff;
     transform: translateY(-2px);
     box-shadow: 0 4px 16px rgba(79, 70, 229, 0.25);
+}
+
+.topic-suggestions {
+    margin: 0.75rem 0 0.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+.topic-suggestions.hidden { display: none; }
+.topic-suggestions .ts-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary, #94a3b8);
+}
+.topic-suggestions .ts-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+}
+.ts-chip {
+    background: rgba(79, 70, 229, 0.14);
+    border: 1px solid rgba(124, 58, 237, 0.35);
+    color: var(--text-primary, #e2e8f0);
+    padding: 0.35rem 0.9rem;
+    border-radius: 999px;
+    font-size: 0.88rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.ts-chip:hover {
+    background: rgba(124, 58, 237, 0.28);
+    transform: translateY(-1px);
 }
 
 /* ── Category Filters ── */
