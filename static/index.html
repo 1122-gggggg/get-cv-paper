@@ -3,16 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b0f1a">
     <title>Visionary | 電腦視覺最新論文</title>
     <meta name="description" content="每日自動追蹤 arXiv 電腦視覺最新論文，附中文摘要與引用統計。">
-    <!-- Google Fonts -->
+    <link rel="manifest" href="/static/manifest.json">
+    <!-- Google Fonts：preload + 非阻塞套用 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap"></noscript>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="/static/auth.js" defer></script>
+    <script src="/static/script.js" defer></script>
 </head>
 <body>
+    <!-- SVG sprite：所有卡片共用，取代重複 inline SVG -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+            <symbol id="icon-star" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+            <symbol id="icon-star-filled" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+            <symbol id="icon-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/></symbol>
+            <symbol id="icon-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+            <symbol id="icon-note" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+            <symbol id="icon-note-filled" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+            <symbol id="icon-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></symbol>
+            <symbol id="icon-external" viewBox="0 0 24 24"><line x1="7" y1="17" x2="17" y2="7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><polyline points="7 7 17 7 17 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        </defs>
+    </svg>
+
     <!-- 頂部進度條 -->
     <div id="topProgressBar" class="top-progress-bar"></div>
     <div class="background-blobs">
@@ -35,12 +53,15 @@
                         <span id="userName"></span>
                         <button id="signOutBtn" class="sign-out-btn" title="登出">↪</button>
                     </div>
+                    <button id="exportDataBtn" class="data-io-btn" title="匯出全部個人資料為 JSON">⬇</button>
+                    <button id="importDataBtn" class="data-io-btn" title="從 JSON 匯入個人資料">⬆</button>
+                    <input type="file" id="importFileInput" accept="application/json" hidden>
                 </div>
             </div>
             <div class="controls">
                 <div class="search-box">
                     <input type="search" id="searchInput" name="visionary-search" placeholder="搜尋標題、作者或關鍵字（Enter 搜全庫）" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-                    <svg class="search-icon" xmlns="http://www.w3.org/2005/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                     <button id="pinSearchBtn" class="pin-search-btn" title="釘選此搜尋為主題標籤">📌</button>
                 </div>
                 <div class="sort-wrapper" id="sortWrapper">
@@ -129,6 +150,57 @@
                 <!-- Papers injected here via JS -->
             </div>
 
+            <!-- 論文卡片模板：clone 取代 innerHTML 重建 -->
+            <template id="paperCardTemplate">
+                <div class="paper-card">
+                    <div class="read-ribbon"></div>
+                    <button class="star-btn" title="加入收藏">
+                        <svg width="18" height="18"><use href="#icon-star"/></svg>
+                    </button>
+                    <button class="read-btn" title="切換已讀狀態">
+                        <svg width="12" height="12"><use href="#icon-circle"/></svg>
+                        <span class="read-label">未讀</span>
+                    </button>
+                    <div>
+                        <span class="venue-badge-slot"></span>
+                        <h2 class="paper-title"><a class="paper-title-link" target="_blank" rel="noopener noreferrer"></a></h2>
+                        <p class="paper-authors"></p>
+                        <div class="paper-tags">
+                            <div class="tag-chips"></div>
+                            <button class="tag-add-btn" title="新增標籤">＋ 標籤</button>
+                        </div>
+                        <div class="summary-collapse-wrapper">
+                            <p class="paper-summary collapsed"></p>
+                            <button class="summary-toggle-btn">展開原文摘要 ▾</button>
+                        </div>
+                        <div class="zh-summary-block loading">
+                            <span class="zh-label">🤖 AI 重點分析（Gemma）</span>
+                            <span class="zh-summary-text">分析中…</span>
+                        </div>
+                        <div class="note-panel">
+                            <textarea class="note-textarea" placeholder="在此輸入個人筆記…（支援任意文字）"></textarea>
+                            <div class="note-actions">
+                                <button class="note-cancel-btn">取消</button>
+                                <button class="note-save-btn">儲存筆記</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="paper-footer">
+                        <span class="paper-date"></span>
+                        <span class="badge-slot"></span>
+                        <span class="github-slot"></span>
+                        <button class="note-btn" title="個人筆記">
+                            <svg width="12" height="12"><use href="#icon-note"/></svg>
+                            <span class="note-label">筆記</span>
+                        </button>
+                        <a class="paper-link" target="_blank" rel="noopener noreferrer">
+                            閱讀論文
+                            <svg width="16" height="16"><use href="#icon-external"/></svg>
+                        </a>
+                    </div>
+                </div>
+            </template>
+
             <!-- 空狀態：加入圖示與操作提示 -->
             <div id="noResults" class="hidden no-results">
                 <div class="no-results-icon">🔭</div>
@@ -159,7 +231,5 @@
     <button id="kbdHintBtn" class="kbd-hint-btn" title="鍵盤快捷鍵說明">?</button>
     <button id="themeToggleBtn" class="theme-toggle-btn" title="切換深色/淺色模式">🌙</button>
     <button id="backToTopBtn" class="back-to-top" title="回到頂部">↑</button>
-    <script src="/static/auth.js"></script>
-    <script src="/static/script.js"></script>
 </body>
 </html>

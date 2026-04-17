@@ -1,22 +1,26 @@
 import asyncio
+import hashlib
+import json as _json
 import logging
 import os
 import re
 import time
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import InferenceClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
@@ -24,43 +28,189 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+ARXIV_BASE = "http://export.arxiv.org/api/query"
+ARXIV_UA = "Mozilla/5.0 DesktopDashboard/1.0"
+CACHE_DIR = Path(os.environ.get("CACHE_DIR", ".cache"))
+CACHE_DIR.mkdir(exist_ok=True)
+
+
+# ── Bounded LRU cache helper（支援 JSON 落地） ────────────────────
+class LRUStore:
+    def __init__(self, name: str, maxsize: int, ttl: float, persist: bool = True):
+        self.name = name
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self.persist = persist
+        self.path = CACHE_DIR / f"{name}.json"
+        self._data: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self._dirty = False
+        self._load()
+
+    def _load(self) -> None:
+        if not self.persist or not self.path.exists():
+            return
+        try:
+            raw = _json.loads(self.path.read_text("utf-8"))
+            if isinstance(raw, dict):
+                self._data = OrderedDict(raw)
+        except Exception as e:
+            logger.warning("cache %s load failed: %s", self.name, e)
+
+    def flush(self) -> None:
+        if not self.persist or not self._dirty:
+            return
+        try:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(_json.dumps(self._data), encoding="utf-8")
+            tmp.replace(self.path)
+            self._dirty = False
+        except Exception as e:
+            logger.warning("cache %s flush failed: %s", self.name, e)
+
+    def get(self, key: str) -> Any | None:
+        entry = self._data.get(key)
+        if not entry:
+            return None
+        if self.ttl and time.time() - entry.get("at", 0) > self.ttl:
+            self._data.pop(key, None)
+            self._dirty = True
+            return None
+        self._data.move_to_end(key)
+        return entry.get("v")
+
+    def set(self, key: str, value: Any) -> None:
+        self._data[key] = {"at": time.time(), "v": value}
+        self._data.move_to_end(key)
+        while len(self._data) > self.maxsize:
+            self._data.popitem(last=False)
+        self._dirty = True
+
+
+_paper_store = LRUStore("papers", maxsize=16, ttl=3600, persist=False)
+_s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600)
+_pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600)
+_summary_store = LRUStore("summary", maxsize=5000, ttl=0)
+
+
+# ── HTTP client 單例 ─────────────────────────────────────────────
+_http_client: httpx.AsyncClient | None = None
+
+
+def _client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            headers={"User-Agent": ARXIV_UA},
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+            http2=False,
+            follow_redirects=True,
+        )
+    return _http_client
+
+
+async def _flush_task():
+    while True:
+        await asyncio.sleep(60)
+        for s in (_s2_store, _pwc_store, _summary_store):
+            s.flush()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_flush_task())
+    try:
+        yield
+    finally:
+        task.cancel()
+        for s in (_s2_store, _pwc_store, _summary_store):
+            s.flush()
+        if _http_client is not None:
+            await _http_client.aclose()
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-# ── Static long-cache headers ─────────────────────────────────────
-class StaticCacheMiddleware(BaseHTTPMiddleware):
+# ── Static long-cache + security headers ─────────────────────────
+class HeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        if request.url.path.startswith("/static/"):
-            response.headers["Cache-Control"] = "public, max-age=86400"
+        path = request.url.path
+        if path.startswith("/static/"):
+            # sw.js 不得長快取，否則新版 SW 卡住
+            if path.endswith("/sw.js"):
+                response.headers["Cache-Control"] = "no-cache"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=86400"
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
         return response
 
 
-app.add_middleware(StaticCacheMiddleware)
+# ── 簡易 IP token bucket（免外部依賴，防濫用）────────────────────
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, rate: int = 60, burst: int = 120, cost_write: int = 5):
+        super().__init__(app)
+        self.rate = rate  # tokens per minute
+        self.burst = burst
+        self.cost_write = cost_write
+        self._buckets: dict[str, deque] = {}
+
+    def _client_ip(self, request: Request) -> str:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/") or path == "/api/health":
+            return await call_next(request)
+
+        ip = self._client_ip(request)
+        now = time.time()
+        window = 60.0
+        dq = self._buckets.setdefault(ip, deque())
+        while dq and now - dq[0] > window:
+            dq.popleft()
+        cost = self.cost_write if request.method in ("PUT", "POST", "DELETE") else 1
+        if len(dq) + cost > self.burst:
+            return Response(
+                content=_json.dumps({"detail": "rate limited"}),
+                status_code=429,
+                media_type="application/json",
+                headers={"Retry-After": "30"},
+            )
+        for _ in range(cost):
+            dq.append(now)
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(HeadersMiddleware)
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True, "t": int(time.time())}
 
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# ── arXiv paper cache (keyed by days+max_results) ─────────────────
-_paper_cache: dict[str, dict[str, Any]] = {}
-CACHE_TTL = 3600  # 1 hour
-ARXIV_BASE = "http://export.arxiv.org/api/query"
-ARXIV_UA = "Mozilla/5.0 DesktopDashboard/1.0"
-
+# ── arXiv 論文 ────────────────────────────────────────────────────
 _ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 _ARXIV_ID_RE = re.compile(r"\(arXiv:.*?\)")
 
 
-def _blocking_get(url: str, timeout: float = 30.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": ARXIV_UA})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return response.read()
-
-
-async def _http_get(url: str, timeout: float = 30.0) -> bytes:
-    return await asyncio.to_thread(_blocking_get, url, timeout)
+async def _http_get_bytes(url: str, timeout: float = 30.0) -> bytes:
+    r = await _client().get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
 
 
 def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[str, Any]]:
@@ -103,34 +253,48 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
     return papers
 
 
+_papers_etag: dict[str, str] = {}
+
+
+def _make_etag(payload: bytes) -> str:
+    return 'W/"' + hashlib.md5(payload).hexdigest()[:16] + '"'
+
+
 @app.get("/api/papers")
-async def get_papers(max_results: int = 1000, days: int = 7):
+async def get_papers(request: Request, max_results: int = 1000, days: int = 7):
     if days >= 30 and max_results < 5000:
         max_results = 5000
 
     cache_key = f"{days}:{max_results}"
-    cache = _paper_cache.get(cache_key)
-    now = time.time()
-    if cache and now - cache["timestamp"] < CACHE_TTL and cache["papers"]:
-        return {"papers": cache["papers"]}
+    cached = _paper_store.get(cache_key)
+    if cached is not None:
+        etag = _papers_etag.get(cache_key)
+        if etag and request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
+        if etag:
+            body = _json.dumps({"papers": cached}, ensure_ascii=False).encode("utf-8")
+            return Response(content=body, media_type="application/json",
+                            headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
+        return {"papers": cached}
 
     url = (
         f"{ARXIV_BASE}?search_query=cat:cs.CV"
         f"&sortBy=submittedDate&sortOrder=descending&max_results={max_results}"
     )
     try:
-        xml_data = await _http_get(url, timeout=30.0)
+        xml_data = await _http_get_bytes(url, timeout=30.0)
     except Exception as e:
         logger.error("arXiv API failed: %s", e)
-        if cache and cache["papers"]:
-            return {"papers": cache["papers"]}
         raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
 
     cutoff = datetime.now() - timedelta(days=days)
     papers = _parse_arxiv_entries(xml_data, cutoff)
-
-    _paper_cache[cache_key] = {"timestamp": now, "papers": papers}
-    return {"papers": papers}
+    _paper_store.set(cache_key, papers)
+    body = _json.dumps({"papers": papers}, ensure_ascii=False).encode("utf-8")
+    etag = _make_etag(body)
+    _papers_etag[cache_key] = etag
+    return Response(content=body, media_type="application/json",
+                    headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
 
 
 @app.get("/api/search")
@@ -144,7 +308,7 @@ async def search_papers(q: str, max_results: int = 50):
         f"&sortBy=relevance&sortOrder=descending&max_results={max_results}"
     )
     try:
-        xml_data = await _http_get(url, timeout=20.0)
+        xml_data = await _http_get_bytes(url, timeout=20.0)
     except Exception as e:
         logger.error("arXiv search failed: %s", e)
         raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
@@ -157,52 +321,44 @@ def read_root():
     return FileResponse("static/index.html")
 
 
-# ── Semantic Scholar citation proxy (shared server cache) ─────────
-_S2_TTL = 6 * 3600
+@app.get("/sw.js")
+def sw_root():
+    # 讓 Service Worker 以根路徑作用域註冊
+    return FileResponse("static/sw.js", media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+
+# ── Semantic Scholar citation proxy ───────────────────────────────
 _S2_URL = (
     "https://api.semanticscholar.org/graph/v1/paper/batch"
     "?fields=citationCount,influentialCitationCount,referenceCount,venue,publicationVenue"
 )
-_s2_cache: dict[str, dict[str, Any]] = {}
 
 
 class CitationsRequest(BaseModel):
     arxiv_ids: list[str]
 
 
-def _blocking_post_json(url: str, payload: bytes, timeout: float = 15.0) -> bytes:
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json", "User-Agent": ARXIV_UA},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return response.read()
-
-
 @app.post("/api/citations")
 async def get_citations(req: CitationsRequest):
-    import json as _json
-
-    now = time.time()
     result: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
     for aid in req.arxiv_ids:
-        cached = _s2_cache.get(aid)
-        if cached and now - cached["at"] < _S2_TTL:
+        cached = _s2_store.get(aid)
+        if cached is not None:
             result[aid] = cached
         else:
             missing.append(aid)
 
     if missing:
-        # S2 batch accepts up to 500 ids per call
         for i in range(0, len(missing), 500):
             chunk = missing[i:i + 500]
-            payload = _json.dumps({"ids": [f"ArXiv:{a}" for a in chunk]}).encode("utf-8")
             try:
-                raw = await asyncio.to_thread(_blocking_post_json, _S2_URL, payload, 15.0)
-                data = _json.loads(raw)
+                r = await _client().post(
+                    _S2_URL,
+                    json={"ids": [f"ArXiv:{a}" for a in chunk]},
+                    timeout=15.0,
+                )
+                data = r.json() if r.status_code == 200 else []
             except Exception as e:
                 logger.warning("S2 batch failed: %s", e)
                 break
@@ -214,50 +370,41 @@ async def get_citations(req: CitationsRequest):
                     "influential": item.get("influentialCitationCount") or 0,
                     "refs": item.get("referenceCount") or 0,
                     "venue": (item.get("publicationVenue") or {}).get("name") or item.get("venue") or "",
-                    "at": now,
                 }
-                _s2_cache[aid] = entry
+                _s2_store.set(aid, entry)
                 result[aid] = entry
 
-    return {"results": {k: {kk: vv for kk, vv in v.items() if kk != "at"} for k, v in result.items()}}
+    return {"results": result}
 
 
-# ── Papers with Code proxy (shared server cache) ──────────────────
-_PWC_TTL = 24 * 3600
-_pwc_cache: dict[str, dict[str, Any]] = {}
-
-
-def _blocking_get_json(url: str, timeout: float = 10.0) -> dict | None:
-    import json as _json
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": ARXIV_UA})
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return _json.loads(response.read())
-    except Exception:
-        return None
-
-
+# ── Papers with Code proxy ────────────────────────────────────────
 async def _fetch_pwc_one(arxiv_id: str) -> dict[str, Any]:
-    data = await asyncio.to_thread(
-        _blocking_get_json,
-        f"https://paperswithcode.com/api/v1/papers/?arxiv_id={arxiv_id}",
-        10.0,
-    )
-    entry: dict[str, Any] = {"github_url": None, "stars": 0, "at": time.time()}
-    if not data:
+    entry: dict[str, Any] = {"github_url": None, "stars": 0}
+    try:
+        r = await _client().get(
+            f"https://paperswithcode.com/api/v1/papers/?arxiv_id={arxiv_id}",
+            timeout=10.0,
+        )
+        if r.status_code != 200:
+            return entry
+        data = r.json()
+    except Exception:
         return entry
+
     result = (data.get("results") or [None])[0]
     if not result:
         return entry
     entry["github_url"] = result.get("github_url")
     rid = result.get("id")
     if rid:
-        repo_data = await asyncio.to_thread(
-            _blocking_get_json,
-            f"https://paperswithcode.com/api/v1/paper/{rid}/repositories/",
-            10.0,
-        )
+        try:
+            r2 = await _client().get(
+                f"https://paperswithcode.com/api/v1/paper/{rid}/repositories/",
+                timeout=10.0,
+            )
+            repo_data = r2.json() if r2.status_code == 200 else {}
+        except Exception:
+            repo_data = {}
         results = (repo_data or {}).get("results") or []
         top = next((r for r in results if r.get("is_official")), results[0] if results else None)
         if top:
@@ -269,25 +416,54 @@ async def _fetch_pwc_one(arxiv_id: str) -> dict[str, Any]:
 @app.get("/api/pwc")
 async def get_pwc(arxiv_ids: str):
     ids = [a.strip() for a in arxiv_ids.split(",") if a.strip()]
-    now = time.time()
 
-    missing = [a for a in ids if not (_pwc_cache.get(a) and now - _pwc_cache[a]["at"] < _PWC_TTL)]
+    missing = [a for a in ids if _pwc_store.get(a) is None]
 
     if missing:
         sem = asyncio.Semaphore(5)
 
         async def _bounded(aid: str):
             async with sem:
-                _pwc_cache[aid] = await _fetch_pwc_one(aid)
+                _pwc_store.set(aid, await _fetch_pwc_one(aid))
 
         await asyncio.gather(*[_bounded(a) for a in missing])
 
     out = {}
     for a in ids:
-        v = _pwc_cache.get(a)
+        v = _pwc_store.get(a)
         if v:
-            out[a] = {"github_url": v["github_url"], "stars": v["stars"]}
+            out[a] = {"github_url": v.get("github_url"), "stars": v.get("stars", 0)}
     return {"results": out}
+
+
+# ── Google Translate proxy（避免前端直接呼叫外部）────────────────
+class TranslateRequest(BaseModel):
+    text: str
+    target: str = "zh-TW"
+
+
+@app.post("/api/translate")
+async def translate(req: TranslateRequest):
+    text = (req.text or "").strip()
+    if not text:
+        return {"translated": ""}
+    short = text[:1000]
+    url = (
+        "https://translate.googleapis.com/translate_a/single?client=gtx"
+        f"&sl=en&tl={urllib.parse.quote(req.target)}&dt=t&q={urllib.parse.quote(short)}"
+    )
+    try:
+        r = await _client().get(url, timeout=10.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="translate failed")
+        data = r.json()
+        translated = "".join(item[0] for item in (data[0] or []) if item and item[0])
+        return {"translated": translated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("translate proxy failed: %s", e)
+        raise HTTPException(status_code=502, detail="translate upstream failed")
 
 
 # ── HuggingFace Gemma 中文摘要 ────────────────────────────────────
@@ -295,23 +471,6 @@ _hf_client: InferenceClient | None = None
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 HF_MODEL = os.environ.get("HF_MODEL", "google/gemma-2-27b-it")
 HF_PROVIDER = os.environ.get("HF_PROVIDER") or None
-
-_SUMMARY_CACHE_MAX = 5000
-_summary_cache: "OrderedDict[str, str]" = OrderedDict()
-
-
-def _summary_cache_get(key: str) -> str | None:
-    if key in _summary_cache:
-        _summary_cache.move_to_end(key)
-        return _summary_cache[key]
-    return None
-
-
-def _summary_cache_set(key: str, value: str) -> None:
-    _summary_cache[key] = value
-    _summary_cache.move_to_end(key)
-    while len(_summary_cache) > _SUMMARY_CACHE_MAX:
-        _summary_cache.popitem(last=False)
 
 
 SUMMARIZE_PROMPT = (
@@ -348,7 +507,7 @@ async def summarize(req: SummarizeRequest):
     if not HF_TOKEN:
         raise HTTPException(status_code=503, detail="HF_TOKEN not set")
 
-    cached = _summary_cache_get(req.arxiv_id)
+    cached = _summary_store.get(req.arxiv_id)
     if cached is not None:
         return {"summary": cached}
 
@@ -359,7 +518,7 @@ async def summarize(req: SummarizeRequest):
         logger.error("summarize failed: %s", e)
         raise HTTPException(status_code=502, detail="summarization upstream failed")
 
-    _summary_cache_set(req.arxiv_id, summary)
+    _summary_store.set(req.arxiv_id, summary)
     return {"summary": summary}
 
 
@@ -377,7 +536,7 @@ async def _get_pool():
         import asyncpg
         _db_pool = await asyncpg.create_pool(
             DATABASE_URL, min_size=1, max_size=5, ssl="require",
-            statement_cache_size=0,  # Supabase transaction pooler 不支援 prepared statements
+            statement_cache_size=0,
         )
         async with _db_pool.acquire() as conn:
             await conn.execute("""
@@ -427,12 +586,17 @@ async def get_my_data(user: dict = Depends(_require_user)):
 
 
 class UserDataPut(BaseModel):
-    data: dict
+    data: dict = Field(default_factory=dict)
+
+
+MAX_USER_DATA_BYTES = 512 * 1024  # 512KB per user（Supabase 免費層足夠）
 
 
 @app.put("/api/me/data")
 async def put_my_data(body: UserDataPut, user: dict = Depends(_require_user)):
-    import json as _json
+    payload = _json.dumps(body.data)
+    if len(payload.encode("utf-8")) > MAX_USER_DATA_BYTES:
+        raise HTTPException(status_code=413, detail="user data too large")
     pool = await _get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -445,7 +609,7 @@ async def put_my_data(body: UserDataPut, user: dict = Depends(_require_user)):
                   data = EXCLUDED.data,
                   updated_at = now()
             """,
-            user["sub"], user.get("email"), user.get("name"), _json.dumps(body.data),
+            user["sub"], user.get("email"), user.get("name"), payload,
         )
     return {"ok": True}
 

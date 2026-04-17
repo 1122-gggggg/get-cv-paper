@@ -1125,6 +1125,7 @@ body.light-mode .survey-badge {
 }
 
 .filter-arrow {
+    display: none !important;
     flex-shrink: 0;
     width: 32px;
     height: 32px;
@@ -1157,20 +1158,24 @@ body.light-mode .survey-badge {
     flex: 1;
     min-width: 0;
     display: flex;
-    gap: 0.65rem;
+    gap: 0.55rem 0.65rem;
     margin-bottom: 0;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    max-height: calc(38px * 3 + 0.55rem * 2 + 1.2rem);
+    overflow-y: auto;
+    overflow-x: hidden;
     animation: slideDown 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: 0.15s;
     opacity: 0;
     padding: 0.6rem 0.25rem;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--card-border) transparent;
 }
 
-.category-filters::-webkit-scrollbar { display: none; }
+.category-filters::-webkit-scrollbar { width: 6px; }
+.category-filters::-webkit-scrollbar-track { background: transparent; }
+.category-filters::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 3px; }
 
 .category-btn {
     background: rgba(255, 255, 255, 0.04);
@@ -2060,3 +2065,63 @@ body.light-mode .survey-badge {
     cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px;
 }
 .sign-out-btn:hover { color: var(--text-primary); background: var(--hover-bg); }
+
+/* ── 個人資料匯出/匯入按鈕 ──────────────────────────────────── */
+.data-io-btn {
+    background: transparent; border: 1px solid var(--card-border);
+    color: var(--text-secondary); cursor: pointer;
+    width: 28px; height: 28px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px; margin-left: 4px;
+    transition: background 0.15s, color 0.15s;
+}
+.data-io-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+
+/* ── 論文卡片自訂標籤 ───────────────────────────────────────── */
+.paper-tags {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    margin: 6px 0 8px; min-height: 22px;
+}
+.tag-chips { display: contents; }
+.tag-chip {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 2px 6px 2px 8px; border-radius: 10px;
+    background: rgba(99, 102, 241, 0.14);
+    border: 1px solid rgba(99, 102, 241, 0.38);
+    color: #818cf8; font-size: 11px; line-height: 1.4;
+}
+body.light-mode .tag-chip {
+    background: rgba(99, 102, 241, 0.09);
+    border-color: rgba(99, 102, 241, 0.35);
+    color: #4f46e5;
+}
+.tag-label {
+    cursor: pointer;
+    max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tag-label:hover { text-decoration: underline; }
+.tag-x {
+    background: transparent; border: none; color: inherit;
+    cursor: pointer; font-size: 14px; line-height: 1;
+    padding: 0 2px; opacity: 0.5;
+}
+.tag-x:hover { opacity: 1; }
+.tag-add-btn {
+    background: transparent; border: 1px dashed var(--card-border);
+    color: var(--text-secondary); cursor: pointer;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; line-height: 1.4;
+    transition: color 0.15s, border-color 0.15s;
+}
+.tag-add-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+
+/* ── 低動畫偏好：關閉大型模糊動畫 ───────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+    .background-blobs, .blob { display: none !important; }
+}

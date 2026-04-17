@@ -39,12 +39,15 @@ function indexPapers(papers) {
     return papers;
 }
 
-// ── SVG 圖示常數（避免重複字串、加速 parse）─────────────────────
+// ── SVG 圖示（改用 sprite <use>，HTML 體積銳減）─────────────────
+function svgUse(id, size = 12) {
+    return `<svg width="${size}" height="${size}"><use href="#${id}"/></svg>`;
+}
 const ICONS = {
-    unread:     `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle></svg>`,
-    read:       `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
-    noteEmpty:  `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
-    noteFilled: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
+    unread:     svgUse('icon-circle') + ' 未讀',
+    read:       svgUse('icon-check')  + ' 已讀',
+    noteEmpty:  svgUse('icon-note')   + ' 筆記',
+    noteFilled: svgUse('icon-note-filled') + ' 筆記',
 };
 
 // ── 頂會關鍵字（hoisted，避免每次 filter 重建 array）────────────
@@ -129,17 +132,21 @@ function saveReadSet() {
 
 function toggleRead(url, card) {
     const readBtn = card.querySelector('.read-btn');
+    const use = readBtn.querySelector('use');
+    const label = readBtn.querySelector('.read-label');
     if (readSet.has(url)) {
         readSet.delete(url);
         card.classList.remove('is-read');
-        readBtn.innerHTML = ICONS.unread + ' 未讀';
         readBtn.classList.remove('is-read');
+        use?.setAttribute('href', '#icon-circle');
+        if (label) label.textContent = '未讀';
         showToast('已標記為未讀');
     } else {
         readSet.add(url);
         card.classList.add('is-read');
-        readBtn.innerHTML = ICONS.read + ' 已讀';
         readBtn.classList.add('is-read');
+        use?.setAttribute('href', '#icon-check');
+        if (label) label.textContent = '已讀';
         showToast('已標記為已讀');
     }
     saveReadSet();
@@ -170,15 +177,16 @@ function saveNote(url, card) {
     const textarea = card.querySelector('.note-textarea');
     const text = textarea.value.trim();
     const noteBtn = card.querySelector('.note-btn');
+    const use = noteBtn.querySelector('use');
     if (text) {
         notesMap[url] = text;
         noteBtn.classList.add('has-note');
-        noteBtn.innerHTML = ICONS.noteFilled + ' 筆記';
+        use?.setAttribute('href', '#icon-note-filled');
         showToast('筆記已儲存');
     } else {
         delete notesMap[url];
         noteBtn.classList.remove('has-note');
-        noteBtn.innerHTML = ICONS.noteEmpty + ' 筆記';
+        use?.setAttribute('href', '#icon-note');
         showToast('筆記已清除');
     }
     saveNotes();
@@ -188,6 +196,73 @@ function saveNote(url, card) {
 
 function saveFavorites() {
     localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
+}
+
+// ── 每篇論文自訂標籤 ─────────────────────────────────────────
+const PAPER_TAGS_KEY = 'visionary_paper_tags_v1';
+let paperTags = {};
+try { paperTags = JSON.parse(localStorage.getItem(PAPER_TAGS_KEY) || '{}'); } catch (e) { paperTags = {}; }
+
+function savePaperTags() {
+    localStorage.setItem(PAPER_TAGS_KEY, JSON.stringify(paperTags));
+}
+
+function getPaperTags(url) { return paperTags[url] || []; }
+
+function addPaperTag(url, tag) {
+    const t = (tag || '').trim();
+    if (!t || t.length > 24) return false;
+    const arr = paperTags[url] || [];
+    if (arr.includes(t)) return false;
+    arr.push(t);
+    paperTags[url] = arr;
+    savePaperTags();
+    return true;
+}
+
+function removePaperTag(url, tag) {
+    const arr = paperTags[url];
+    if (!arr) return;
+    const i = arr.indexOf(tag);
+    if (i < 0) return;
+    arr.splice(i, 1);
+    if (arr.length === 0) delete paperTags[url];
+    else paperTags[url] = arr;
+    savePaperTags();
+}
+
+function allKnownTags() {
+    const s = new Set();
+    for (const arr of Object.values(paperTags)) for (const t of arr) s.add(t);
+    return [...s].sort();
+}
+
+function renderCardTags(card, url) {
+    const chips = card.querySelector('.tag-chips');
+    if (!chips) return;
+    chips.innerHTML = '';
+    for (const t of getPaperTags(url)) {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.dataset.tag = t;
+        chip.innerHTML = `<span class="tag-label"></span><button class="tag-x" title="移除">×</button>`;
+        chip.querySelector('.tag-label').textContent = '#' + t;
+        chips.appendChild(chip);
+    }
+}
+
+function promptAddTag(card, url) {
+    const existing = new Set(getPaperTags(url));
+    const known = allKnownTags().filter(t => !existing.has(t));
+    const hint = known.length ? `\n\n已用過的標籤：${known.slice(0, 20).join(', ')}` : '';
+    const v = window.prompt('輸入新標籤（最多 24 字）：' + hint);
+    if (v == null) return;
+    const t = v.trim();
+    if (!t) return;
+    if (addPaperTag(url, t)) {
+        renderCardTags(card, url);
+        showToast(`已加上 #${t}`);
+    }
 }
 
 function toggleFavorite(url, starEl) {
@@ -207,10 +282,47 @@ function toggleFavorite(url, starEl) {
     if (currentCategory === 'favorites') filterPapers();
 }
 
-// ── 中文摘要系統（Gemma 4 31B）──────────────────────────────────
+// ── LRU 快取（有上限，避免 localStorage 爆量）──────────────────
+function makeLRU(key, max) {
+    let map;
+    try {
+        const raw = JSON.parse(localStorage.getItem(key) || '{}');
+        // 舊格式（直接 {id: value}）→ 升級成 {_lru:[ids], data:{...}}
+        if (raw && raw._lru && raw.data) {
+            map = { order: raw._lru, data: raw.data };
+        } else {
+            map = { order: Object.keys(raw), data: raw };
+        }
+    } catch (e) { map = { order: [], data: {} }; }
+
+    return {
+        get(k) {
+            if (!(k in map.data)) return undefined;
+            const i = map.order.indexOf(k);
+            if (i >= 0) { map.order.splice(i, 1); map.order.push(k); }
+            return map.data[k];
+        },
+        set(k, v) {
+            if (k in map.data) map.order.splice(map.order.indexOf(k), 1);
+            map.data[k] = v;
+            map.order.push(k);
+            while (map.order.length > max) {
+                const old = map.order.shift();
+                delete map.data[old];
+            }
+        },
+        save() {
+            try {
+                localStorage.setItem(key, JSON.stringify({ _lru: map.order, data: map.data }));
+            } catch (e) {}
+        },
+        raw: map,
+    };
+}
+
+// ── 中文摘要系統（Gemma）────────────────────────────────────────
 const ZH_CACHE_KEY = 'zh_summary_v3';
-let zhCache = {};
-try { zhCache = JSON.parse(localStorage.getItem(ZH_CACHE_KEY) || '{}'); } catch (e) { }
+const zhLRU = makeLRU(ZH_CACHE_KEY, 2000);
 
 const translateQueue = [];
 let translateBusy = false;
@@ -232,10 +344,14 @@ async function fetchSummaryFromGroq(abstract, arxivId) {
 }
 
 async function fetchSummaryFallback(text) {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url);
+    const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, target: 'zh-TW' }),
+    });
+    if (!res.ok) throw new Error('translate proxy error');
     const data = await res.json();
-    return data[0].map(item => item[0]).join('');
+    return data.translated || '';
 }
 
 async function processTranslateQueue() {
@@ -245,17 +361,16 @@ async function processTranslateQueue() {
 
     try {
         const summary = await fetchSummaryFromGroq(text, arxivId);
-        zhCache[cacheKey] = summary;
-        scheduleSave(ZH_CACHE_KEY, () => zhCache);
+        zhLRU.set(cacheKey, summary);
+        scheduleSave(ZH_CACHE_KEY, () => ({ _lru: zhLRU.raw.order, data: zhLRU.raw.data }));
         el.innerHTML = escapeHtml(summary).replace(/\n/g, '<br>');
         el.closest('.zh-summary-block').classList.remove('loading');
     } catch (e) {
-        // fallback：Google Translate
         try {
             const short = text.length > 600 ? text.substring(0, 600) + '...' : text;
             const translated = await fetchSummaryFallback(short);
-            zhCache[cacheKey] = translated;
-            scheduleSave(ZH_CACHE_KEY, () => zhCache);
+            zhLRU.set(cacheKey, translated);
+            scheduleSave(ZH_CACHE_KEY, () => ({ _lru: zhLRU.raw.order, data: zhLRU.raw.data }));
             el.textContent = translated;
             el.closest('.zh-summary-block').classList.remove('loading');
         } catch (e2) {
@@ -269,8 +384,9 @@ async function processTranslateQueue() {
 }
 
 function queueTranslation(summary, cacheKey, textEl) {
-    if (zhCache[cacheKey]) {
-        textEl.textContent = zhCache[cacheKey];
+    const cached = zhLRU.get(cacheKey);
+    if (cached) {
+        textEl.textContent = cached;
         textEl.closest('.zh-summary-block').classList.remove('loading');
         return;
     }
@@ -459,9 +575,9 @@ function _bindPapersGridDelegation() {
         const starBtn = e.target.closest('.star-btn');
         if (starBtn && card.contains(starBtn)) {
             e.stopPropagation();
-            const svg = starBtn.querySelector('svg');
             toggleFavorite(url, starBtn);
-            if (svg) svg.setAttribute('fill', favorites.has(url) ? 'currentColor' : 'none');
+            const use = starBtn.querySelector('use');
+            use?.setAttribute('href', favorites.has(url) ? '#icon-star-filled' : '#icon-star');
             return;
         }
 
@@ -504,6 +620,33 @@ function _bindPapersGridDelegation() {
             return;
         }
 
+        const tagAdd = e.target.closest('.tag-add-btn');
+        if (tagAdd && card.contains(tagAdd)) {
+            e.stopPropagation();
+            promptAddTag(card, url);
+            return;
+        }
+
+        const tagX = e.target.closest('.tag-x');
+        if (tagX && card.contains(tagX)) {
+            e.stopPropagation();
+            const chip = tagX.closest('.tag-chip');
+            if (chip) {
+                removePaperTag(url, chip.dataset.tag);
+                renderCardTags(card, url);
+            }
+            return;
+        }
+
+        const tagLabel = e.target.closest('.tag-label');
+        if (tagLabel && card.contains(tagLabel)) {
+            e.stopPropagation();
+            const raw = tagLabel.textContent || '';
+            const name = raw.startsWith('#') ? raw.slice(1) : raw;
+            filterByTag(name);
+            return;
+        }
+
         const toggleBtn = e.target.closest('.summary-toggle-btn');
         if (toggleBtn && card.contains(toggleBtn)) {
             e.stopPropagation();
@@ -515,6 +658,150 @@ function _bindPapersGridDelegation() {
             return;
         }
     });
+}
+
+// ── 卡片 template（一次取得，之後 clone）──────────────────────
+let _cardTpl = null;
+function getCardTemplate() {
+    if (_cardTpl) return _cardTpl;
+    const tpl = document.getElementById('paperCardTemplate');
+    _cardTpl = tpl ? tpl.content.firstElementChild : null;
+    return _cardTpl;
+}
+
+function buildCard(paper, index) {
+    const tpl = getCardTemplate();
+    const card = tpl ? tpl.cloneNode(true) : document.createElement('div');
+    if (!tpl) card.className = 'paper-card';
+
+    card.style.animationDelay = `${(index % 20) * 0.03}s`;
+    card.dataset.summary = paper.summary;
+    card.dataset.cacheKey = paper.url;
+    card.dataset.url = paper.url;
+
+    const isStarred = favorites.has(paper.url);
+    const isRead = readSet.has(paper.url);
+    const hasNote = !!notesMap[paper.url];
+    if (isRead) card.classList.add('is-read');
+
+    // Star
+    const starBtn = card.querySelector('.star-btn');
+    if (isStarred) {
+        starBtn.classList.add('starred');
+        starBtn.title = '取消收藏';
+        starBtn.querySelector('use')?.setAttribute('href', '#icon-star-filled');
+    }
+
+    // Read
+    const readBtn = card.querySelector('.read-btn');
+    readBtn.querySelector('use')?.setAttribute('href', isRead ? '#icon-check' : '#icon-circle');
+    readBtn.querySelector('.read-label').textContent = isRead ? '已讀' : '未讀';
+    if (isRead) readBtn.classList.add('is-read');
+
+    // Venue
+    const venue = detectVenue(paper);
+    const venueSlot = card.querySelector('.venue-badge-slot');
+    if (venue && venueSlot) {
+        const span = document.createElement('span');
+        span.className = 'venue-badge';
+        span.style.setProperty('--venue-color', venue.color);
+        span.textContent = venue.label;
+        venueSlot.replaceWith(span);
+    } else {
+        venueSlot?.remove();
+    }
+
+    // Title / link
+    const titleLink = card.querySelector('.paper-title-link');
+    titleLink.href = paper.url;
+    titleLink.textContent = paper.title;
+
+    // Authors
+    const authorsEl = card.querySelector('.paper-authors');
+    paper.authors.forEach((a, i) => {
+        if (i > 0) {
+            const sep = document.createElement('span');
+            sep.className = 'author-sep';
+            sep.textContent = ', ';
+            authorsEl.appendChild(sep);
+        }
+        const btn = document.createElement('button');
+        btn.className = 'author-btn';
+        btn.dataset.author = a;
+        btn.textContent = a;
+        authorsEl.appendChild(btn);
+    });
+
+    // Summary
+    card.querySelector('.paper-summary').textContent = paper.summary;
+
+    // Footer
+    card.querySelector('.paper-date').textContent = paper.published;
+
+    // Badges（引用、高影響、綜述）
+    const badgeSlot = card.querySelector('.badge-slot');
+    const citCount = getCitationCount(paper.url);
+    const inflCount = getInfluentialCitations(paper.url);
+    const refCount = getRefCount(paper.url);
+    const badgeFrag = document.createDocumentFragment();
+    if (citCount >= 0) {
+        const s = document.createElement('span');
+        s.className = 'citation-badge';
+        s.textContent = `📈 ${citCount} 引用`;
+        badgeFrag.appendChild(s);
+    }
+    if (inflCount > 0) {
+        const s = document.createElement('span');
+        s.className = 'influential-badge';
+        s.title = '高影響引用：被後續研究大量採用';
+        s.textContent = `💡 ${inflCount} 高影響`;
+        badgeFrag.appendChild(s);
+    }
+    if (refCount > 100) {
+        const s = document.createElement('span');
+        s.className = 'survey-badge';
+        s.title = `引用文獻數 ${refCount}，可能為綜述論文`;
+        s.textContent = '📚 綜述';
+        badgeFrag.appendChild(s);
+    }
+    badgeSlot.replaceWith(badgeFrag);
+
+    // GitHub
+    const pwcData = getPwcData(paper.url);
+    const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-](?:[\w\-.]*[\w\-])?/i);
+    const githubUrl = pwcData?.github_url || (githubMatch ? githubMatch[0] : null);
+    const githubSlot = card.querySelector('.github-slot');
+    if (githubUrl && githubSlot) {
+        const pwcStars = pwcData?.stars || 0;
+        const starsText = pwcStars > 0
+            ? ` ⭐${pwcStars >= 1000 ? (pwcStars / 1000).toFixed(1) + 'k' : pwcStars}`
+            : '';
+        const a = document.createElement('a');
+        a.href = githubUrl;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.className = 'github-link-btn';
+        a.title = '查看程式碼';
+        a.innerHTML = `<svg width="13" height="13"><use href="#icon-github"/></svg>Code${escapeHtml(starsText)}`;
+        githubSlot.replaceWith(a);
+    } else {
+        githubSlot?.remove();
+    }
+
+    // Tags
+    renderCardTags(card, paper.url);
+
+    // Note button state
+    const noteBtn = card.querySelector('.note-btn');
+    if (hasNote) {
+        noteBtn.classList.add('has-note');
+        noteBtn.querySelector('use')?.setAttribute('href', '#icon-note-filled');
+    }
+
+    // Paper footer link
+    card.querySelector('.paper-link').href = paper.url;
+
+    return card;
 }
 
 function renderPapers(papers, customTitle) {
@@ -535,7 +822,6 @@ function renderPapers(papers, customTitle) {
     loader.classList.add('hidden');
 
     const totalPages = Math.ceil(papers.length / PAPERS_PER_PAGE);
-    // 確保 currentPage 在合法範圍
     if (currentPage > totalPages) currentPage = totalPages;
 
     // 標題
@@ -559,111 +845,21 @@ function renderPapers(papers, customTitle) {
 
     const countHeader = document.createElement('div');
     countHeader.className = 'count-header';
-    countHeader.innerHTML = `<span class="count-theme">${themeTitle}</span><span class="count-meta">共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁</span>`;
+    const theme = document.createElement('span');
+    theme.className = 'count-theme';
+    theme.textContent = themeTitle;
+    const meta = document.createElement('span');
+    meta.className = 'count-meta';
+    meta.textContent = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
+    countHeader.append(theme, meta);
     papersGrid.appendChild(countHeader);
 
-    // 當頁論文
     const start = (currentPage - 1) * PAPERS_PER_PAGE;
     const pagePapers = papers.slice(start, start + PAPERS_PER_PAGE);
 
     const frag = document.createDocumentFragment();
     pagePapers.forEach((paper, index) => {
-        const card = document.createElement('div');
-        card.className = 'paper-card';
-        card.style.animationDelay = `${(index % 20) * 0.03}s`;
-        card.dataset.summary = paper.summary;
-        card.dataset.cacheKey = paper.url;
-        card.dataset.url = paper.url;
-
-        const isStarred = favorites.has(paper.url);
-        const isRead = readSet.has(paper.url);
-        const hasNote = !!notesMap[paper.url];
-        const citCount = getCitationCount(paper.url);
-        const inflCount = getInfluentialCitations(paper.url);
-        const refCount  = getRefCount(paper.url);
-        const citBadge  = citCount >= 0
-            ? `<span class="citation-badge">📈 ${citCount} 引用</span>`
-            : '';
-        const inflBadge = inflCount > 0
-            ? `<span class="influential-badge" title="高影響引用：被後續研究大量採用">💡 ${inflCount} 高影響</span>`
-            : '';
-        const refBadge  = refCount > 100
-            ? `<span class="survey-badge" title="引用文獻數 ${refCount}，可能為綜述論文">📚 綜述</span>`
-            : '';
-
-        if (isRead) card.classList.add('is-read');
-
-        const readIconHTML = isRead ? ICONS.read + ' 已讀' : ICONS.unread + ' 未讀';
-        const noteIconHTML = hasNote ? ICONS.noteFilled + ' 筆記' : ICONS.noteEmpty + ' 筆記';
-
-        // 偵測 GitHub 連結（修正 regex，不吞結尾標點）
-        const pwcData = getPwcData(paper.url);
-        const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-](?:[\w\-.]*[\w\-])?/i);
-        const githubUrl = pwcData?.github_url || (githubMatch ? githubMatch[0] : null);
-        const pwcStars  = pwcData?.stars || 0;
-        const starsText = pwcStars > 0
-            ? ` ⭐${pwcStars >= 1000 ? (pwcStars / 1000).toFixed(1) + 'k' : pwcStars}`
-            : '';
-        const githubBtnHTML = githubUrl
-            ? `<a href="${escapeHtml(githubUrl)}" target="_blank" rel="noopener noreferrer" class="github-link-btn" title="查看程式碼">
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-                Code${escapeHtml(starsText)}
-               </a>`
-            : '';
-
-        const venue = detectVenue(paper);
-        const venueBadge = venue
-            ? `<span class="venue-badge" style="--venue-color:${escapeHtml(venue.color)}">${escapeHtml(venue.label)}</span>`
-            : '';
-
-        const safeTitle   = escapeHtml(paper.title);
-        const safeSummary = escapeHtml(paper.summary);
-        const safeUrl     = escapeHtml(paper.url);
-        const safePublished = escapeHtml(paper.published);
-        const authorsHTML = paper.authors.map(a =>
-            `<button class="author-btn" data-author="${escapeHtml(a)}">${escapeHtml(a)}</button>`
-        ).join('<span class="author-sep">, </span>');
-
-        card.innerHTML = `
-            <div class="read-ribbon"></div>
-            <button class="star-btn${isStarred ? ' starred' : ''}" title="${isStarred ? '取消收藏' : '加入收藏'}">
-                <svg xmlns="http://www.w3.org/2005/svg" width="18" height="18" viewBox="0 0 24 24" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-            </button>
-            <button class="read-btn${isRead ? ' is-read' : ''}" title="切換已讀狀態">${readIconHTML}</button>
-            <div>
-                ${venueBadge}
-                <h2 class="paper-title"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="paper-title-link">${safeTitle}</a></h2>
-                <p class="paper-authors">${authorsHTML}</p>
-                <div class="summary-collapse-wrapper">
-                    <p class="paper-summary collapsed">${safeSummary}</p>
-                    <button class="summary-toggle-btn">展開原文摘要 ▾</button>
-                </div>
-                <div class="zh-summary-block loading">
-                    <span class="zh-label">🤖 AI 重點分析（Gemma）</span>
-                    <span class="zh-summary-text">分析中…</span>
-                </div>
-                <div class="note-panel">
-                    <textarea class="note-textarea" placeholder="在此輸入個人筆記…（支援任意文字）"></textarea>
-                    <div class="note-actions">
-                        <button class="note-cancel-btn">取消</button>
-                        <button class="note-save-btn">儲存筆記</button>
-                    </div>
-                </div>
-            </div>
-            <div class="paper-footer">
-                <span class="paper-date">${safePublished}</span>
-                ${citBadge}
-                ${inflBadge}
-                ${refBadge}
-                ${githubBtnHTML}
-                <button class="note-btn${hasNote ? ' has-note' : ''}" title="個人筆記">${noteIconHTML}</button>
-                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="paper-link">
-                    閱讀論文
-                    <svg xmlns="http://www.w3.org/2005/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg>
-                </a>
-            </div>
-        `;
-
+        const card = buildCard(paper, index);
         frag.appendChild(card);
         translateObserver.observe(card);
     });
@@ -684,8 +880,15 @@ function renderPapers(papers, customTitle) {
 // ── Semantic Scholar 引用次數 ──────────────────────────────────
 const S2_CACHE_KEY = 's2_citations_v1';
 const S2_TTL = 6 * 3600 * 1000; // 6 小時
+const S2_MAX = 10000;
 let s2Cache = {};
 try { s2Cache = JSON.parse(localStorage.getItem(S2_CACHE_KEY) || '{}'); } catch (e) { }
+function purgeS2() {
+    const keys = Object.keys(s2Cache);
+    if (keys.length <= S2_MAX) return;
+    keys.sort((a, b) => (s2Cache[a]?.at || 0) - (s2Cache[b]?.at || 0));
+    for (let i = 0; i < keys.length - S2_MAX; i++) delete s2Cache[keys[i]];
+}
 
 function getArxivId(url) {
     const m = url.match(/abs\/(\d{4}\.\d+)/);
@@ -741,6 +944,7 @@ async function fetchCitationCounts(papers) {
             for (const [id, entry] of Object.entries(data.results || {})) {
                 s2Cache[id] = { ...entry, at: t };
             }
+            purgeS2();
             scheduleSave(S2_CACHE_KEY, () => s2Cache);
         }
     } catch (e) { /* ignore */ }
@@ -750,8 +954,15 @@ async function fetchCitationCounts(papers) {
 // ── Papers with Code ──────────────────────────────────────────
 const PWC_CACHE_KEY = 'pwc_cache_v1';
 const PWC_TTL = 24 * 3600 * 1000; // 24 小時
+const PWC_MAX = 10000;
 let pwcCache = {};
 try { pwcCache = JSON.parse(localStorage.getItem(PWC_CACHE_KEY) || '{}'); } catch(e) {}
+function purgePwc() {
+    const keys = Object.keys(pwcCache);
+    if (keys.length <= PWC_MAX) return;
+    keys.sort((a, b) => (pwcCache[a]?.at || 0) - (pwcCache[b]?.at || 0));
+    for (let i = 0; i < keys.length - PWC_MAX; i++) delete pwcCache[keys[i]];
+}
 
 function getPwcData(url) {
     const id = getArxivId(url);
@@ -780,6 +991,7 @@ async function fetchPwcData(papers) {
                 pwcCache[id] = { at: t };  // 標記已探測避免重複呼叫
             }
         }
+        purgePwc();
         scheduleSave(PWC_CACHE_KEY, () => pwcCache);
         return true;
     } catch (e) {
@@ -882,17 +1094,38 @@ async function filterPapers() {
     renderPapers(filtered, titleSuffix ? (sortValue === 'citations' ? `引用最多 ${titleSuffix}` : `熱門論文 ${titleSuffix}`) : null);
 }
 
+function filterByTag(tag) {
+    if (!tag) return;
+    const urls = new Set(Object.keys(paperTags).filter(u => (paperTags[u] || []).includes(tag)));
+    const matched = allPapers.filter(p => urls.has(p.url));
+    // 若 allPapers 沒收錄（可能是搜尋結果裡的論文），就組一個最小 stub
+    if (matched.length === 0 && urls.size > 0) {
+        for (const u of urls) {
+            matched.push({ url: u, title: u.split('/abs/')[1] || u, summary: '', authors: [], published: '' });
+        }
+    }
+    renderPapers(indexPapers(matched), `標籤 #${tag}`);
+}
+
+let _searchAbort = null;
 async function searchAllPapers(query) {
     currentPage = 1;
     papersGrid.classList.add('hidden');
     noResults.classList.add('hidden');
     loader.classList.remove('hidden');
+
+    // 取消上一個搜尋，避免舊結果蓋新結果
+    if (_searchAbort) _searchAbort.abort();
+    _searchAbort = new AbortController();
+    const signal = _searchAbort.signal;
     try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&max_results=50`);
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&max_results=50`, { signal });
         if (!res.ok) throw new Error('Search failed');
         const data = await res.json();
+        if (signal.aborted) return;
         renderPapers(indexPapers(data.papers), `全網搜尋「${escapeHtml(query)}」`);
     } catch (e) {
+        if (e.name === 'AbortError') return;
         loader.classList.add('hidden');
         alert('搜尋失敗：' + e.message);
     }
@@ -1610,6 +1843,104 @@ themeToggleBtn?.addEventListener('click', () => {
 // ── 回到頂部 ──────────────────────────────────────────────────
 const backToTopBtn = document.getElementById('backToTopBtn');
 backToTopBtn?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+// ── Service Worker 註冊 ───────────────────────────────────────
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+}
+
+// ── 匯出/匯入 所有個人資料（離線備份 + 跨瀏覽器搬家）──────────
+const SYNC_KEYS_LOCAL = [
+    'visionary_favorites', 'visionary_read_v1', 'visionary_notes_v1',
+    'visionary_pinned_topics', 'visionary_custom_topics',
+    'visionary_deleted_builtins', 'visionary_renamed_builtins',
+    'visionary_paper_tags_v1',
+];
+function _syncKeys() {
+    return (window.visionaryAuth?.getSyncKeys?.() || SYNC_KEYS_LOCAL);
+}
+
+function exportAllData() {
+    const out = { _kind: 'visionary-backup', _v: 1, exportedAt: new Date().toISOString(), data: {} };
+    for (const k of _syncKeys()) {
+        const v = localStorage.getItem(k);
+        if (v != null) {
+            try { out.data[k] = JSON.parse(v); } catch (e) { out.data[k] = v; }
+        }
+    }
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `visionary_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast('已匯出個人資料');
+}
+
+function _mergeImport(remote, local) {
+    const merged = {};
+    const keys = new Set([...Object.keys(remote || {}), ...Object.keys(local || {})]);
+    for (const k of keys) {
+        const r = remote?.[k], l = local?.[k];
+        if (Array.isArray(r) || Array.isArray(l)) {
+            merged[k] = [...new Set([...(Array.isArray(r) ? r : []), ...(Array.isArray(l) ? l : [])])];
+        } else if ((r && typeof r === 'object') || (l && typeof l === 'object')) {
+            merged[k] = { ...(r || {}), ...(l || {}) };
+        } else {
+            merged[k] = l ?? r;
+        }
+    }
+    return merged;
+}
+
+async function importAllData(file) {
+    const text = await file.text();
+    let obj;
+    try { obj = JSON.parse(text); }
+    catch (e) { showToast('檔案不是合法 JSON'); return; }
+    if (!obj || obj._kind !== 'visionary-backup' || !obj.data) {
+        showToast('非本站備份檔');
+        return;
+    }
+    const confirm = window.confirm('將匯入備份並與目前資料合併（去重），確定繼續嗎？');
+    if (!confirm) return;
+
+    const localBundle = {};
+    for (const k of _syncKeys()) {
+        const v = localStorage.getItem(k);
+        if (v != null) {
+            try { localBundle[k] = JSON.parse(v); } catch (e) { localBundle[k] = v; }
+        }
+    }
+    const merged = _mergeImport(obj.data, localBundle);
+    for (const k of _syncKeys()) {
+        if (merged[k] !== undefined) {
+            localStorage.setItem(k, JSON.stringify(merged[k]));
+        }
+    }
+    if (window.visionaryAuth?.isLoggedIn?.()) {
+        try { await window.visionaryAuth.pushNow?.(); } catch (e) {}
+    }
+    showToast('匯入完成，即將重整');
+    setTimeout(() => location.reload(), 800);
+}
+
+document.getElementById('exportDataBtn')?.addEventListener('click', exportAllData);
+document.getElementById('importDataBtn')?.addEventListener('click', () => {
+    document.getElementById('importFileInput')?.click();
+});
+document.getElementById('importFileInput')?.addEventListener('change', (e) => {
+    const f = e.target.files?.[0];
+    if (f) importAllData(f);
+    e.target.value = '';
+});
+
+// ── 保活 ping（避開 Render 免費層 15 分鐘休眠）──────────────
+if (location.protocol === 'https:') {
+    setInterval(() => { fetch('/api/health', { cache: 'no-store' }).catch(() => {}); }, 10 * 60 * 1000);
+}
 
 // ── 鍵盤快捷鍵說明按鈕 ────────────────────────────────────────
 document.getElementById('kbdHintBtn')?.addEventListener('click', () => {

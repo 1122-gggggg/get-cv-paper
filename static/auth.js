@@ -11,7 +11,20 @@ const SYNC_KEYS = [
     'visionary_custom_topics',
     'visionary_deleted_builtins',
     'visionary_renamed_builtins',
+    'visionary_paper_tags_v1',
 ];
+
+// GIS ID token (JWT) 過期檢查
+function _tokenExpMs(tok) {
+    try {
+        const p = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        return (p.exp || 0) * 1000;
+    } catch (e) { return 0; }
+}
+function _isTokenExpired(tok, skewMs = 60_000) {
+    const exp = _tokenExpMs(tok);
+    return !exp || Date.now() + skewMs >= exp;
+}
 
 const TOKEN_KEY = 'visionary_id_token';
 const USER_KEY = 'visionary_user';
@@ -20,7 +33,13 @@ let _idToken = localStorage.getItem(TOKEN_KEY) || null;
 let _user = (() => { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch (e) { return null; } })();
 let _syncTimer = null;
 
-function isLoggedIn() { return !!_idToken; }
+// 啟動時若 token 已過期，直接清除（避免 401 迴圈）
+if (_idToken && _isTokenExpired(_idToken, 0)) {
+    _idToken = null;
+    localStorage.removeItem(TOKEN_KEY);
+}
+
+function isLoggedIn() { return !!_idToken && !_isTokenExpired(_idToken, 0); }
 
 // ── 包裝 setItem：同步鍵變更時觸發雲端推送 ──────────────────────
 const _origSetItem = Storage.prototype.setItem;
@@ -148,6 +167,36 @@ function renderAuthUI() {
     }
 }
 
+// GIS script 延載：點登入才動態注入 <script>
+let _gsiLoading = null;
+function loadGsi() {
+    if (window.google?.accounts?.id) return Promise.resolve();
+    if (_gsiLoading) return _gsiLoading;
+    _gsiLoading = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://accounts.google.com/gsi/client';
+        s.async = true;
+        s.defer = true;
+        s.onload = () => resolve();
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+    return _gsiLoading;
+}
+
+let _gsiReady = false;
+async function ensureGsiInitialized(clientId) {
+    if (_gsiReady) return;
+    await loadGsi();
+    google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleCredential,
+        auto_select: false,
+        use_fedcm_for_prompt: true,
+    });
+    _gsiReady = true;
+}
+
 async function initAuth() {
     renderAuthUI();
     document.getElementById('signOutBtn')?.addEventListener('click', signOut);
@@ -158,39 +207,33 @@ async function initAuth() {
     } catch (e) { return; }
     if (!cfg.google_client_id) return;
 
-    // 等 GIS script 載入
-    const waitGsi = () => new Promise((resolve) => {
-        if (window.google?.accounts?.id) return resolve();
-        const t = setInterval(() => {
-            if (window.google?.accounts?.id) { clearInterval(t); resolve(); }
-        }, 100);
-    });
-    await waitGsi();
-
-    google.accounts.id.initialize({
-        client_id: cfg.google_client_id,
-        callback: handleCredential,
-        auto_select: false,
-        use_fedcm_for_prompt: true,
-    });
-
     const signInBtn = document.getElementById('signInBtn');
-    if (signInBtn && !_idToken) {
-        // 在自訂按鈕旁邊掛一個隱形的 Google 官方按鈕，點自訂按鈕時轉發點擊
-        let host = document.getElementById('gsiBtnHost');
-        if (!host) {
-            host = document.createElement('div');
-            host.id = 'gsiBtnHost';
-            host.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:0;height:0;overflow:hidden;';
-            document.body.appendChild(host);
-        }
-        google.accounts.id.renderButton(host, { type: 'standard', theme: 'outline', size: 'large' });
-        signInBtn.addEventListener('click', () => {
+    if (!signInBtn || _idToken) return;
+
+    // 點擊登入才載入 GIS script（節省首屏 200KB JS）
+    signInBtn.addEventListener('click', async () => {
+        try {
+            await ensureGsiInitialized(cfg.google_client_id);
+            let host = document.getElementById('gsiBtnHost');
+            if (!host) {
+                host = document.createElement('div');
+                host.id = 'gsiBtnHost';
+                host.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:0;height:0;overflow:hidden;';
+                document.body.appendChild(host);
+                google.accounts.id.renderButton(host, { type: 'standard', theme: 'outline', size: 'large' });
+            }
             const realBtn = host.querySelector('div[role=button], button');
             if (realBtn) realBtn.click();
             else google.accounts.id.prompt();
-        });
-    }
+        } catch (e) { console.error('GIS load failed', e); }
+    });
 }
 
 document.addEventListener('DOMContentLoaded', initAuth);
+
+// 對外（script.js）暴露必要輔助
+window.visionaryAuth = {
+    isLoggedIn,
+    getSyncKeys: () => SYNC_KEYS.slice(),
+    pushNow: () => pushToCloud(),
+};
