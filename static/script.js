@@ -1,7 +1,7 @@
 let allPapers = [];      // 7 天
 let monthPapers = [];    // 30 天（懶加載）
 let currentCategory = 'all';
-let currentSortValue = 'latest';
+let currentSortValue = localStorage.getItem('visionary_sort_v2') || 'signal';
 let PAPERS_PER_PAGE = parseInt(localStorage.getItem('visionary_per_page') || '9', 10);
 let currentPage = 1;
 let currentFilteredPapers = [];
@@ -786,7 +786,7 @@ function _bindPapersGridDelegation() {
         }
 
         const toggleBtn = e.target.closest('.summary-toggle-btn');
-        if (toggleBtn && card.contains(toggleBtn)) {
+        if (toggleBtn && toggleBtn.tagName !== 'SUMMARY' && card.contains(toggleBtn)) {
             e.stopPropagation();
             const summaryEl = card.querySelector('.paper-summary');
             if (!summaryEl) return;
@@ -848,6 +848,9 @@ function buildCard(paper, index) {
     } else {
         venueSlot?.remove();
     }
+
+    // Signal 6 軸分數
+    renderSignalBlock(card, paper);
 
     // Title / link
     const titleLink = card.querySelector('.paper-title-link');
@@ -1128,6 +1131,90 @@ function getVenueH5(paper) {
     return 0;
 }
 
+// ── 6 軸訊號分數（Signal）──────────────────────────────────────
+// 每個軸歸一化到 0..1，composite 為加權平均後 × 100
+const SIGNAL_WEIGHTS = {
+    novelty: 0.12,  // 原創新穎度：投稿越新權重
+    cite:    0.22,  // 總引用
+    hf:      0.18,  // 社群投票
+    venue:   0.18,  // 頂會/期刊 h5
+    code:    0.12,  // 有開源 + star 數
+    recency: 0.18,  // 引用速度（每月）
+};
+function _norm01(x) { return Math.max(0, Math.min(1, x)); }
+function _logScale(v, cap) {
+    // log(1+v) / log(1+cap) → 對數平滑，v>=cap 視為 1
+    if (v <= 0) return 0;
+    return _norm01(Math.log1p(v) / Math.log1p(cap));
+}
+
+const SIGNAL_AXIS_ORDER = ['novelty', 'cite', 'hf', 'venue', 'code', 'recency'];
+const SIGNAL_AXIS_LABEL = {
+    novelty: '新',     // Novelty
+    cite:    '引',     // Citations
+    hf:      '🤗',    // HF upvotes
+    venue:   '會',     // Venue h5
+    code:    '碼',     // Code / stars
+    recency: '速',     // Citation speed
+};
+const SIGNAL_AXIS_TITLE = {
+    novelty: '新穎度（發表時間越新越高）',
+    cite:    '引用數（對數標準化）',
+    hf:      'HuggingFace 社群 upvote',
+    venue:   '頂會/期刊 h5 分數',
+    code:    '開源釋出 + GitHub star',
+    recency: '引用速度（每月新增）',
+};
+
+function renderSignalBlock(card, paper) {
+    const block = card.querySelector('.signal-block');
+    if (!block) return;
+    const { score, axes } = computeSignal(paper);
+    if (score <= 0) { block.remove(); return; }
+    block.hidden = false;
+    block.querySelector('.signal-score-num').textContent = score;
+    const axesEl = block.querySelector('.signal-axes');
+    const frag = document.createDocumentFragment();
+    for (const k of SIGNAL_AXIS_ORDER) {
+        const pct = Math.round((axes[k] || 0) * 100);
+        const bar = document.createElement('span');
+        bar.className = 'signal-axis';
+        bar.dataset.axis = k;
+        bar.title = `${SIGNAL_AXIS_TITLE[k]}：${pct}`;
+        bar.innerHTML = `<span class="sa-label">${SIGNAL_AXIS_LABEL[k]}</span><span class="sa-track"><span class="sa-fill" style="width:${pct}%"></span></span>`;
+        frag.appendChild(bar);
+    }
+    axesEl.appendChild(frag);
+}
+
+function computeSignal(paper) {
+    const days = daysSincePublication(paper) || 14;
+    // 越新越高（< 2 天 ≈ 1，7 天 ≈ 0.7，30 天 ≈ 0.3，> 180 天 → 0）
+    const novelty = _norm01(Math.exp(-days / 30));
+
+    const cit = Math.max(0, getCitationCount(paper.url));
+    const cite = _logScale(cit, 500);
+
+    const hfUp = Math.max(0, paper.hf_upvotes || 0);
+    const hf = _logScale(hfUp, 200);
+
+    const h5 = getVenueH5(paper);
+    const venue = _norm01(h5 / 400);
+
+    const pwc = getPwcData(paper.url) || {};
+    const hasCode = !!pwc.github_url || /https?:\/\/github\.com\//i.test(paper.summary || '');
+    const stars = pwc.stars || 0;
+    const code = hasCode ? _norm01(0.35 + 0.65 * _logScale(stars, 5000)) : 0;
+
+    const speed = getCitationSpeed(paper);           // cits/月
+    const recency = _logScale(speed, 50);
+
+    const axes = { novelty, cite, hf, venue, code, recency };
+    let total = 0;
+    for (const k in SIGNAL_WEIGHTS) total += axes[k] * SIGNAL_WEIGHTS[k];
+    return { axes, score: Math.round(total * 100) };
+}
+
 async function fetchCitationCounts(papers) {
     const progressBar = document.getElementById('topProgressBar');
     if (progressBar) { progressBar.style.width = '0%'; progressBar.classList.add('active'); }
@@ -1361,9 +1448,15 @@ async function filterPapers() {
         await fetchCitationCounts(filtered);
         filtered.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
         titleSuffix = '（依引用數排序）';
+    } else if (sortValue === 'signal') {
+        await fetchCitationCounts(filtered);
+        filtered.sort((a, b) => computeSignal(b).score - computeSignal(a).score);
+        titleSuffix = '（綜合 Signal 分數）';
     }
 
-    renderPapers(filtered, titleSuffix ? (sortValue === 'citations' ? `引用最多 ${titleSuffix}` : `熱門論文 ${titleSuffix}`) : null);
+    const titlePrefix = sortValue === 'signal' ? '本週 Signal 推薦' :
+                        sortValue === 'citations' ? '引用最多' : '熱門論文';
+    renderPapers(filtered, titleSuffix ? `${titlePrefix} ${titleSuffix}` : null);
 }
 
 function filterByTag(tag) {
@@ -1863,7 +1956,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let sortTimer = null;
     if (sortSubmenu) document.body.appendChild(sortSubmenu);
 
-    const SORT_LABELS = { latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門', citations: '引用最多' };
+    const SORT_LABELS = { signal: 'Signal 推薦', latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門', citations: '引用最多' };
+
+    // 初始化：反映 localStorage 儲存的 sort 選項
+    (function _initSortFromStorage() {
+        if (!sortSubmenu || !sortLabel) return;
+        sortLabel.textContent = SORT_LABELS[currentSortValue] || '本日最新';
+        sortSubmenu.querySelectorAll('.sort-item').forEach(i => {
+            i.classList.toggle('active', i.dataset.value === currentSortValue);
+        });
+    })();
 
     function openSortSubmenu() {
         clearTimeout(sortTimer);
@@ -1887,6 +1989,7 @@ document.addEventListener('DOMContentLoaded', () => {
             item.addEventListener('click', () => {
                 const val = item.dataset.value;
                 currentSortValue = val;
+                try { localStorage.setItem('visionary_sort_v2', val); } catch (e) {}
                 sortLabel.textContent = SORT_LABELS[val] || val;
                 sortSubmenu.querySelectorAll('.sort-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');

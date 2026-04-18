@@ -111,11 +111,12 @@
                 <div class="sort-wrapper" id="sortWrapper">
                     <button class="sort-trigger" id="sortTrigger">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-                        <span id="sortLabel">本日最新</span>
+                        <span id="sortLabel">Signal 推薦</span>
                         <svg class="sort-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     <div class="sort-submenu" id="sortSubmenu">
-                        <button class="sort-item active" data-value="latest">⚡ 本日最新 <span>Latest</span></button>
+                        <button class="sort-item active" data-value="signal">✨ Signal 推薦 <span>Signal</span></button>
+                        <button class="sort-item" data-value="latest">⚡ 本日最新 <span>Latest</span></button>
                         <button class="sort-item" data-value="hot_week">🔥 本週熱門 <span>Trending Week</span></button>
                         <button class="sort-item" data-value="hot_month">📈 本月熱門 <span>Trending Month</span></button>
                         <button class="sort-item" data-value="citations">📊 引用最多 <span>Most Cited</span></button>
@@ -156,20 +157,26 @@
                     </button>
                     <div>
                         <span class="venue-badge-slot"></span>
+                        <div class="signal-block" hidden>
+                            <div class="signal-head">
+                                <span class="signal-score">✨ Signal <b class="signal-score-num">–</b></span>
+                                <div class="signal-axes" aria-hidden="true"></div>
+                            </div>
+                        </div>
+                        <div class="zh-summary-block loading zh-summary-lead">
+                            <span class="zh-label">🤖 AI 重點分析</span>
+                            <span class="zh-summary-text">分析中…</span>
+                        </div>
                         <h2 class="paper-title"><a class="paper-title-link" target="_blank" rel="noopener noreferrer"></a></h2>
                         <p class="paper-authors"></p>
                         <div class="paper-tags">
                             <div class="tag-chips"></div>
                             <button class="tag-add-btn" title="新增標籤">＋ 標籤</button>
                         </div>
-                        <div class="summary-collapse-wrapper">
-                            <p class="paper-summary collapsed"></p>
-                            <button class="summary-toggle-btn">展開原文摘要 ▾</button>
-                        </div>
-                        <div class="zh-summary-block loading">
-                            <span class="zh-label">🤖 AI 重點分析（Qwen 2.5 72B）</span>
-                            <span class="zh-summary-text">分析中…</span>
-                        </div>
+                        <details class="summary-collapse-wrapper">
+                            <summary class="summary-toggle-btn">原文摘要</summary>
+                            <p class="paper-summary"></p>
+                        </details>
                         <div class="note-panel">
                             <textarea class="note-textarea" placeholder="在此輸入個人筆記…（支援任意文字）"></textarea>
                             <div class="note-actions">
