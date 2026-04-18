@@ -59,6 +59,29 @@ DISCIPLINES: dict[str, dict[str, str]] = {
     "econ":     {"cat": "econ.GN",              "name": "經濟",         "role": "經濟學研究助理"},
     "finance":  {"cat": "q-fin.PR",             "name": "金融",         "role": "金融研究助理"},
     "eess":     {"cat": "eess.SP",              "name": "電機與信號",   "role": "電機工程研究助理"},
+    # 人文與社會
+    "philosophy":  {"cat": "cs.CY",              "name": "哲學",         "role": "哲學研究助理"},
+    "linguistics": {"cat": "cs.CL",              "name": "語言學",       "role": "語言學研究助理"},
+    "psychology":  {"cat": "q-bio.NC",           "name": "心理學",       "role": "心理學研究助理"},
+    "sociology":   {"cat": "cs.CY",              "name": "社會學",       "role": "社會學研究助理"},
+    "political":   {"cat": "econ.GN",            "name": "政治學",       "role": "政治學研究助理"},
+    "law":         {"cat": "cs.CY",              "name": "法律",         "role": "法律研究助理"},
+    "education":   {"cat": "cs.CY",              "name": "教育",         "role": "教育研究助理"},
+    "history":     {"cat": "cs.DL",              "name": "歷史",         "role": "歷史研究助理"},
+    "literature":  {"cat": "cs.CL",              "name": "文學",         "role": "文學研究助理"},
+    "anthro":      {"cat": "cs.CY",              "name": "人類學",       "role": "人類學研究助理"},
+    # 自然與工程
+    "earth":       {"cat": "physics.geo-ph",     "name": "地球科學",     "role": "地球科學研究助理"},
+    "climate":     {"cat": "physics.ao-ph",      "name": "氣候與大氣",   "role": "氣候科學研究助理"},
+    "materials":   {"cat": "cond-mat.mtrl-sci",  "name": "材料科學",     "role": "材料科學研究助理"},
+    "mecheng":     {"cat": "physics.flu-dyn",    "name": "機械與流體",   "role": "機械工程研究助理"},
+    "civil":       {"cat": "eess.SY",            "name": "土木與結構",   "role": "土木工程研究助理"},
+    # 醫學與藝術
+    "medimg":      {"cat": "eess.IV",            "name": "醫療影像",     "role": "醫療影像研究助理"},
+    "pubhealth":   {"cat": "q-bio.PE",           "name": "公衛",         "role": "公衛研究助理"},
+    "biomed":      {"cat": "q-bio.TO",           "name": "生醫工程",     "role": "生醫工程研究助理"},
+    "music":       {"cat": "cs.SD",              "name": "音樂學",       "role": "音樂研究助理"},
+    "design":      {"cat": "cs.HC",              "name": "設計",         "role": "設計研究助理"},
 }
 DEFAULT_DISCIPLINE = "cv"
 

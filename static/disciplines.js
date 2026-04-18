@@ -738,12 +738,577 @@ Object.assign(window.DISCIPLINES, {
     },
 });
 
-// 預設顯示順序：CS 12 + 跨領域 12
+// ───── 人文／社會／工程／藝術（PR#3 續擴，大學全科覆蓋）─────
+// 部分學門 arXiv 覆蓋有限，取最接近分類當 fallback；Bridge/搜尋仍可跨領域命中
+Object.assign(window.DISCIPLINES, {
+    philosophy: {
+        id: 'philosophy', icon: '📜', name: '哲學', nameEn: 'Philosophy',
+        brand: 'Logos', arxivCat: 'cs.CY',
+        promptRole: '哲學研究助理',
+        accent: { from: '#475569', to: '#92400e', tint: 'rgba(71,85,105,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CY 資料中（AI 倫理與心靈哲學常見於此）...',
+            '整理本週哲學論文（Ethics / Mind / Epistemology / AI Alignment 等）...',
+            '對照 PhilPapers / SSRN 最新成果...',
+        ],
+        confs: [
+            { key: 'philpapers',            label: 'PhilPapers',         color: '#475569' },
+            { key: 'mind',                  label: 'Mind',               color: '#334155' },
+            { key: 'journal of philosophy', label: 'J. of Philosophy',   color: '#1e293b' },
+            { key: 'nous',                  label: 'Noûs',               color: '#64748b' },
+            { key: 'synthese',              label: 'Synthese',           color: '#94a3b8' },
+            { key: 'ssrn',                  label: 'SSRN',               color: '#475569' },
+        ],
+        topics: [
+            'Ethics', 'AI Ethics', 'Alignment', 'Philosophy of Mind',
+            'Epistemology', 'Metaphysics', 'Logic', 'Consciousness',
+            'Free Will', 'Moral Philosophy', 'Phenomenology',
+            'Philosophy of Science', 'Political Philosophy',
+            'Value Alignment', 'Existential Risk',
+        ],
+        synonyms: {
+            'ai ethics': ['ai alignment', 'machine ethics', 'responsible ai'],
+            'philosophy of mind': ['consciousness', 'qualia', 'mental state'],
+        },
+    },
+    linguistics: {
+        id: 'linguistics', icon: '🔤', name: '語言學', nameEn: 'Linguistics',
+        brand: 'Phoneme', arxivCat: 'cs.CL',
+        promptRole: '語言學研究助理',
+        accent: { from: '#ca8a04', to: '#b45309', tint: 'rgba(202,138,4,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CL 資料中（理論語言學側）...',
+            '整理本週語言學論文（Phonology / Syntax / Semantics / Pragmatics 等）...',
+            '對照 LSA / Journal of Linguistics 最新成果...',
+        ],
+        confs: [
+            { key: 'language',               label: 'Language',           color: '#ca8a04' },
+            { key: 'linguistic inquiry',     label: 'Ling. Inquiry',      color: '#a16207' },
+            { key: 'journal of linguistics', label: 'J. of Ling.',        color: '#854d0e' },
+            { key: 'natural language semantics', label: 'Nat. Lang. Sem.', color: '#713f12' },
+            { key: 'lsa',                    label: 'LSA',                color: '#eab308' },
+        ],
+        topics: [
+            'Phonology', 'Syntax', 'Semantics', 'Pragmatics',
+            'Morphology', 'Phonetics', 'Sociolinguistics',
+            'Historical Linguistics', 'Typology', 'Corpus Linguistics',
+            'Language Acquisition', 'Psycholinguistics', 'Discourse',
+        ],
+        synonyms: {
+            'phonology': ['phonological', 'prosody'],
+            'syntax': ['syntactic', 'parsing theory'],
+        },
+    },
+    psychology: {
+        id: 'psychology', icon: '🧩', name: '心理學', nameEn: 'Psychology',
+        brand: 'Cognita', arxivCat: 'q-bio.NC',
+        promptRole: '心理學研究助理',
+        accent: { from: '#c026d3', to: '#f97316', tint: 'rgba(192,38,211,0.18)' },
+        loaderHints: [
+            '連接 arXiv q-bio.NC 資料中（認知科學重疊）...',
+            '整理本週心理學論文（Cognitive / Social / Developmental / Clinical 等）...',
+            '對照 Nature Human Behaviour / Psychological Review 最新成果...',
+        ],
+        confs: [
+            { key: 'psychological review',      label: 'Psych. Review',       color: '#c026d3' },
+            { key: 'nature human behaviour',    label: 'Nat. Hum. Behav.',    color: '#a21caf' },
+            { key: 'psychological science',     label: 'Psych. Science',      color: '#86198f' },
+            { key: 'cognition',                 label: 'Cognition',           color: '#701a75' },
+            { key: 'psyarxiv',                  label: 'PsyArXiv',            color: '#d946ef' },
+        ],
+        topics: [
+            'Cognitive Science', 'Social Psychology', 'Developmental',
+            'Clinical Psychology', 'Behavioral', 'Decision Making',
+            'Memory', 'Attention', 'Emotion', 'Personality',
+            'Reasoning', 'Perception', 'Learning', 'Cognitive Bias',
+        ],
+        synonyms: {
+            'decision making': ['heuristic', 'prospect theory'],
+            'cognitive bias': ['dual process', 'system 1', 'system 2'],
+        },
+    },
+    sociology: {
+        id: 'sociology', icon: '🏘️', name: '社會學', nameEn: 'Sociology',
+        brand: 'Polis', arxivCat: 'cs.CY',
+        promptRole: '社會學研究助理',
+        accent: { from: '#0369a1', to: '#7c2d12', tint: 'rgba(3,105,161,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CY 資料中（計算社會科學）...',
+            '整理本週社會學論文（Network / Inequality / Computational Social Science 等）...',
+            '對照 SocArXiv / ASR 最新成果...',
+        ],
+        confs: [
+            { key: 'american sociological review', label: 'ASR',             color: '#0369a1' },
+            { key: 'american journal of sociology', label: 'AJS',           color: '#075985' },
+            { key: 'social forces',                label: 'Social Forces',   color: '#0c4a6e' },
+            { key: 'socarxiv',                     label: 'SocArXiv',        color: '#0284c7' },
+            { key: 'icwsm',                        label: 'ICWSM',           color: '#7c2d12' },
+        ],
+        topics: [
+            'Social Network', 'Inequality', 'Computational Social Science',
+            'Demography', 'Stratification', 'Culture', 'Race',
+            'Gender', 'Labor Market', 'Migration', 'Urban',
+            'Collective Behavior', 'Misinformation', 'Polarization',
+        ],
+        synonyms: {
+            'social network': ['social graph', 'homophily'],
+            'misinformation': ['fake news', 'disinformation'],
+        },
+    },
+    political: {
+        id: 'political', icon: '🗳️', name: '政治學', nameEn: 'Political Science',
+        brand: 'Civis', arxivCat: 'econ.GN',
+        promptRole: '政治學研究助理',
+        accent: { from: '#b91c1c', to: '#1e3a8a', tint: 'rgba(185,28,28,0.18)' },
+        loaderHints: [
+            '連接 arXiv econ.GN 資料中（政治經濟學側）...',
+            '整理本週政治學論文（Voting / Democracy / IR / Conflict 等）...',
+            '對照 APSR / AJPS 最新成果...',
+        ],
+        confs: [
+            { key: 'american political science review', label: 'APSR',        color: '#b91c1c' },
+            { key: 'american journal of political science', label: 'AJPS',   color: '#991b1b' },
+            { key: 'journal of politics',                label: 'J. of Pol.', color: '#7f1d1d' },
+            { key: 'international organization',         label: 'IO',         color: '#1e3a8a' },
+            { key: 'world politics',                     label: 'World Pol.', color: '#1e40af' },
+        ],
+        topics: [
+            'Voting', 'Election', 'Democracy', 'Authoritarianism',
+            'International Relations', 'Conflict', 'Civil War',
+            'Public Opinion', 'Populism', 'Polarization',
+            'Political Economy', 'Institutions', 'Policy Evaluation',
+        ],
+        synonyms: {
+            'international relations': ['ir theory', 'geopolitics'],
+            'voting': ['elections', 'ballot'],
+        },
+    },
+    law: {
+        id: 'law', icon: '⚖️', name: '法律', nameEn: 'Law',
+        brand: 'Stare', arxivCat: 'cs.CY',
+        promptRole: '法律研究助理',
+        accent: { from: '#57534e', to: '#78350f', tint: 'rgba(87,83,78,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CY 資料中（科技法／AI 治理）...',
+            '整理本週法律論文（AI Regulation / Privacy / IP / Constitutional 等）...',
+            '對照 SSRN / Harvard Law Review 最新成果...',
+        ],
+        confs: [
+            { key: 'harvard law review',  label: 'Harvard L. Rev.',  color: '#57534e' },
+            { key: 'yale law journal',    label: 'Yale L.J.',        color: '#44403c' },
+            { key: 'columbia law review', label: 'Columbia L. Rev.', color: '#292524' },
+            { key: 'stanford law review', label: 'Stanford L. Rev.', color: '#78350f' },
+            { key: 'ssrn',                label: 'SSRN',             color: '#78716c' },
+        ],
+        topics: [
+            'AI Regulation', 'Data Protection', 'Privacy Law',
+            'Intellectual Property', 'Copyright', 'Constitutional',
+            'Criminal Law', 'Contract', 'Tort', 'Antitrust',
+            'International Law', 'Human Rights', 'Algorithmic Accountability',
+        ],
+        synonyms: {
+            'data protection': ['gdpr', 'ccpa', 'privacy'],
+            'intellectual property': ['patent', 'trademark'],
+        },
+    },
+    education: {
+        id: 'education', icon: '🎓', name: '教育', nameEn: 'Education',
+        brand: 'Scholastic', arxivCat: 'cs.CY',
+        promptRole: '教育研究助理',
+        accent: { from: '#0d9488', to: '#a16207', tint: 'rgba(13,148,136,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CY 資料中（教育科技側）...',
+            '整理本週教育論文（EdTech / ITS / MOOC / Assessment / LLM Tutor 等）...',
+            '對照 AERA / JLS / L@S 最新成果...',
+        ],
+        confs: [
+            { key: 'learning at scale', label: 'L@S',               color: '#0d9488' },
+            { key: 'edm',               label: 'EDM',               color: '#0f766e' },
+            { key: 'learning analytics', label: 'LAK',              color: '#115e59' },
+            { key: 'aied',              label: 'AIED',              color: '#134e4a' },
+            { key: 'jls',               label: 'J. Learning Sci.',  color: '#a16207' },
+        ],
+        topics: [
+            'Intelligent Tutoring', 'Learning Analytics',
+            'Assessment', 'MOOC', 'Personalized Learning',
+            'Curriculum', 'Teacher Training', 'Educational Game',
+            'Literacy', 'STEM Education', 'LLM Tutor',
+        ],
+        synonyms: {
+            'intelligent tutoring': ['its', 'tutor system'],
+            'llm tutor': ['chatbot tutor', 'gpt tutor'],
+        },
+    },
+    history: {
+        id: 'history', icon: '🏛️', name: '歷史', nameEn: 'History',
+        brand: 'Chronos', arxivCat: 'cs.DL',
+        promptRole: '歷史研究助理',
+        accent: { from: '#78350f', to: '#451a03', tint: 'rgba(120,53,15,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.DL 資料中（數位人文）...',
+            '整理本週歷史論文（Digital History / OCR / Archival / Historiography 等）...',
+            '對照 AHR / Journal of Modern History 最新成果...',
+        ],
+        confs: [
+            { key: 'american historical review', label: 'AHR',               color: '#78350f' },
+            { key: 'journal of modern history',  label: 'J. Mod. Hist.',     color: '#9a3412' },
+            { key: 'past & present',             label: 'Past & Present',    color: '#7c2d12' },
+            { key: 'dh',                         label: 'DH',                color: '#78350f' },
+        ],
+        topics: [
+            'Digital Humanities', 'Historiography', 'Archival',
+            'OCR', 'Handwritten Text Recognition', 'Prosopography',
+            'Medieval', 'Early Modern', 'Modern', 'Global History',
+            'Quantitative History', 'Oral History',
+        ],
+        synonyms: {
+            'digital humanities': ['dh', 'computational humanities'],
+            'handwritten text recognition': ['htr', 'manuscript'],
+        },
+    },
+    literature: {
+        id: 'literature', icon: '📚', name: '文學', nameEn: 'Literature',
+        brand: 'Narrativa', arxivCat: 'cs.CL',
+        promptRole: '文學研究助理',
+        accent: { from: '#831843', to: '#450a0a', tint: 'rgba(131,24,67,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CL 資料中（計算文學分析）...',
+            '整理本週文學論文（Stylometry / Narrative / Poetics / LLM Fiction 等）...',
+            '對照 PMLA / New Literary History 最新成果...',
+        ],
+        confs: [
+            { key: 'pmla',                       label: 'PMLA',           color: '#831843' },
+            { key: 'new literary history',       label: 'NLH',            color: '#9d174d' },
+            { key: 'critical inquiry',           label: 'Critical Inq.',  color: '#701a75' },
+            { key: 'dsh',                        label: 'DSH',            color: '#86198f' },
+        ],
+        topics: [
+            'Stylometry', 'Narrative', 'Poetics', 'Authorship Attribution',
+            'Literary Theory', 'Distant Reading', 'Close Reading',
+            'Creative Writing', 'Fiction', 'Poetry',
+            'Computational Criticism',
+        ],
+        synonyms: {
+            'stylometry': ['authorship', 'stylistic fingerprint'],
+            'distant reading': ['macroanalysis', 'literary text mining'],
+        },
+    },
+    anthro: {
+        id: 'anthro', icon: '🗿', name: '人類學', nameEn: 'Anthropology',
+        brand: 'Ethnos', arxivCat: 'cs.CY',
+        promptRole: '人類學研究助理',
+        accent: { from: '#854d0e', to: '#7c2d12', tint: 'rgba(133,77,14,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.CY 資料中（數位民族誌）...',
+            '整理本週人類學論文（Ethnography / Kinship / Material Culture / Archaeology 等）...',
+            '對照 AA / Current Anthropology 最新成果...',
+        ],
+        confs: [
+            { key: 'american anthropologist', label: 'Am. Anthro.',     color: '#854d0e' },
+            { key: 'current anthropology',    label: 'Curr. Anthro.',   color: '#92400e' },
+            { key: 'cultural anthropology',   label: 'Cult. Anthro.',   color: '#7c2d12' },
+            { key: 'american ethnologist',    label: 'Am. Ethnol.',     color: '#b45309' },
+        ],
+        topics: [
+            'Ethnography', 'Kinship', 'Material Culture', 'Archaeology',
+            'Biological Anthropology', 'Linguistic Anthropology',
+            'Ritual', 'Religion', 'Indigenous', 'Digital Ethnography',
+        ],
+        synonyms: {
+            'archaeology': ['excavation', 'artefact'],
+            'digital ethnography': ['netnography', 'online fieldwork'],
+        },
+    },
+
+    // ── 自然／工程 ─────────────────────────────────
+    earth: {
+        id: 'earth', icon: '🌍', name: '地球科學', nameEn: 'Earth Science',
+        brand: 'Terra', arxivCat: 'physics.geo-ph',
+        promptRole: '地球科學研究助理',
+        accent: { from: '#047857', to: '#78350f', tint: 'rgba(4,120,87,0.18)' },
+        loaderHints: [
+            '連接 arXiv physics.geo-ph 資料中...',
+            '整理本週地球科學論文（Geophysics / Seismology / Tectonics / Remote Sensing 等）...',
+            '對照 Nature Geoscience / EGU 最新成果...',
+        ],
+        confs: [
+            { key: 'nature geoscience',          label: 'Nat. Geosci.',   color: '#047857' },
+            { key: 'jgr',                        label: 'JGR',            color: '#065f46' },
+            { key: 'geophysical research letters', label: 'GRL',          color: '#064e3b' },
+            { key: 'egu',                        label: 'EGU',            color: '#10b981' },
+            { key: 'agu',                        label: 'AGU',            color: '#34d399' },
+        ],
+        topics: [
+            'Seismology', 'Tectonics', 'Geodynamics', 'Volcanology',
+            'Geomagnetism', 'Paleoclimate', 'Hydrology',
+            'Remote Sensing', 'GIS', 'Mineralogy', 'Petrology',
+        ],
+        synonyms: {
+            'remote sensing': ['satellite imagery', 'earth observation'],
+            'seismology': ['earthquake', 'seismic wave'],
+        },
+    },
+    climate: {
+        id: 'climate', icon: '🌤️', name: '氣候與大氣', nameEn: 'Climate & Atmosphere',
+        brand: 'Clima', arxivCat: 'physics.ao-ph',
+        promptRole: '氣候科學研究助理',
+        accent: { from: '#0284c7', to: '#15803d', tint: 'rgba(2,132,199,0.18)' },
+        loaderHints: [
+            '連接 arXiv physics.ao-ph 資料中...',
+            '整理本週氣候論文（Climate Model / Extreme Weather / Ocean / Downscaling 等）...',
+            '對照 Nature Climate Change 最新成果...',
+        ],
+        confs: [
+            { key: 'nature climate change',  label: 'Nat. Clim. Change', color: '#0284c7' },
+            { key: 'journal of climate',     label: 'J. of Climate',     color: '#0369a1' },
+            { key: 'climate dynamics',       label: 'Clim. Dyn.',        color: '#075985' },
+            { key: 'gmd',                    label: 'GMD',               color: '#15803d' },
+        ],
+        topics: [
+            'Climate Model', 'Extreme Weather', 'Ocean Circulation',
+            'Downscaling', 'El Niño', 'Monsoon',
+            'Greenhouse Gas', 'Aerosol', 'Precipitation',
+            'Sea Level', 'Tropical Cyclone', 'Carbon Cycle',
+        ],
+        synonyms: {
+            'climate model': ['cmip', 'earth system model', 'gcm'],
+            'extreme weather': ['heatwave', 'drought', 'flood'],
+        },
+    },
+    materials: {
+        id: 'materials', icon: '🔩', name: '材料科學', nameEn: 'Materials Science',
+        brand: 'Lattice', arxivCat: 'cond-mat.mtrl-sci',
+        promptRole: '材料科學研究助理',
+        accent: { from: '#a3a3a3', to: '#ea580c', tint: 'rgba(163,163,163,0.18)' },
+        loaderHints: [
+            '連接 arXiv cond-mat.mtrl-sci 資料中...',
+            '整理本週材料論文（Battery / Photovoltaic / 2D Materials / Superconductor / Alloy 等）...',
+            '對照 Nature Materials / Science 最新成果...',
+        ],
+        confs: [
+            { key: 'nature materials',       label: 'Nat. Mater.',    color: '#a3a3a3' },
+            { key: 'advanced materials',     label: 'Adv. Mater.',    color: '#737373' },
+            { key: 'acs nano',               label: 'ACS Nano',       color: '#ea580c' },
+            { key: 'npj computational materials', label: 'npj Comp Mat', color: '#525252' },
+        ],
+        topics: [
+            'Battery', 'Photovoltaic', '2D Materials', 'Graphene',
+            'Superconductor', 'Alloy', 'Ceramic', 'Polymer',
+            'Nanomaterial', 'Metamaterial', 'Crystal',
+            'High-Throughput', 'DFT', 'Materials Genome',
+        ],
+        synonyms: {
+            '2d materials': ['graphene', 'mos2', 'transition metal dichalcogenide'],
+            'battery': ['li-ion', 'solid state battery', 'cathode'],
+        },
+    },
+    mecheng: {
+        id: 'mecheng', icon: '⚙️', name: '機械與流體', nameEn: 'Mechanical & Fluid Engineering',
+        brand: 'Fluxus', arxivCat: 'physics.flu-dyn',
+        promptRole: '機械工程研究助理',
+        accent: { from: '#1d4ed8', to: '#be185d', tint: 'rgba(29,78,216,0.18)' },
+        loaderHints: [
+            '連接 arXiv physics.flu-dyn 資料中...',
+            '整理本週機械／流體論文（Turbulence / CFD / Aerodynamics / Combustion 等）...',
+            '對照 JFM / Phys. Fluids 最新成果...',
+        ],
+        confs: [
+            { key: 'journal of fluid mechanics', label: 'JFM',            color: '#1d4ed8' },
+            { key: 'physics of fluids',          label: 'Phys. Fluids',   color: '#2563eb' },
+            { key: 'aiaa journal',               label: 'AIAA J.',        color: '#1e40af' },
+            { key: 'combustion and flame',       label: 'Combust. Flame', color: '#be185d' },
+        ],
+        topics: [
+            'Turbulence', 'CFD', 'Aerodynamics', 'Combustion',
+            'Heat Transfer', 'Boundary Layer', 'Multiphase Flow',
+            'Shock Wave', 'Propulsion', 'Acoustics',
+            'Structural Mechanics', 'Finite Element',
+        ],
+        synonyms: {
+            'cfd': ['computational fluid dynamics', 'rans', 'les'],
+            'finite element': ['fem', 'fea'],
+        },
+    },
+    civil: {
+        id: 'civil', icon: '🏗️', name: '土木與結構', nameEn: 'Civil & Structural Engineering',
+        brand: 'Beam', arxivCat: 'eess.SY',
+        promptRole: '土木工程研究助理',
+        accent: { from: '#57534e', to: '#84cc16', tint: 'rgba(87,83,78,0.18)' },
+        loaderHints: [
+            '連接 arXiv eess.SY / physics.app-ph 資料中...',
+            '整理本週土木論文（Structural Health / Earthquake / Transportation / Concrete 等）...',
+            '對照 ASCE / Engineering Structures 最新成果...',
+        ],
+        confs: [
+            { key: 'journal of structural engineering', label: 'ASCE J. Struct.', color: '#57534e' },
+            { key: 'engineering structures',           label: 'Eng. Struct.',    color: '#44403c' },
+            { key: 'earthquake engineering & structural dynamics', label: 'EESD', color: '#78716c' },
+            { key: 'cement and concrete research',     label: 'Cem. Concr.',     color: '#84cc16' },
+        ],
+        topics: [
+            'Structural Health Monitoring', 'Earthquake Engineering',
+            'Transportation', 'Traffic Flow', 'Bridge',
+            'Concrete', 'Reinforced Concrete', 'Composite',
+            'Geotechnical', 'Foundation', 'Urban Infrastructure',
+        ],
+        synonyms: {
+            'structural health monitoring': ['shm', 'damage detection'],
+            'earthquake engineering': ['seismic design'],
+        },
+    },
+
+    // ── 醫療／生命／藝術 ─────────────────────────
+    medimg: {
+        id: 'medimg', icon: '🏥', name: '醫療影像', nameEn: 'Medical Imaging',
+        brand: 'Radian', arxivCat: 'eess.IV',
+        promptRole: '醫療影像研究助理',
+        accent: { from: '#dc2626', to: '#ea580c', tint: 'rgba(220,38,38,0.18)' },
+        loaderHints: [
+            '連接 arXiv eess.IV 資料中...',
+            '整理本週醫療影像論文（MRI / CT / Ultrasound / Pathology / Segmentation 等）...',
+            '對照 MICCAI / Medical Image Analysis 最新成果...',
+        ],
+        confs: [
+            { key: 'miccai',                  label: 'MICCAI',           color: '#dc2626' },
+            { key: 'medical image analysis',  label: 'MedIA',            color: '#b91c1c' },
+            { key: 'tmi',                     label: 'TMI',              color: '#991b1b' },
+            { key: 'ipmi',                    label: 'IPMI',             color: '#ea580c' },
+            { key: 'midl',                    label: 'MIDL',             color: '#f97316' },
+        ],
+        topics: [
+            'MRI', 'CT', 'Ultrasound', 'PET', 'X-Ray',
+            'Histopathology', 'Segmentation', 'Registration',
+            'Radiomics', 'Lesion Detection', 'Image Reconstruction',
+            'Diffusion MRI', 'Cardiac', 'Radiology Report',
+        ],
+        synonyms: {
+            'mri': ['magnetic resonance imaging'],
+            'ct': ['computed tomography'],
+            'histopathology': ['whole slide image', 'wsi'],
+        },
+    },
+    pubhealth: {
+        id: 'pubhealth', icon: '🩺', name: '公衛', nameEn: 'Public Health',
+        brand: 'Epidemia', arxivCat: 'q-bio.PE',
+        promptRole: '公衛研究助理',
+        accent: { from: '#15803d', to: '#b91c1c', tint: 'rgba(21,128,61,0.18)' },
+        loaderHints: [
+            '連接 arXiv q-bio.PE 資料中...',
+            '整理本週公衛論文（Epidemiology / COVID / Surveillance / Health Equity 等）...',
+            '對照 Lancet / NEJM / BMJ 最新成果...',
+        ],
+        confs: [
+            { key: 'lancet',               label: 'Lancet',          color: '#b91c1c' },
+            { key: 'nejm',                 label: 'NEJM',            color: '#dc2626' },
+            { key: 'bmj',                  label: 'BMJ',             color: '#15803d' },
+            { key: 'jama',                 label: 'JAMA',            color: '#16a34a' },
+            { key: 'medrxiv',              label: 'medRxiv',         color: '#22c55e' },
+        ],
+        topics: [
+            'Epidemiology', 'Infectious Disease', 'COVID-19',
+            'Vaccination', 'Surveillance', 'Health Equity',
+            'Global Health', 'Mortality', 'Screening',
+            'Clinical Trial', 'Pharmacovigilance', 'One Health',
+        ],
+        synonyms: {
+            'covid-19': ['sars-cov-2', 'covid', 'coronavirus'],
+            'epidemiology': ['sir model', 'compartmental model'],
+        },
+    },
+    biomed: {
+        id: 'biomed', icon: '🫀', name: '生醫工程', nameEn: 'Biomedical Engineering',
+        brand: 'Vitalis', arxivCat: 'q-bio.TO',
+        promptRole: '生醫工程研究助理',
+        accent: { from: '#e11d48', to: '#0ea5e9', tint: 'rgba(225,29,72,0.18)' },
+        loaderHints: [
+            '連接 arXiv q-bio.TO 資料中...',
+            '整理本週生醫工程論文（Wearable / Tissue / Prosthetics / Drug Delivery 等）...',
+            '對照 Nature BME / IEEE TBME 最新成果...',
+        ],
+        confs: [
+            { key: 'nature biomedical engineering', label: 'Nat. BME',         color: '#e11d48' },
+            { key: 'ieee tbme',                    label: 'IEEE TBME',         color: '#be123c' },
+            { key: 'embc',                         label: 'EMBC',              color: '#9f1239' },
+            { key: 'tnsre',                        label: 'TNSRE',             color: '#0ea5e9' },
+        ],
+        topics: [
+            'Wearable', 'Tissue Engineering', 'Organ-on-Chip',
+            'Prosthetics', 'Drug Delivery', 'Biosensor',
+            'Neural Prosthesis', 'Cardiac Device', 'Rehabilitation',
+            'ECG', 'Physiological Signal', 'Lab-on-Chip',
+        ],
+        synonyms: {
+            'ecg': ['electrocardiogram', 'ekg'],
+            'wearable': ['smart watch', 'fitness tracker'],
+        },
+    },
+    music: {
+        id: 'music', icon: '🎼', name: '音樂學', nameEn: 'Music & Audio Research',
+        brand: 'Opus', arxivCat: 'cs.SD',
+        promptRole: '音樂研究助理',
+        accent: { from: '#7c3aed', to: '#0891b2', tint: 'rgba(124,58,237,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.SD 資料中...',
+            '整理本週音樂／音訊論文（MIR / Symbolic Music / Generation / Source Separation 等）...',
+            '對照 ISMIR / TISMIR 最新成果...',
+        ],
+        confs: [
+            { key: 'ismir',                label: 'ISMIR',            color: '#7c3aed' },
+            { key: 'tismir',               label: 'TISMIR',           color: '#6d28d9' },
+            { key: 'icmc',                 label: 'ICMC',             color: '#5b21b6' },
+            { key: 'dafx',                 label: 'DAFx',             color: '#0891b2' },
+            { key: 'smc',                  label: 'SMC',              color: '#06b6d4' },
+        ],
+        topics: [
+            'Music Information Retrieval', 'Symbolic Music',
+            'Music Generation', 'Source Separation', 'Melody Extraction',
+            'Chord Recognition', 'Beat Tracking', 'Music Emotion',
+            'Musicology', 'Timbre', 'Audio Effects',
+        ],
+        synonyms: {
+            'music information retrieval': ['mir', 'music ir'],
+            'source separation': ['stem separation', 'demixing'],
+        },
+    },
+    design: {
+        id: 'design', icon: '🎨', name: '設計', nameEn: 'Design & UX',
+        brand: 'Atelier', arxivCat: 'cs.HC',
+        promptRole: '設計研究助理',
+        accent: { from: '#f472b6', to: '#f59e0b', tint: 'rgba(244,114,182,0.18)' },
+        loaderHints: [
+            '連接 arXiv cs.HC 資料中（設計研究重疊）...',
+            '整理本週設計論文（UX / Service Design / Co-Design / Generative Design 等）...',
+            '對照 DIS / Design Studies 最新成果...',
+        ],
+        confs: [
+            { key: 'dis',                 label: 'DIS',             color: '#f472b6' },
+            { key: 'design studies',      label: 'Design Studies',  color: '#db2777' },
+            { key: 'codesign',            label: 'CoDesign',        color: '#f59e0b' },
+            { key: 'ixd',                 label: 'IxD',             color: '#f97316' },
+        ],
+        topics: [
+            'User Experience', 'Service Design', 'Co-Design',
+            'Participatory Design', 'Speculative Design',
+            'Generative Design', 'Product Design', 'Industrial Design',
+            'Visual Communication', 'Typography', 'Design Thinking',
+        ],
+        synonyms: {
+            'user experience': ['ux', 'usability'],
+            'generative design': ['computational design', 'parametric design'],
+        },
+    },
+});
+
+// 預設顯示順序：CS 12 + STEM 跨領域 11 + 人文／社會／工程／藝術 20
 window.DISCIPLINE_ORDER = [
     'cv', 'nlp', 'ml', 'ai', 'robotics', 'graphics',
     'security', 'systems', 'db', 'hci', 'ir', 'speech',
     'stats', 'math', 'physics', 'astro', 'quantum',
     'chem', 'bio', 'neuro', 'econ', 'finance', 'eess',
+    'philosophy', 'linguistics', 'psychology', 'sociology',
+    'political', 'law', 'education', 'history', 'literature', 'anthro',
+    'earth', 'climate', 'materials', 'mecheng', 'civil',
+    'medimg', 'pubhealth', 'biomed', 'music', 'design',
 ];
 
 window.getActiveDiscipline = function () {
