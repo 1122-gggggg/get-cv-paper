@@ -163,22 +163,37 @@ function openDisciplinePicker({ closable = true } = {}) {
 
     grid.innerHTML = '';
     const activeId = ACTIVE_DISCIPLINE?.id;
+    const tracks = new Set((window.getTracks && window.getTracks()) || []);
     for (const id of (window.DISCIPLINE_ORDER || Object.keys(window.DISCIPLINES || {}))) {
         const d = window.DISCIPLINES[id];
         if (!d) continue;
         const card = document.createElement('button');
         card.type = 'button';
-        card.className = 'dp-card' + (id === activeId ? ' active' : '');
+        card.className = 'dp-card' + (id === activeId ? ' active' : '') + (tracks.has(id) ? ' tracked' : '');
         card.dataset.disciplineId = id;
         const confsPreview = d.confs.slice(0, 5).map(c => c.label).join(' · ');
         card.innerHTML = `
+            <button type="button" class="dp-track-star" data-track-id="${id}" title="加入追蹤清單（跨領域 Bridge 權重）" aria-label="追蹤 ${d.name}">${tracks.has(id) ? '★' : '☆'}</button>
             <div class="dp-card-icon">${d.icon}</div>
             <div class="dp-card-name">${d.name}</div>
             <div class="dp-card-name-en">${d.nameEn}</div>
             <div class="dp-card-arxiv">arXiv: ${d.arxivCat}</div>
             <div class="dp-card-confs">${confsPreview}</div>
         `;
-        card.addEventListener('click', () => selectDiscipline(id));
+        card.addEventListener('click', (e) => {
+            const starBtn = e.target.closest('.dp-track-star');
+            if (starBtn) {
+                e.stopPropagation();
+                const tid = starBtn.dataset.trackId;
+                const next = new Set((window.getTracks && window.getTracks()) || []);
+                if (next.has(tid)) next.delete(tid); else next.add(tid);
+                window.setTracks && window.setTracks([...next]);
+                starBtn.textContent = next.has(tid) ? '★' : '☆';
+                card.classList.toggle('tracked', next.has(tid));
+                return;
+            }
+            selectDiscipline(id);
+        });
         grid.appendChild(card);
     }
 
@@ -852,6 +867,9 @@ function buildCard(paper, index) {
     // Signal 6 軸分數
     renderSignalBlock(card, paper);
 
+    // Bridge（跨領域）標記：命中 >=2 個大學研究所主修的關鍵字集
+    renderBridgeBadge(card, paper);
+
     // Title / link
     const titleLink = card.querySelector('.paper-title-link');
     titleLink.href = paper.url;
@@ -1165,6 +1183,27 @@ const SIGNAL_AXIS_TITLE = {
     code:    '開源釋出 + GitHub star',
     recency: '引用速度（每月新增）',
 };
+
+function renderBridgeBadge(card, paper) {
+    if (typeof window.detectBridgeDisciplines !== 'function') return;
+    const activeId = ACTIVE_DISCIPLINE?.id;
+    const hits = window.detectBridgeDisciplines(paper).filter(id => id !== activeId);
+    if (hits.length < 1) return;           // 需至少 1 個「非當前領域」方向 → 才算 bridge
+    const totalSpan = (activeId ? 1 : 0) + hits.length;
+    if (totalSpan < 2) return;
+
+    const slot = card.querySelector('.venue-badge-slot');
+    const titleEl = card.querySelector('.paper-title');
+    // 小徽章：🌉 + 其他領域 icon（最多 3 個）
+    const badge = document.createElement('span');
+    badge.className = 'bridge-badge';
+    const others = hits.slice(0, 3).map(id => window.DISCIPLINES[id]);
+    const label = others.map(d => `${d.icon}${d.name}`).join(' · ');
+    badge.title = `跨領域（Bridge）：本文同時涵蓋 ${others.map(d => d.name).join('、')} 的關鍵字`;
+    badge.innerHTML = `🌉 Bridge <span class="bridge-others">${escapeHtml(label)}</span>`;
+    if (slot) slot.insertAdjacentElement('afterend', badge);
+    else if (titleEl) titleEl.parentNode.insertBefore(badge, titleEl);
+}
 
 function renderSignalBlock(card, paper) {
     const block = card.querySelector('.signal-block');

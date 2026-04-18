@@ -47,6 +47,18 @@ DISCIPLINES: dict[str, dict[str, str]] = {
     "hci":      {"cat": "cs.HC",    "name": "人機互動",         "role": "人機互動研究助理"},
     "ir":       {"cat": "cs.IR",    "name": "資訊檢索與推薦",   "role": "資訊檢索研究助理"},
     "speech":   {"cat": "eess.AS",  "name": "語音與音訊",       "role": "語音研究助理"},
+    # 跨領域擴充（PR#3）：大學／研究所非 CS 主修
+    "math":     {"cat": "math.OC",              "name": "數學",         "role": "數學研究助理"},
+    "stats":    {"cat": "stat.ML",              "name": "統計學",       "role": "統計學研究助理"},
+    "physics":  {"cat": "cond-mat.stat-mech",   "name": "物理",         "role": "物理研究助理"},
+    "astro":    {"cat": "astro-ph.GA",          "name": "天文物理",     "role": "天文物理研究助理"},
+    "quantum":  {"cat": "quant-ph",             "name": "量子物理",     "role": "量子物理研究助理"},
+    "chem":     {"cat": "physics.chem-ph",      "name": "化學",         "role": "化學研究助理"},
+    "bio":      {"cat": "q-bio.BM",             "name": "生物",         "role": "生物學研究助理"},
+    "neuro":    {"cat": "q-bio.NC",             "name": "神經科學",     "role": "神經科學研究助理"},
+    "econ":     {"cat": "econ.GN",              "name": "經濟",         "role": "經濟學研究助理"},
+    "finance":  {"cat": "q-fin.PR",             "name": "金融",         "role": "金融研究助理"},
+    "eess":     {"cat": "eess.SP",              "name": "電機與信號",   "role": "電機工程研究助理"},
 }
 DEFAULT_DISCIPLINE = "cv"
 

@@ -2779,3 +2779,72 @@ details.summary-collapse-wrapper .paper-summary {
 body.light-mode details.summary-collapse-wrapper .paper-summary {
     background: rgba(20, 25, 48, 0.02);
 }
+
+/* ==================================================================
+   PR#3 · Multi-discipline — Bridge badge + 追蹤星星
+   ================================================================== */
+.bridge-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 6px 4px 0;
+    padding: 3px 9px;
+    background: linear-gradient(
+        90deg,
+        rgba(168, 85, 247, 0.22) 0%,
+        rgba(59, 130, 246, 0.18) 100%
+    );
+    border: 1px solid rgba(168, 85, 247, 0.38);
+    border-radius: 12px;
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
+    color: #e9d5ff;
+    font-weight: 600;
+    vertical-align: middle;
+}
+.bridge-badge .bridge-others {
+    opacity: 0.8;
+    font-weight: 400;
+    font-size: 0.66rem;
+}
+body.light-mode .bridge-badge {
+    background: linear-gradient(
+        90deg,
+        rgba(91, 79, 201, 0.14) 0%,
+        rgba(59, 130, 246, 0.10) 100%
+    );
+    border-color: rgba(91, 79, 201, 0.34);
+    color: #4a3fb4;
+}
+
+/* picker：★ 追蹤按鈕 */
+.dp-card {
+    position: relative;
+}
+.dp-track-star {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    background: transparent;
+    font-size: 1.1rem;
+    color: var(--ink-side-mute, #8b8b98);
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.15s ease, transform 0.15s ease;
+    z-index: 2;
+}
+.dp-track-star:hover {
+    color: #fbbf24;
+    transform: scale(1.15);
+}
+.dp-card.tracked .dp-track-star {
+    color: #fbbf24;
+}
+.dp-card.tracked {
+    outline: 1px solid rgba(251, 191, 36, 0.35);
+    outline-offset: -1px;
+}

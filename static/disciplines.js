@@ -444,10 +444,306 @@ window.DISCIPLINES = {
     },
 };
 
-// 預設顯示順序
+// ───── 非 CS 學科（PR#3 跨領域擴充）─────────────────────────────
+// 涵蓋大學／研究所常見主修，arXiv 類別對應主要檔案夾
+Object.assign(window.DISCIPLINES, {
+    math: {
+        id: 'math', icon: '∑', name: '數學', nameEn: 'Mathematics',
+        brand: 'Theorem', arxivCat: 'math.OC',
+        promptRole: '數學研究助理',
+        accent: { from: '#334155', to: '#64748b', tint: 'rgba(100,116,139,0.18)' },
+        loaderHints: [
+            '連接 arXiv math 資料中...',
+            '整理本週數學論文（Optimization / PDE / Combinatorics / Topology 等）...',
+            '參照 Annals / Inventiones 近期文獻...',
+        ],
+        confs: [
+            { key: 'annals',       label: 'Ann. of Math.', color: '#334155' },
+            { key: 'inventiones',  label: 'Inventiones',   color: '#1e293b' },
+            { key: 'acta',         label: 'Acta Math.',    color: '#475569' },
+            { key: 'duke',         label: 'Duke Math. J.', color: '#0f172a' },
+            { key: 'jams',         label: 'JAMS',          color: '#334155' },
+        ],
+        topics: [
+            'Optimization', 'Convex', 'PDE', 'Combinatorics', 'Graph Theory',
+            'Topology', 'Algebra', 'Number Theory', 'Probability',
+            'Stochastic', 'Numerical Analysis', 'Dynamical System',
+        ],
+        synonyms: { 'pde': ['partial differential equation'] },
+    },
+    stats: {
+        id: 'stats', icon: '📊', name: '統計學', nameEn: 'Statistics',
+        brand: 'Infer', arxivCat: 'stat.ML',
+        promptRole: '統計學研究助理',
+        accent: { from: '#0d9488', to: '#06b6d4', tint: 'rgba(13,148,136,0.18)' },
+        loaderHints: [
+            '連接 arXiv stat 資料中...',
+            '整理本週統計論文（Causal / Bayesian / High-Dim / Uncertainty 等）...',
+            '對照 JASA / AoS / Biometrika 最新成果...',
+        ],
+        confs: [
+            { key: 'jasa',        label: 'JASA',       color: '#0d9488' },
+            { key: 'annals of statistics', label: 'AoS', color: '#0f766e' },
+            { key: 'biometrika',  label: 'Biometrika', color: '#115e59' },
+            { key: 'jrssb',       label: 'JRSSB',      color: '#134e4a' },
+            { key: 'bernoulli',   label: 'Bernoulli',  color: '#0e7490' },
+            { key: 'aistats',     label: 'AISTATS',    color: '#047857' },
+        ],
+        topics: [
+            'Causal Inference', 'Bayesian', 'High-Dimensional',
+            'Uncertainty', 'Hypothesis Testing', 'Survival Analysis',
+            'Mixed Model', 'Time Series', 'Bootstrap', 'Regression',
+            'Experimental Design', 'Non-parametric',
+        ],
+        synonyms: {
+            'causal inference': ['causal', 'do-calculus'],
+            'bayesian': ['posterior', 'mcmc', 'variational'],
+        },
+    },
+    physics: {
+        id: 'physics', icon: '⚛️', name: '物理', nameEn: 'Physics',
+        brand: 'Quanta', arxivCat: 'cond-mat.stat-mech',
+        promptRole: '物理研究助理',
+        accent: { from: '#1e40af', to: '#7c3aed', tint: 'rgba(30,64,175,0.18)' },
+        loaderHints: [
+            '連接 arXiv physics 資料中...',
+            '整理本週物理論文（Condensed Matter / Statistical / Quantum 等）...',
+        ],
+        confs: [
+            { key: 'nature',        label: 'Nature',    color: '#1e3a8a' },
+            { key: 'science',       label: 'Science',   color: '#1e40af' },
+            { key: 'physical review letters', label: 'PRL', color: '#2563eb' },
+            { key: 'prl',           label: 'PRL',       color: '#2563eb' },
+            { key: 'prx',           label: 'PRX',       color: '#3b82f6' },
+            { key: 'prb',           label: 'PRB',       color: '#1d4ed8' },
+        ],
+        topics: [
+            'Condensed Matter', 'Superconductor', 'Topological',
+            'Statistical Mechanics', 'Spin', 'Magnetism',
+            'Phase Transition', 'Soft Matter', 'Plasma',
+            'Optics', 'Photonics', 'Metamaterial',
+        ],
+        synonyms: { 'condensed matter': ['cond-mat'] },
+    },
+    astro: {
+        id: 'astro', icon: '🔭', name: '天文物理', nameEn: 'Astrophysics',
+        brand: 'Cosmos', arxivCat: 'astro-ph.GA',
+        promptRole: '天文物理研究助理',
+        accent: { from: '#6b21a8', to: '#1e3a8a', tint: 'rgba(107,33,168,0.18)' },
+        loaderHints: [
+            '連接 arXiv astro-ph 資料中...',
+            '整理本週天文論文（Cosmology / Exoplanet / Galaxy / Black Hole 等）...',
+        ],
+        confs: [
+            { key: 'nature astronomy', label: 'Nature Astronomy', color: '#6b21a8' },
+            { key: 'apj',           label: 'ApJ',       color: '#7e22ce' },
+            { key: 'mnras',         label: 'MNRAS',     color: '#9333ea' },
+            { key: 'aj',            label: 'AJ',        color: '#a855f7' },
+            { key: 'a&a',           label: 'A&A',       color: '#581c87' },
+        ],
+        topics: [
+            'Cosmology', 'Dark Matter', 'Dark Energy', 'Exoplanet',
+            'Black Hole', 'Galaxy', 'Gravitational Wave',
+            'Supernova', 'Pulsar', 'Neutron Star',
+            'CMB', 'Stellar', 'JWST',
+        ],
+        synonyms: {
+            'gravitational wave': ['gw', 'ligo', 'virgo'],
+            'cmb': ['cosmic microwave background'],
+        },
+    },
+    quantum: {
+        id: 'quantum', icon: '🧪', name: '量子', nameEn: 'Quantum Physics',
+        brand: 'Entangle', arxivCat: 'quant-ph',
+        promptRole: '量子物理研究助理',
+        accent: { from: '#7c3aed', to: '#0ea5e9', tint: 'rgba(124,58,237,0.18)' },
+        loaderHints: [
+            '連接 arXiv quant-ph 資料中...',
+            '整理本週量子論文（Error Correction / Algorithm / Circuit / Material 等）...',
+        ],
+        confs: [
+            { key: 'quantum',       label: 'Quantum',   color: '#7c3aed' },
+            { key: 'nature physics', label: 'Nat. Phys.', color: '#6d28d9' },
+            { key: 'prx quantum',   label: 'PRX Quantum', color: '#8b5cf6' },
+            { key: 'npj qi',        label: 'npj QI',    color: '#a78bfa' },
+            { key: 'qip',           label: 'QIP',       color: '#6366f1' },
+        ],
+        topics: [
+            'Quantum Computing', 'Error Correction', 'Quantum Algorithm',
+            'Entanglement', 'Qubit', 'Superconducting',
+            'Trapped Ion', 'Quantum Simulation', 'Variational',
+            'Quantum Machine Learning', 'Quantum Cryptography',
+        ],
+        synonyms: {
+            'quantum computing': ['qc', 'quantum processor'],
+            'error correction': ['qec', 'surface code'],
+        },
+    },
+    chem: {
+        id: 'chem', icon: '🧬', name: '化學', nameEn: 'Chemistry',
+        brand: 'Catalyst', arxivCat: 'physics.chem-ph',
+        promptRole: '化學研究助理',
+        accent: { from: '#16a34a', to: '#eab308', tint: 'rgba(22,163,74,0.18)' },
+        loaderHints: [
+            '連接 arXiv physics.chem-ph 資料中...',
+            '整理本週化學論文（Catalysis / Computational / Materials 等）...',
+        ],
+        confs: [
+            { key: 'jacs',          label: 'JACS',      color: '#166534' },
+            { key: 'angewandte',    label: 'Angewandte', color: '#15803d' },
+            { key: 'nature chemistry', label: 'Nat. Chem.', color: '#16a34a' },
+            { key: 'nature catalysis', label: 'Nat. Catalysis', color: '#22c55e' },
+            { key: 'chemrxiv',      label: 'ChemRxiv',  color: '#4ade80' },
+        ],
+        topics: [
+            'Catalysis', 'Reaction Mechanism', 'DFT', 'Organic Synthesis',
+            'Drug Discovery', 'Molecular Dynamics', 'Polymer',
+            'Electrochemistry', 'Photochemistry', 'Materials',
+            'Computational Chemistry',
+        ],
+        synonyms: {
+            'dft': ['density functional theory'],
+            'drug discovery': ['medicinal chemistry', 'pharmacology'],
+        },
+    },
+    bio: {
+        id: 'bio', icon: '🧫', name: '生物', nameEn: 'Biology',
+        brand: 'Genome', arxivCat: 'q-bio.BM',
+        promptRole: '生物學研究助理',
+        accent: { from: '#059669', to: '#84cc16', tint: 'rgba(5,150,105,0.18)' },
+        loaderHints: [
+            '連接 arXiv q-bio 資料中...',
+            '整理本週生物論文（Genomics / Proteomics / Single Cell / Systems Bio 等）...',
+        ],
+        confs: [
+            { key: 'cell',          label: 'Cell',      color: '#059669' },
+            { key: 'nature',        label: 'Nature',    color: '#047857' },
+            { key: 'science',       label: 'Science',   color: '#065f46' },
+            { key: 'nature biotechnology', label: 'Nat. Biotech', color: '#10b981' },
+            { key: 'biorxiv',       label: 'bioRxiv',   color: '#34d399' },
+            { key: 'recomb',        label: 'RECOMB',    color: '#6ee7b7' },
+        ],
+        topics: [
+            'Genomics', 'Proteomics', 'Transcriptomics', 'CRISPR',
+            'Protein Structure', 'Single-Cell', 'Systems Biology',
+            'Drug Discovery', 'Evolution', 'Phylogenetics',
+            'Molecular Dynamics', 'AlphaFold', 'Bioinformatics',
+        ],
+        synonyms: {
+            'protein structure': ['alphafold', 'structure prediction'],
+            'single-cell': ['scrna', 'sc-rna', 'single cell'],
+        },
+    },
+    neuro: {
+        id: 'neuro', icon: '🧠', name: '神經科學', nameEn: 'Neuroscience',
+        brand: 'Synapse', arxivCat: 'q-bio.NC',
+        promptRole: '神經科學研究助理',
+        accent: { from: '#be185d', to: '#7c3aed', tint: 'rgba(190,24,93,0.18)' },
+        loaderHints: [
+            '連接 arXiv q-bio.NC 資料中...',
+            '整理本週神經科學論文（Cortex / Brain Decoding / BCI / fMRI 等）...',
+        ],
+        confs: [
+            { key: 'neuron',          label: 'Neuron',        color: '#be185d' },
+            { key: 'nature neuroscience', label: 'Nat. Neuro', color: '#9d174d' },
+            { key: 'cell',            label: 'Cell',          color: '#831843' },
+            { key: 'jneuro',          label: 'J. Neurosci.',  color: '#db2777' },
+            { key: 'cosyne',          label: 'COSYNE',        color: '#ec4899' },
+            { key: 'neurips',         label: 'NeurIPS',       color: '#059669' },
+        ],
+        topics: [
+            'Cortex', 'Brain Decoding', 'BCI', 'fMRI', 'EEG', 'MEG',
+            'Spiking Neural Network', 'Neural Coding', 'Reinforcement Learning',
+            'Memory', 'Attention', 'Perception', 'Connectome',
+            'Calcium Imaging', 'Optogenetics',
+        ],
+        synonyms: {
+            'bci': ['brain-computer interface', 'neural interface'],
+            'fmri': ['functional mri'],
+        },
+    },
+    econ: {
+        id: 'econ', icon: '💹', name: '經濟', nameEn: 'Economics',
+        brand: 'Market', arxivCat: 'econ.GN',
+        promptRole: '經濟學研究助理',
+        accent: { from: '#92400e', to: '#b91c1c', tint: 'rgba(146,64,14,0.18)' },
+        loaderHints: [
+            '連接 arXiv econ 資料中...',
+            '整理本週經濟論文（Macro / Labor / Causal / Game Theory 等）...',
+        ],
+        confs: [
+            { key: 'qje',           label: 'QJE',       color: '#92400e' },
+            { key: 'aer',           label: 'AER',       color: '#b45309' },
+            { key: 'econometrica',  label: 'Econometrica', color: '#a16207' },
+            { key: 'jpe',           label: 'JPE',       color: '#854d0e' },
+            { key: 'restud',        label: 'ReStud',    color: '#78350f' },
+        ],
+        topics: [
+            'Causal Inference', 'Labor', 'Macro', 'Trade', 'Development',
+            'Game Theory', 'Mechanism Design', 'Industrial Organization',
+            'Policy Evaluation', 'Difference-in-Differences',
+            'Experimental Economics', 'Econometrics',
+        ],
+        synonyms: {
+            'difference-in-differences': ['did', 'diff-in-diff'],
+            'causal inference': ['iv', 'instrumental'],
+        },
+    },
+    finance: {
+        id: 'finance', icon: '📈', name: '金融', nameEn: 'Finance',
+        brand: 'Alpha', arxivCat: 'q-fin.PR',
+        promptRole: '金融研究助理',
+        accent: { from: '#0f766e', to: '#065f46', tint: 'rgba(15,118,110,0.18)' },
+        loaderHints: [
+            '連接 arXiv q-fin 資料中...',
+            '整理本週金融論文（Asset Pricing / Risk / Portfolio / Derivatives 等）...',
+        ],
+        confs: [
+            { key: 'journal of finance', label: 'J. of Finance', color: '#0f766e' },
+            { key: 'rfs',           label: 'RFS',       color: '#115e59' },
+            { key: 'jfe',           label: 'JFE',       color: '#134e4a' },
+            { key: 'mathematical finance', label: 'Math. Finance', color: '#065f46' },
+        ],
+        topics: [
+            'Asset Pricing', 'Portfolio', 'Risk Management', 'Derivatives',
+            'Volatility', 'High-Frequency Trading', 'Market Microstructure',
+            'Credit Risk', 'Option Pricing', 'Stochastic Volatility',
+            'Reinforcement Learning', 'Cryptocurrency',
+        ],
+        synonyms: { 'option pricing': ['black-scholes', 'heston'] },
+    },
+    eess: {
+        id: 'eess', icon: '📡', name: '電機與信號', nameEn: 'EE & Signal',
+        brand: 'Signal', arxivCat: 'eess.SP',
+        promptRole: '電機工程研究助理',
+        accent: { from: '#0369a1', to: '#14b8a6', tint: 'rgba(3,105,161,0.18)' },
+        loaderHints: [
+            '連接 arXiv eess 資料中...',
+            '整理本週電機論文（Signal Processing / Control / Communication 等）...',
+        ],
+        confs: [
+            { key: 'icassp',        label: 'ICASSP',    color: '#0369a1' },
+            { key: 'globecom',      label: 'GlobeCom',  color: '#0284c7' },
+            { key: 'icc',           label: 'ICC',       color: '#0ea5e9' },
+            { key: 'tsp',           label: 'T-SP',      color: '#075985' },
+            { key: 'tac',           label: 'T-AC',      color: '#0c4a6e' },
+            { key: 'cdc',           label: 'CDC',       color: '#164e63' },
+        ],
+        topics: [
+            'Signal Processing', 'Control', 'Kalman Filter', 'Communication',
+            '5G', '6G', 'MIMO', 'Radar', 'Sonar', 'Compressed Sensing',
+            'Wireless', 'Power System', 'Reinforcement Learning',
+        ],
+        synonyms: { '5g': ['5th generation', 'millimeter wave'] },
+    },
+});
+
+// 預設顯示順序：CS 12 + 跨領域 12
 window.DISCIPLINE_ORDER = [
     'cv', 'nlp', 'ml', 'ai', 'robotics', 'graphics',
     'security', 'systems', 'db', 'hci', 'ir', 'speech',
+    'stats', 'math', 'physics', 'astro', 'quantum',
+    'chem', 'bio', 'neuro', 'econ', 'finance', 'eess',
 ];
 
 window.getActiveDiscipline = function () {
@@ -459,4 +755,72 @@ window.getActiveDiscipline = function () {
 window.setActiveDiscipline = function (id) {
     if (!window.DISCIPLINES[id]) return;
     localStorage.setItem('visionary_discipline', id);
+};
+
+// ── 跨領域 Bridge Papers（PR#3）─────────────────────────────────
+// 為每個領域建立低雜訊關鍵字集合（topics + synonyms），並把常見縮寫剔除
+const _BRIDGE_STOP = new Set([
+    'all', 'agent', 'ml', 'ai', 'rl', 'vr', 'ar', 'bci', 'cnn', 'rnn',
+    'nlp', 'cv', 'qc', 'did', 'iv', 'gw', '5g', '6g', '3d', 'cot',
+    'llm', 'gpt', 'dft', 'evaluation', 'benchmark', 'optimization',
+    'representation learning', 'reinforcement learning', 'transformer',
+    'attention', 'generalization', 'diffusion', 'diffusion model',
+    'self-supervised', 'contrastive',
+]);
+function _bridgeKeyword(raw) {
+    const k = String(raw || '').toLowerCase().trim();
+    if (!k || k.length < 3) return null;
+    if (_BRIDGE_STOP.has(k)) return null;
+    return k;
+}
+
+let _BRIDGE_INDEX = null;
+window.buildDisciplineIndex = function () {
+    if (_BRIDGE_INDEX) return _BRIDGE_INDEX;
+    const idx = {};
+    for (const [id, d] of Object.entries(window.DISCIPLINES || {})) {
+        const kws = new Set();
+        (d.topics || []).forEach(t => { const k = _bridgeKeyword(t); if (k) kws.add(k); });
+        for (const arr of Object.values(d.synonyms || {})) {
+            (arr || []).forEach(s => { const k = _bridgeKeyword(s); if (k) kws.add(k); });
+        }
+        (d.confs || []).forEach(c => {
+            const k = _bridgeKeyword(c.label);
+            // 只納入長標籤（避免 CVPR/ICML 類 4 字縮寫爆炸）
+            if (k && k.length >= 5) kws.add(k);
+        });
+        idx[id] = { id, icon: d.icon, name: d.name, kws };
+    }
+    _BRIDGE_INDEX = idx;
+    return idx;
+};
+
+// 回傳論文命中的 discipline id 陣列（title+summary 任一命中該領域任一關鍵字即計一次）
+window.detectBridgeDisciplines = function (paper) {
+    const idx = window.buildDisciplineIndex();
+    const tLc = paper._titleLc || String(paper.title || '').toLowerCase();
+    const sLc = paper._summaryLc || String(paper.summary || '').toLowerCase();
+    const hay = tLc + ' ' + sLc;
+    const hits = [];
+    for (const [id, entry] of Object.entries(idx)) {
+        let hit = false;
+        for (const k of entry.kws) {
+            if (hay.includes(k)) { hit = true; break; }
+        }
+        if (hit) hits.push(id);
+    }
+    return hits;
+};
+
+// ── 多領域追蹤清單（使用者可勾選多個領域，PR#3 onboarding）────
+const TRACKS_KEY = 'visionary_tracks_v1';
+window.getTracks = function () {
+    try {
+        const arr = JSON.parse(localStorage.getItem(TRACKS_KEY) || '[]');
+        return Array.isArray(arr) ? arr.filter(id => !!window.DISCIPLINES[id]) : [];
+    } catch (e) { return []; }
+};
+window.setTracks = function (ids) {
+    const clean = (ids || []).filter(id => !!window.DISCIPLINES[id]);
+    localStorage.setItem(TRACKS_KEY, JSON.stringify(clean));
 };
