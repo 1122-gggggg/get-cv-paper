@@ -50,15 +50,164 @@ const ICONS = {
     noteFilled: svgUse('icon-note-filled') + ' 筆記',
 };
 
-// ── 頂會關鍵字（hoisted，避免每次 filter 重建 array）────────────
-const TOP_CONF_KEYWORDS = ['cvpr', 'iccv', 'eccv', 'neurips', 'iclr', 'icml', 'tpami', 'wacv', 'ijcv', 'ijcai'];
+// ── 研究領域（由 disciplines.js 提供）────────────────────────────
+let ACTIVE_DISCIPLINE = null;   // 當前 discipline 物件（window.DISCIPLINES[x]）
+// 頂會關鍵字與 patterns 於 applyDiscipline() 時依 discipline 動態填入
+let TOP_CONF_KEYWORDS = [];
+let VENUE_PATTERNS = [];
+
+// 依 discipline id 為 localStorage key 加上後綴，隔離各領域的分類狀態
+function _scopedKey(base, disciplineId) {
+    return `${base}:${disciplineId}`;
+}
+
+function _escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 依 discipline 設定 CONF_FILTERS / VENUE_PATTERNS / TOPIC_SYNONYMS / SEARCH_SUGGESTIONS
+// 以及各 localStorage key 的 scoped 後綴。呼叫時間點：
+//   - DOMContentLoaded 最一開始（初次載入）
+//   - 使用者從選擇器切換領域後（切換後 location.reload()，因此不需要熱切換重建 DOM）
+function applyDiscipline(disciplineId) {
+    const d = window.DISCIPLINES?.[disciplineId];
+    if (!d) return false;
+    ACTIVE_DISCIPLINE = d;
+
+    // localStorage key 加上領域後綴，讓每個領域有自己的分類／釘選／筆記分類
+    PINNED_TOPICS_KEY    = _scopedKey('visionary_pinned_topics', d.id);
+    CUSTOM_TOPICS_KEY    = _scopedKey('visionary_custom_topics', d.id);
+    DELETED_BUILTIN_KEY  = _scopedKey('visionary_deleted_builtins', d.id);
+    RENAMED_BUILTIN_KEY  = _scopedKey('visionary_renamed_builtins', d.id);
+    LAST_CATEGORY_KEY    = _scopedKey('visionary_last_category', d.id);
+
+    // 建構 CONF_FILTERS：data-filter="conf_<key>"
+    CONF_FILTERS = new Map(d.confs.map(c => [`conf_${c.key.replace(/\s+/g, '_')}`, c.key.toLowerCase()]));
+    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', ...CONF_FILTERS.keys()]);
+
+    // VENUE_PATTERNS：顯示在卡片上的 venue 徽章
+    VENUE_PATTERNS = d.confs.map(c => ({
+        re: new RegExp('\\b' + _escapeRegExp(c.label) + '\\b', 'i'),
+        label: c.label,
+        color: c.color,
+    }));
+
+    // top_conf 篩選用的關鍵字
+    TOP_CONF_KEYWORDS = d.confs.map(c => c.key.toLowerCase());
+
+    TOPIC_SYNONYMS = d.synonyms || {};
+    SEARCH_SUGGESTIONS = [
+        ...d.topics.slice(0, 16),
+        ...d.confs.slice(0, 3).map(c => `${c.label} ${new Date().getFullYear()}`),
+    ];
+
+    // 套用品牌／標題
+    const brand = d.brand || 'Scholarly';
+    document.title = `${brand} | ${d.name}最新論文`;
+    const logo = document.getElementById('brandLogo');
+    if (logo) logo.innerHTML = `${brand}<span>.</span>`;
+    const badge = document.getElementById('activeDisciplineBadge');
+    if (badge) badge.textContent = `${d.icon} ${d.name}`;
+
+    // 設定 CSS 變數以渲染領域色調（logo gradient / hero tint / badge）
+    const accent = d.accent || { from: '#3b82f6', to: '#a855f7', tint: 'rgba(59,130,246,0.18)' };
+    const root = document.documentElement;
+    root.style.setProperty('--accent-from', accent.from);
+    root.style.setProperty('--accent-to', accent.to);
+    root.style.setProperty('--hero-tint', accent.tint);
+    return true;
+}
+
+// 在 DOM 裡動態產生 conf-submenu 與主題按鈕（取代原本寫死在 HTML 的 <button>）
+function renderDisciplineFilters() {
+    const d = ACTIVE_DISCIPLINE;
+    if (!d) return;
+
+    const confMenu = document.getElementById('confSubmenu');
+    if (confMenu) {
+        confMenu.innerHTML = '';
+        for (const c of d.confs) {
+            const btn = document.createElement('button');
+            btn.className = 'conf-item';
+            btn.dataset.filter = `conf_${c.key.replace(/\s+/g, '_')}`;
+            btn.textContent = c.label;
+            confMenu.appendChild(btn);
+        }
+    }
+
+    const filtersDiv = document.querySelector('.category-filters');
+    const wrapper = document.querySelector('.add-topic-wrapper');
+    if (filtersDiv && wrapper) {
+        // 先清掉舊主題按鈕（避免切換領域殘留，雖然目前切換會 reload）
+        filtersDiv.querySelectorAll('.category-btn[data-discipline-topic="true"]').forEach(el => el.remove());
+        for (const topic of d.topics) {
+            const btn = document.createElement('button');
+            btn.className = 'category-btn';
+            btn.dataset.filter = topic.toLowerCase();
+            btn.dataset.disciplineTopic = 'true';
+            const label = document.createElement('span');
+            label.className = 'label-span';
+            label.textContent = topic;
+            btn.appendChild(label);
+            filtersDiv.insertBefore(btn, wrapper);
+        }
+    }
+}
+
+// ── 研究領域選擇器 UI ──────────────────────────────────────────
+function openDisciplinePicker({ closable = true } = {}) {
+    const picker = document.getElementById('disciplinePicker');
+    const grid = document.getElementById('disciplineGrid');
+    const closeBtn = document.getElementById('disciplinePickerClose');
+    if (!picker || !grid) return;
+
+    grid.innerHTML = '';
+    const activeId = ACTIVE_DISCIPLINE?.id;
+    for (const id of (window.DISCIPLINE_ORDER || Object.keys(window.DISCIPLINES || {}))) {
+        const d = window.DISCIPLINES[id];
+        if (!d) continue;
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'dp-card' + (id === activeId ? ' active' : '');
+        card.dataset.disciplineId = id;
+        const confsPreview = d.confs.slice(0, 5).map(c => c.label).join(' · ');
+        card.innerHTML = `
+            <div class="dp-card-icon">${d.icon}</div>
+            <div class="dp-card-name">${d.name}</div>
+            <div class="dp-card-name-en">${d.nameEn}</div>
+            <div class="dp-card-arxiv">arXiv: ${d.arxivCat}</div>
+            <div class="dp-card-confs">${confsPreview}</div>
+        `;
+        card.addEventListener('click', () => selectDiscipline(id));
+        grid.appendChild(card);
+    }
+
+    if (closeBtn) closeBtn.hidden = !closable;
+    picker.classList.remove('hidden');
+}
+
+function closeDisciplinePicker() {
+    document.getElementById('disciplinePicker')?.classList.add('hidden');
+}
+
+function selectDiscipline(id) {
+    const prev = localStorage.getItem('visionary_discipline');
+    window.setActiveDiscipline(id);
+    if (prev === id) {
+        closeDisciplinePicker();
+        return;
+    }
+    // 切換領域 → reload 使整個 UI／localStorage 狀態重新初始化
+    location.reload();
+}
 
 // ── 收藏夾系統 ─────────────────────────────────────────────────
 const FAVORITES_KEY = 'visionary_favorites';
 let favorites = new Set(JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]'));
 
 // ── 釘選主題系統 ────────────────────────────────────────────────
-const PINNED_TOPICS_KEY = 'visionary_pinned_topics';
+// 這些 key 由 applyDiscipline() 動態加上 discipline 後綴
+let PINNED_TOPICS_KEY = 'visionary_pinned_topics';
 
 function loadPinnedTopics() {
     const saved = JSON.parse(localStorage.getItem(PINNED_TOPICS_KEY) || '[]');
@@ -336,7 +485,11 @@ async function fetchSummaryFromGroq(abstract, arxivId) {
     const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ arxiv_id: arxivId || 'unknown', abstract }),
+        body: JSON.stringify({
+            arxiv_id: arxivId || 'unknown',
+            abstract,
+            discipline: ACTIVE_DISCIPLINE?.id || 'cv',
+        }),
     });
     if (!res.ok) throw new Error('groq error ' + res.status);
     const data = await res.json();
@@ -418,23 +571,26 @@ const noResults = document.getElementById('noResults');
 let searchDebounceTimer = null;
 
 // loader 動態提示訊息（讓使用者感受到載入進度，而非呆呆等待）
-const LOADER_MESSAGES = [
-    '正在自動為您抓取最新論文...',
-    '連接 arXiv 資料庫中...',
-    '整理本週 CV 論文，請稍候...',
-    '快好了，正在處理論文資料...',
-];
+function buildLoaderMessages() {
+    const extra = ACTIVE_DISCIPLINE?.loaderHints || [];
+    return [
+        '正在自動為您抓取最新論文...',
+        ...extra,
+        '快好了，正在處理論文資料...',
+    ];
+}
 
 let loaderMsgInterval = null;
 
 function startLoaderMessages() {
     const loaderP = loader.querySelector('p');
     if (!loaderP) return;
+    const msgs = buildLoaderMessages();
     let idx = 0;
-    loaderP.textContent = LOADER_MESSAGES[0];
+    loaderP.textContent = msgs[0];
     loaderMsgInterval = setInterval(() => {
-        idx = (idx + 1) % LOADER_MESSAGES.length;
-        loaderP.textContent = LOADER_MESSAGES[idx];
+        idx = (idx + 1) % msgs.length;
+        loaderP.textContent = msgs[idx];
     }, 2200);
 }
 
@@ -452,7 +608,8 @@ async function fetchPapers() {
 
     try {
         // 一次拿1000篇(大約一週的量)，後端已有快取機制
-        const res = await fetch('/api/papers?max_results=1000');
+        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+        const res = await fetch(`/api/papers?max_results=1000&discipline=${encodeURIComponent(disc)}`);
         if (!res.ok) throw new Error('Failed to fetch data');
         const data = await res.json();
         allPapers = indexPapers(data.papers);
@@ -519,26 +676,7 @@ function renderPagination(total) {
     papersGrid.appendChild(nav);
 }
 
-// ── 會議/期刊出處偵測 ──────────────────────────────────────────
-const VENUE_PATTERNS = [
-    { re: /\bCVPR\b/i, label: 'CVPR', color: '#3b82f6' },
-    { re: /\bICCV\b/i, label: 'ICCV', color: '#6366f1' },
-    { re: /\bECCV\b/i, label: 'ECCV', color: '#8b5cf6' },
-    { re: /\bWACV\b/i, label: 'WACV', color: '#7c3aed' },
-    { re: /\bNeurIPS\b/i, label: 'NeurIPS', color: '#059669' },
-    { re: /\bICML\b/i, label: 'ICML', color: '#10b981' },
-    { re: /\bICLR\b/i, label: 'ICLR', color: '#0d9488' },
-    { re: /\bSIGGRAPH Asia\b/i, label: 'SIGGRAPH Asia', color: '#f59e0b' },
-    { re: /\bSIGGRAPH\b/i, label: 'SIGGRAPH', color: '#d97706' },
-    { re: /\bAAAI\b/i, label: 'AAAI', color: '#dc2626' },
-    { re: /\bIJCAI\b/i, label: 'IJCAI', color: '#b91c1c' },
-    { re: /\bACM MM\b/i, label: 'ACM MM', color: '#0891b2' },
-    { re: /\bTPAMI\b/i, label: 'TPAMI', color: '#1d4ed8' },
-    { re: /\bIJCV\b/i, label: 'IJCV', color: '#2563eb' },
-    { re: /\bBMVC\b/i, label: 'BMVC', color: '#7c3aed' },
-    { re: /\bACL\b/i, label: 'ACL', color: '#c2410c' },
-    { re: /\bEMNLP\b/i, label: 'EMNLP', color: '#ea580c' },
-];
+// ── 會議/期刊出處偵測（VENUE_PATTERNS 在 applyDiscipline 時填入）─
 
 function detectVenue(paper) {
     // 優先使用 Semantic Scholar 的正式 venue 名稱
@@ -860,7 +998,7 @@ function renderPapers(papers, customTitle) {
     } else if (currentCategory === "all") {
         themeTitle = "本週所有最新論文";
     } else if (currentCategory === "top_conf") {
-        themeTitle = "本週入選三大頂會與權威期刊的高手論文";
+        themeTitle = `本週入選 ${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊的論文`;
     } else if (CONF_FILTERS.has(currentCategory)) {
         const confName = document.querySelector(`.category-btn[data-filter="${currentCategory}"]`)?.innerText || currentCategory;
         themeTitle = `本週提及 ${confName} 的論文`;
@@ -1110,7 +1248,8 @@ async function ensureMonthPapers() {
     loader.classList.remove('hidden');
     papersGrid.classList.add('hidden');
     try {
-        const res = await fetch('/api/papers?days=30');
+        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+        const res = await fetch(`/api/papers?days=30&discipline=${encodeURIComponent(disc)}`);
         if (!res.ok) throw new Error();
         monthPapers = indexPapers((await res.json()).papers);
     } catch (e) {
@@ -1121,14 +1260,36 @@ async function ensureMonthPapers() {
     }
 }
 
-let _hfDailyCache = null;
+let _hfDailyCache = null;        // 原始（全領域）結果
+let _hfDailyFiltered = null;     // 依當前 discipline 篩過的結果
 async function ensureHfDaily() {
-    if (_hfDailyCache) return _hfDailyCache;
-    const res = await fetch('/api/trending?source=hf_daily&days=14');
-    if (!res.ok) throw new Error('HF Daily fetch failed');
-    const data = await res.json();
-    _hfDailyCache = indexPapers(data.papers || []);
-    return _hfDailyCache;
+    if (!_hfDailyCache) {
+        const res = await fetch('/api/trending?source=hf_daily&days=14');
+        if (!res.ok) throw new Error('HF Daily fetch failed');
+        const data = await res.json();
+        _hfDailyCache = indexPapers(data.papers || []);
+    }
+    if (_hfDailyFiltered) return _hfDailyFiltered;
+    _hfDailyFiltered = filterHfDailyByDiscipline(_hfDailyCache);
+    return _hfDailyFiltered;
+}
+
+// 依當前 discipline 的 conf 關鍵字 + 主題關鍵字做 substring 匹配
+// 找不到任何匹配時回傳原始清單（避免 HF Daily 顯示完全空白）
+function filterHfDailyByDiscipline(papers) {
+    const d = ACTIVE_DISCIPLINE;
+    if (!d || !papers?.length) return papers || [];
+    const keywords = new Set();
+    for (const c of d.confs) keywords.add(c.key.toLowerCase());
+    for (const t of d.topics) keywords.add(t.toLowerCase());
+    for (const arr of Object.values(d.synonyms || {})) for (const s of arr) keywords.add(s.toLowerCase());
+    const kwList = [...keywords].filter(k => k.length >= 2);
+    const hit = papers.filter(p => {
+        const tLc = p._titleLc ?? p.title.toLowerCase();
+        const sLc = p._summaryLc ?? p.summary.toLowerCase();
+        return kwList.some(k => tLc.includes(k) || sLc.includes(k));
+    });
+    return hit.length > 0 ? hit : papers;
 }
 
 async function filterPapers() {
@@ -1146,7 +1307,13 @@ async function filterPapers() {
             if (query) papers = applyFilter(papers, query);
             // 依社群 upvote 排序
             papers = [...papers].sort((a, b) => (b.hf_upvotes || 0) - (a.hf_upvotes || 0));
-            renderPapers(papers, '🤗 HuggingFace 每日精選（依社群 upvote 排序）');
+            const disciplineTag = ACTIVE_DISCIPLINE ? `${ACTIVE_DISCIPLINE.icon} ${ACTIVE_DISCIPLINE.name}` : '';
+            const allTotal = _hfDailyCache?.length || 0;
+            const filteredTotal = papers.length;
+            const suffix = disciplineTag && filteredTotal !== allTotal
+                ? `（${disciplineTag} 相關 · 依社群 upvote）`
+                : '（依社群 upvote 排序）';
+            renderPapers(papers, `🤗 HuggingFace 每日精選${suffix}`);
         } catch (e) {
             loader.classList.add('hidden');
             alert('HF Daily 載入失敗：' + e.message);
@@ -1246,29 +1413,8 @@ function handleSearchInput() {
     searchDebounceTimer = setTimeout(() => searchAllPapers(query), 500);
 }
 
-// ── 模糊主題匹配（零結果時顯示「你是不是想搜尋」）─────────────
-const TOPIC_SYNONYMS = {
-    'nerf': ['neural radiance', 'radiance field', 'neural rendering'],
-    'gaussian': ['3dgs', 'gs', 'splat', 'splatting', '3d gaussian'],
-    'diffusion': ['ddpm', 'latent diffusion', 'stable diffusion', 'score-based'],
-    'transformer': ['attention', 'self-attention', 'vit', 'vision transformer'],
-    'segment': ['segmentation', 'sam', 'mask'],
-    'object detection': ['detector', 'detection', 'yolo', 'detr'],
-    'depth estimation': ['depth', 'monocular depth', 'stereo depth'],
-    'pose estimation': ['pose', 'keypoint', 'human pose', 'hand pose'],
-    '3d reconstruction': ['3d', 'reconstruction', 'mesh', 'sfm', 'mvs'],
-    'slam': ['localization', 'mapping', 'vslam', 'visual slam'],
-    'optical flow': ['flow', 'motion estimation'],
-    'feature match': ['feature matching', 'correspondence', 'local feature'],
-    'super resolution': ['sr', 'upscale', 'super-resolution'],
-    'video': ['video understanding', 'temporal', 'action recognition'],
-    'point cloud': ['pointcloud', 'lidar', 'point-cloud'],
-    'multimodal': ['vlm', 'vision-language', 'vision language', 'clip'],
-    'generation': ['generative', 'image generation', 'synthesis'],
-    'medical': ['medical imaging', 'mri', 'ct scan', 'pathology'],
-    'self-supervised': ['ssl', 'contrastive', 'masked image'],
-    'autonomous driving': ['self-driving', 'autonomous vehicle', 'ad', 'bev'],
-};
+// ── 模糊主題匹配（由 applyDiscipline 填入）─────────────────────
+let TOPIC_SYNONYMS = {};
 
 function _lev(a, b) {
     if (a === b) return 0;
@@ -1337,15 +1483,8 @@ function renderTopicSuggestions(query) {
     box.classList.remove('hidden');
 }
 
-// ── 搜尋推薦詞 ───────────────────────────────────────────────
-const SEARCH_SUGGESTIONS = [
-    'NeRF', 'Gaussian Splatting', 'Depth Estimation', 'Segmentation',
-    'Object Detection', 'SLAM', 'Feature Matching', 'Diffusion Model',
-    'Transformer', 'Vision-Language', 'Pose Estimation', '3D Reconstruction',
-    'Super Resolution', 'Video Understanding', 'Optical Flow',
-    'Semantic Segmentation', 'Point Cloud', 'Medical Imaging',
-    'Self-Supervised', 'Multimodal', 'CVPR 2024', 'NeurIPS 2024',
-];
+// ── 搜尋推薦詞（由 applyDiscipline 填入）─────────────────────
+let SEARCH_SUGGESTIONS = [];
 
 function createSuggestionsDropdown() {
     const box = searchInput.closest('.search-box') || searchInput.parentElement;
@@ -1429,8 +1568,8 @@ function setLabelText(btn, text) {
 }
 
 // ── 內建標籤刪除／重新命名持久化 ────────────────────────────────
-const DELETED_BUILTIN_KEY = 'visionary_deleted_builtins';
-const RENAMED_BUILTIN_KEY = 'visionary_renamed_builtins';
+let DELETED_BUILTIN_KEY = 'visionary_deleted_builtins';
+let RENAMED_BUILTIN_KEY = 'visionary_renamed_builtins';
 
 function loadDeletedBuiltins() {
     try { return new Set(JSON.parse(localStorage.getItem(DELETED_BUILTIN_KEY) || '[]')); } catch (e) { return new Set(); }
@@ -1442,17 +1581,9 @@ function loadRenamedBuiltins() {
 function saveRenamedBuiltins(map) { localStorage.setItem(RENAMED_BUILTIN_KEY, JSON.stringify(map)); }
 
 // 特殊 filter：只改顯示名，不改 data-filter（篩選邏輯依賴它）
-const CONF_FILTERS = new Map([
-    ['conf_cvpr', 'cvpr'],
-    ['conf_iccv', 'iccv'],
-    ['conf_eccv', 'eccv'],
-    ['conf_neurips', 'neurips'],
-    ['conf_iclr', 'iclr'],
-    ['conf_icml', 'icml'],
-    ['conf_tpami', 'tpami'],
-    ['conf_wacv', 'wacv'],
-]);
-const SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', ...CONF_FILTERS.keys()]);
+// 由 applyDiscipline 依當前 discipline 動態重建
+let CONF_FILTERS = new Map();
+let SPECIAL_FILTERS = new Set();
 
 function applyBuiltinModifications() {
     const deleted = loadDeletedBuiltins();
@@ -1543,7 +1674,7 @@ function _selectCategory(filter, activeEl) {
     document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
     if (activeEl) activeEl.classList.add('active');
     currentCategory = filter;
-    localStorage.setItem('visionary_last_category', filter);
+    localStorage.setItem(LAST_CATEGORY_KEY, filter);
     syncTopConfActiveState();
     filterPapers();
 }
@@ -1568,7 +1699,8 @@ function bindCategoryBtns() {
 }
 
 // ── 自訂主題 ────────────────────────────────────────────────────
-const CUSTOM_TOPICS_KEY = 'visionary_custom_topics';
+let CUSTOM_TOPICS_KEY = 'visionary_custom_topics';
+let LAST_CATEGORY_KEY = 'visionary_last_category';
 
 function loadCustomTopics() {
     const saved = JSON.parse(localStorage.getItem(CUSTOM_TOPICS_KEY) || '[]');
@@ -1624,13 +1756,35 @@ function addTopicBtn(topic, save = true) {
 
 // Initial Load
 document.addEventListener('DOMContentLoaded', () => {
+    // 1) 先綁定切換領域按鈕（無論有沒有選領域都要能開啟）
+    document.getElementById('switchDisciplineBtn')?.addEventListener('click', () => {
+        openDisciplinePicker({ closable: true });
+    });
+    document.getElementById('disciplinePickerClose')?.addEventListener('click', closeDisciplinePicker);
+    document.querySelector('#disciplinePicker .dp-backdrop')?.addEventListener('click', () => {
+        // 僅在已有選定 discipline 時允許點背景關閉
+        if (ACTIVE_DISCIPLINE) closeDisciplinePicker();
+    });
+
+    // 2) 判斷是否已有儲存的 discipline
+    const saved = window.getActiveDiscipline();
+    if (!saved) {
+        // 首次進站：強制先讓使用者選一個領域，稍後再初始化其餘畫面
+        openDisciplinePicker({ closable: false });
+        return;
+    }
+    applyDiscipline(saved.id);
+
+    // 3) 依 discipline 動態生成 conf-submenu + 主題按鈕
+    renderDisciplineFilters();
+
     applyBuiltinModifications();
     loadPinnedTopics();
     loadCustomTopics();
     bindCategoryBtns();
 
     // 恢復上次的分類
-    const savedCategory = localStorage.getItem('visionary_last_category');
+    const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
         currentCategory = savedCategory;
         // 找到對應的按鈕並設為 active
@@ -1962,7 +2116,8 @@ function exportFavoritesBibtex() {
         const key = `${firstAuthor}${year}_${arxivId.replace('.', '')}`;
         const authorsStr = p.authors.join(' and ');
         const title = p.title.replace(/[{}]/g, '');
-        return `@article{${key},\n  title={${title}},\n  author={${authorsStr}},\n  year={${year}},\n  eprint={${arxivId}},\n  archivePrefix={arXiv},\n  primaryClass={cs.CV},\n  url={${p.url}}\n}`;
+        const primary = ACTIVE_DISCIPLINE?.arxivCat || 'cs.CV';
+        return `@article{${key},\n  title={${title}},\n  author={${authorsStr}},\n  year={${year}},\n  eprint={${arxivId}},\n  archivePrefix={arXiv},\n  primaryClass={${primary}},\n  url={${p.url}}\n}`;
     });
     const blob = new Blob([entries.join('\n\n')], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
@@ -2048,14 +2203,22 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 
 // ── 匯出/匯入 所有個人資料（離線備份 + 跨瀏覽器搬家）──────────
-const SYNC_KEYS_LOCAL = [
+// 優先用 auth.js 提供的 key 清單；否則 fallback 掃描本地 localStorage。
+const _SYNC_FALLBACK_PREFIXES = [
     'visionary_favorites', 'visionary_read_v1', 'visionary_notes_v1',
     'visionary_pinned_topics', 'visionary_custom_topics',
     'visionary_deleted_builtins', 'visionary_renamed_builtins',
-    'visionary_paper_tags_v1',
+    'visionary_paper_tags_v1', 'visionary_discipline', 'visionary_last_category',
 ];
 function _syncKeys() {
-    return (window.visionaryAuth?.getSyncKeys?.() || SYNC_KEYS_LOCAL);
+    if (window.visionaryAuth?.getSyncKeys) return window.visionaryAuth.getSyncKeys();
+    const out = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (_SYNC_FALLBACK_PREFIXES.some(p => k === p || k.startsWith(p + ':'))) out.push(k);
+    }
+    return out;
 }
 
 function exportAllData() {

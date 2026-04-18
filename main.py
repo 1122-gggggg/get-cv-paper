@@ -33,6 +33,27 @@ ARXIV_UA = "Mozilla/5.0 DesktopDashboard/1.0"
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", ".cache"))
 CACHE_DIR.mkdir(exist_ok=True)
 
+# 研究領域 → arXiv 類別 / 中文名稱（供 summarize 提示使用）
+DISCIPLINES: dict[str, dict[str, str]] = {
+    "cv":       {"cat": "cs.CV",    "name": "電腦視覺",         "role": "電腦視覺研究助理"},
+    "nlp":      {"cat": "cs.CL",    "name": "自然語言處理",     "role": "自然語言處理研究助理"},
+    "ml":       {"cat": "cs.LG",    "name": "機器學習",         "role": "機器學習研究助理"},
+    "ai":       {"cat": "cs.AI",    "name": "人工智慧",         "role": "人工智慧研究助理"},
+    "robotics": {"cat": "cs.RO",    "name": "機器人學",         "role": "機器人學研究助理"},
+    "graphics": {"cat": "cs.GR",    "name": "電腦繪圖",         "role": "電腦繪圖研究助理"},
+    "security": {"cat": "cs.CR",    "name": "資訊安全",         "role": "資訊安全研究助理"},
+    "systems":  {"cat": "cs.OS",    "name": "系統與架構",       "role": "系統研究助理"},
+    "db":       {"cat": "cs.DB",    "name": "資料庫",           "role": "資料庫研究助理"},
+    "hci":      {"cat": "cs.HC",    "name": "人機互動",         "role": "人機互動研究助理"},
+    "ir":       {"cat": "cs.IR",    "name": "資訊檢索與推薦",   "role": "資訊檢索研究助理"},
+    "speech":   {"cat": "eess.AS",  "name": "語音與音訊",       "role": "語音研究助理"},
+}
+DEFAULT_DISCIPLINE = "cv"
+
+
+def _discipline(d: str | None) -> dict[str, str]:
+    return DISCIPLINES.get((d or "").lower(), DISCIPLINES[DEFAULT_DISCIPLINE])
+
 
 # ── Bounded LRU cache helper（支援 JSON 落地） ────────────────────
 class LRUStore:
@@ -268,11 +289,12 @@ def _make_etag(payload: bytes) -> str:
 
 
 @app.get("/api/papers")
-async def get_papers(request: Request, max_results: int = 1000, days: int = 7):
+async def get_papers(request: Request, max_results: int = 1000, days: int = 7, discipline: str = DEFAULT_DISCIPLINE):
     if days >= 30 and max_results < 5000:
         max_results = 5000
 
-    cache_key = f"{days}:{max_results}"
+    disc = _discipline(discipline)
+    cache_key = f"{disc['cat']}:{days}:{max_results}"
     cached = _paper_store.get(cache_key)
     if cached is not None:
         etag = _papers_etag.get(cache_key)
@@ -285,7 +307,7 @@ async def get_papers(request: Request, max_results: int = 1000, days: int = 7):
         return {"papers": cached}
 
     url = (
-        f"{ARXIV_BASE}?search_query=cat:cs.CV"
+        f"{ARXIV_BASE}?search_query=cat:{disc['cat']}"
         f"&sortBy=submittedDate&sortOrder=descending&max_results={max_results}"
     )
     try:
@@ -536,29 +558,31 @@ HF_MODEL = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-72B-Instruct-Turbo")
 HF_PROVIDER = os.environ.get("HF_PROVIDER") or "together"
 
 
-SUMMARIZE_PROMPT = (
-    "你是一位電腦視覺研究助理。請根據以下論文摘要，用繁體中文輸出結構化重點分析。"
-    "嚴格按照以下格式輸出，每個項目用一到兩句話，不要多餘說明：\n\n"
-    "🔍 核心問題：\n"
-    "⚙️ 提出方法：\n"
-    "🏆 主要貢獻：\n"
-    "📊 實驗結果：\n\n"
-    "論文摘要：\n"
-)
+def _build_summarize_prompt(role: str) -> str:
+    return (
+        f"你是一位{role}。請根據以下論文摘要，用繁體中文輸出結構化重點分析。"
+        "嚴格按照以下格式輸出，每個項目用一到兩句話，不要多餘說明：\n\n"
+        "🔍 核心問題：\n"
+        "⚙️ 提出方法：\n"
+        "🏆 主要貢獻：\n"
+        "📊 實驗結果：\n\n"
+        "論文摘要：\n"
+    )
 
 
 class SummarizeRequest(BaseModel):
     arxiv_id: str
     abstract: str
+    discipline: str = DEFAULT_DISCIPLINE
 
 
-def _blocking_summarize(text: str) -> str:
+def _blocking_summarize(text: str, role: str) -> str:
     global _hf_client
     if _hf_client is None:
         _hf_client = InferenceClient(token=HF_TOKEN, provider=HF_PROVIDER)
     resp = _hf_client.chat.completions.create(
         model=HF_MODEL,
-        messages=[{"role": "user", "content": SUMMARIZE_PROMPT + text}],
+        messages=[{"role": "user", "content": _build_summarize_prompt(role) + text}],
         max_tokens=300,
         temperature=0.3,
     )
@@ -570,19 +594,27 @@ async def summarize(req: SummarizeRequest):
     if not HF_TOKEN:
         raise HTTPException(status_code=503, detail="HF_TOKEN not set")
 
-    cached = _summary_store.get(req.arxiv_id)
+    disc = _discipline(req.discipline)
+    # 摘要快取加上 discipline 前綴，避免不同領域共用同一份摘要
+    cache_key = f"{disc['cat']}:{req.arxiv_id}"
+    cached = _summary_store.get(cache_key)
     if cached is not None:
         return {"summary": cached}
 
     text = req.abstract[:2000]
     try:
-        summary = await asyncio.to_thread(_blocking_summarize, text)
+        summary = await asyncio.to_thread(_blocking_summarize, text, disc["role"])
     except Exception as e:
         logger.error("summarize failed: %s", e)
         raise HTTPException(status_code=502, detail="summarization upstream failed")
 
-    _summary_store.set(req.arxiv_id, summary)
+    _summary_store.set(cache_key, summary)
     return {"summary": summary}
+
+
+@app.get("/api/disciplines")
+def list_disciplines():
+    return {"disciplines": [{"id": k, **v} for k, v in DISCIPLINES.items()], "default": DEFAULT_DISCIPLINE}
 
 
 # ── Google 登入 + 雲端同步 ──────────────────────────────────────

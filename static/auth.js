@@ -3,7 +3,8 @@
 // 之後本地任何 setItem 變更同步鍵，會 debounced PUT 整包到後端。
 // 登入/登出後重新整理頁面，讓 script.js 從新 localStorage 重新初始化記憶體狀態。
 
-const SYNC_KEYS = [
+// 使用前綴匹配：discipline-scoped keys（例如 visionary_pinned_topics:nlp）也會同步
+const SYNC_PREFIXES = [
     'visionary_favorites',
     'visionary_read_v1',
     'visionary_notes_v1',
@@ -12,7 +13,20 @@ const SYNC_KEYS = [
     'visionary_deleted_builtins',
     'visionary_renamed_builtins',
     'visionary_paper_tags_v1',
+    'visionary_discipline',
+    'visionary_last_category',
 ];
+function _isSyncKey(k) {
+    return SYNC_PREFIXES.some(p => k === p || k.startsWith(p + ':'));
+}
+function _listSyncKeys() {
+    const out = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && _isSyncKey(k)) out.push(k);
+    }
+    return out;
+}
 
 // GIS ID token (JWT) 過期檢查
 function _tokenExpMs(tok) {
@@ -45,14 +59,14 @@ function isLoggedIn() { return !!_idToken && !_isTokenExpired(_idToken, 0); }
 const _origSetItem = Storage.prototype.setItem;
 Storage.prototype.setItem = function (key, value) {
     _origSetItem.call(this, key, value);
-    if (this === localStorage && isLoggedIn() && SYNC_KEYS.includes(key)) {
+    if (this === localStorage && isLoggedIn() && _isSyncKey(key)) {
         scheduleCloudPush();
     }
 };
 
 function collectLocalData() {
     const out = {};
-    for (const k of SYNC_KEYS) {
+    for (const k of _listSyncKeys()) {
         const v = localStorage.getItem(k);
         if (v != null) {
             try { out[k] = JSON.parse(v); } catch (e) { out[k] = v; }
@@ -109,8 +123,8 @@ async function fetchAndMerge() {
     const merged = mergeData(remote, local);
 
     // 寫回 localStorage（用原始 setItem 避免遞迴觸發 push）
-    for (const k of SYNC_KEYS) {
-        if (merged[k] !== undefined) {
+    for (const k of Object.keys(merged)) {
+        if (_isSyncKey(k) && merged[k] !== undefined) {
             _origSetItem.call(localStorage, k, JSON.stringify(merged[k]));
         }
     }
@@ -234,6 +248,6 @@ document.addEventListener('DOMContentLoaded', initAuth);
 // 對外（script.js）暴露必要輔助
 window.visionaryAuth = {
     isLoggedIn,
-    getSyncKeys: () => SYNC_KEYS.slice(),
+    getSyncKeys: () => _listSyncKeys(),
     pushNow: () => pushToCloud(),
 };

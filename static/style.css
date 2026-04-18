@@ -3,6 +3,10 @@
     --text-primary: #eef2ff;
     --text-secondary: #8b9cc8;
     --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 55%, #a855f7 100%);
+    --accent-from: #3b82f6;
+    --accent-to: #a855f7;
+    --hero-tint: rgba(59, 130, 246, 0.18);
+    --discipline-gradient: linear-gradient(135deg, var(--accent-from) 0%, var(--accent-to) 100%);
     --card-bg: rgba(14, 20, 40, 0.72);
     --card-border: rgba(255, 255, 255, 0.07);
     --hover-bg: rgba(25, 35, 65, 0.75);
@@ -241,7 +245,7 @@ h1, h2, h3, h4, .logo {
 .blob-1 {
     top: -15%; left: -15%;
     width: 55vw; height: 55vw;
-    background: radial-gradient(circle, rgba(79, 70, 229, 0.22) 0%, rgba(0,0,0,0) 70%);
+    background: radial-gradient(circle, var(--hero-tint) 0%, rgba(0,0,0,0) 70%);
 }
 
 .blob-2 {
@@ -294,7 +298,7 @@ header {
 }
 
 .logo span {
-    color: #a855f7;
+    color: var(--accent-to);
     -webkit-text-fill-color: initial;
 }
 
@@ -2203,4 +2207,115 @@ body.light-mode .tag-chip {
         scroll-behavior: auto !important;
     }
     .background-blobs, .blob { display: none !important; }
+}
+
+/* ── 研究領域切換按鈕（Header） ─────────────────────────────────── */
+.switch-discipline-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; margin-left: 14px;
+    background: var(--hero-tint);
+    border: 1px solid var(--accent-from);
+    color: var(--text-primary);
+    border-radius: 999px; cursor: pointer;
+    font-size: 13px; font-weight: 500;
+    transition: all 0.2s;
+}
+.switch-discipline-btn:hover {
+    background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+    border-color: var(--accent-to);
+    color: #fff;
+    transform: translateY(-1px);
+}
+.switch-discipline-btn .discipline-badge { font-weight: 600; letter-spacing: 0.2px; }
+
+/* ── 研究領域選擇器 Modal ───────────────────────────────────────── */
+.discipline-picker {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+}
+.discipline-picker.hidden { display: none; }
+.dp-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(5, 8, 20, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+.dp-modal {
+    position: relative;
+    width: min(92vw, 1080px);
+    max-height: 90vh; overflow-y: auto;
+    padding: 36px 40px;
+    background: var(--card-bg, #111827);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+}
+.dp-header { text-align: center; margin-bottom: 28px; position: relative; }
+.dp-title {
+    margin: 0 0 8px;
+    font-family: 'Outfit', sans-serif;
+    font-size: 28px; font-weight: 700;
+    background: var(--discipline-gradient);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+}
+.dp-subtitle {
+    margin: 0; color: var(--text-secondary);
+    font-size: 14px; line-height: 1.6;
+}
+.dp-close {
+    position: absolute; top: -8px; right: -8px;
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-primary);
+    font-size: 22px; line-height: 1; cursor: pointer;
+    transition: all 0.15s;
+}
+.dp-close:hover { background: rgba(255,255,255,0.1); }
+
+.dp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+}
+.dp-card {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 18px 18px 16px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    cursor: pointer; text-align: left;
+    color: var(--text-primary);
+    transition: all 0.18s ease;
+}
+.dp-card:hover {
+    transform: translateY(-3px);
+    background: rgba(168,85,247,0.08);
+    border-color: rgba(168,85,247,0.5);
+    box-shadow: 0 12px 30px rgba(168,85,247,0.15);
+}
+.dp-card.active {
+    border-color: rgba(59,130,246,0.6);
+    background: rgba(59,130,246,0.12);
+}
+.dp-card-icon { font-size: 28px; line-height: 1; }
+.dp-card-name {
+    font-size: 16px; font-weight: 600;
+    font-family: 'Outfit', sans-serif;
+}
+.dp-card-name-en {
+    font-size: 12px; color: var(--text-secondary);
+    letter-spacing: 0.3px;
+}
+.dp-card-confs {
+    font-size: 11px; color: var(--text-secondary);
+    opacity: 0.8; margin-top: 4px;
+    display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden;
+}
+.dp-card-arxiv {
+    font-size: 10px; letter-spacing: 0.4px;
+    color: rgba(168,85,247,0.85);
+    font-family: 'Inter', monospace;
 }
