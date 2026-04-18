@@ -800,55 +800,94 @@ body.theme-washi .venue-badge[data-venue="EMNLP"]   { background: #3e6b4a; }
 body.theme-washi .venue-badge[data-venue="AAAI"]    { background: #5a3a7b; }
 body.theme-washi .venue-badge[data-venue="KDD"]     { background: #6b4a1e; }
 
-/* Signal block — inline chip 風 */
+/* Signal block — inline meter row */
 body.theme-washi .signal-block {
-  display: inline-flex;
-  vertical-align: middle;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   background: transparent;
   border: none;
   padding: 0;
-  margin: 0;
+  margin: 0 0 6px;
   box-shadow: none;
+  flex-wrap: wrap;
 }
-body.theme-washi .signal-head {
+body.theme-washi .signal-block .signal-head {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 0;
+  flex-wrap: wrap;
 }
-body.theme-washi .signal-score {
+body.theme-washi .signal-block .signal-score {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--mustard-deep);
+  color: var(--ink-mute);
   background: transparent;
   padding: 0;
   border: none;
   display: inline-flex;
-  align-items: center;
-  gap: 3px;
+  align-items: baseline;
+  gap: 4px;
+  letter-spacing: 0.08em;
 }
-body.theme-washi .signal-score b {
-  font-family: var(--font-mono);
+body.theme-washi .signal-block .signal-score b {
+  font-family: var(--font-display);
   font-weight: 700;
+  font-size: 13px;
   color: var(--mustard-deep);
+  letter-spacing: 0;
 }
-body.theme-washi .signal-axes { gap: 3px; }
-body.theme-washi .signal-axis-bar { background: var(--mustard); opacity: 0.85; }
-body.theme-washi .signal-axis-bar.empty { background: var(--ink-rule); opacity: 0.5; }
+body.theme-washi .signal-axes {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+body.theme-washi .signal-axis {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--ink-mute);
+}
+body.theme-washi .signal-axis .sa-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  opacity: 0.85;
+  min-width: 12px;
+}
+body.theme-washi .signal-axis .sa-track {
+  display: inline-block;
+  width: 26px;
+  height: 3px;
+  background: var(--ink-rule);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+body.theme-washi .signal-axis .sa-fill {
+  display: block;
+  height: 100%;
+  background: var(--mustard);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
 
-/* AI summary block — mustard-soft + 左 3px mustard */
+/* AI summary block — paper tint + mustard accent */
 body.theme-washi .zh-summary-block,
 body.theme-washi .zh-summary-block.zh-summary-lead {
-  background: var(--mustard-soft);
+  background: #fbf6e4;
   border: none;
   border-left: 3px solid var(--mustard);
-  border-radius: 0 var(--r-md) var(--r-md) 0;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
   padding: 10px 14px;
-  margin: 4px 0 0 0;
+  margin: 6px 0 0 0;
   color: var(--ink-soft);
   font-family: var(--font-body);
   font-size: 12.5px;
   line-height: 1.85;
+  box-shadow: none;
 }
 body.theme-washi .zh-summary-block .zh-label {
   display: block;
@@ -860,6 +899,7 @@ body.theme-washi .zh-summary-block .zh-label {
   margin-bottom: 4px;
   background: transparent;
   padding: 0;
+  text-transform: uppercase;
 }
 body.theme-washi .zh-summary-block.loading .zh-summary-text {
   color: var(--ink-mute);
@@ -1126,6 +1166,31 @@ body.theme-washi .note-btn {
   font-size: 11px;
   font-family: var(--font-body);
   cursor: pointer;
+}
+
+/* Bridge badge — washi indigo pill */
+body.theme-washi .bridge-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 6px 4px 0;
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--indigo);
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--indigo);
+  font-weight: 600;
+}
+body.theme-washi .bridge-badge .bridge-others {
+  opacity: 0.78;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  letter-spacing: 0;
 }
 body.theme-washi .paper-card.has-note .note-btn {
   background: var(--plum);
