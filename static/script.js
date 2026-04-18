@@ -1797,20 +1797,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fetchPapers();
 
-    // ── 分類標籤左右箭頭 ──
+    // ── 分類標籤左右箭頭 ──（側邊欄模式下不啟用）
     const filterScroll = document.querySelector('.category-filters');
     const arrowLeft    = document.getElementById('filterArrowLeft');
     const arrowRight   = document.getElementById('filterArrowRight');
     const SCROLL_STEP  = 200;
+    const inSidebar    = !!document.querySelector('.side-nav .category-filters');
 
     function updateFilterArrows() {
-        if (!filterScroll) return;
+        if (!filterScroll || inSidebar) return;
         arrowLeft.classList.toggle('hidden-arrow', filterScroll.scrollLeft <= 0);
         arrowRight.classList.toggle('hidden-arrow',
             filterScroll.scrollLeft + filterScroll.clientWidth >= filterScroll.scrollWidth - 1);
     }
 
-    if (filterScroll && arrowLeft && arrowRight) {
+    if (!inSidebar && filterScroll && arrowLeft && arrowRight) {
         arrowLeft.addEventListener('click', () => {
             filterScroll.scrollBy({ left: -SCROLL_STEP, behavior: 'smooth' });
         });
