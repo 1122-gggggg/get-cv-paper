@@ -1550,7 +1550,14 @@ body.theme-washi:not(.light-mode) {
   --plum-soft:    #3a1f2c;
 }
 body.theme-washi:not(.light-mode) .paper-authors { color: #c5a976; }
-body.theme-washi:not(.light-mode) .zh-summary-block { color: var(--ink); }
+body.theme-washi:not(.light-mode) .zh-summary-block,
+body.theme-washi:not(.light-mode) .zh-summary-block.zh-summary-lead {
+  background: #2e2617;
+  color: var(--ink-soft);
+}
+body.theme-washi:not(.light-mode) .signal-axis .sa-track { background: rgba(243,234,211,0.12); }
+body.theme-washi:not(.light-mode) .bridge-badge { border-color: #6a7ba0; color: #a9bbe0; }
+body.theme-washi:not(.light-mode) .bridge-badge .bridge-others { color: var(--ink-soft); }
 body.theme-washi:not(.light-mode) .hf-badge { background: #4a3c10; color: var(--mustard); }
 body.theme-washi:not(.light-mode) {
   background-image:
