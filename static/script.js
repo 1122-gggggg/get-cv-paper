@@ -858,6 +858,7 @@ function buildCard(paper, index) {
         const span = document.createElement('span');
         span.className = 'venue-badge';
         span.style.setProperty('--venue-color', venue.color);
+        span.setAttribute('data-venue', venue.label);
         span.textContent = venue.label;
         venueSlot.replaceWith(span);
     } else {
