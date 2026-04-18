@@ -1422,7 +1422,15 @@ body.theme-washi textarea:focus-visible {
 /* ============================================================
    Responsive
    ============================================================ */
-@media (max-width: 960px) {
+/* 窄桌面：壓縮側欄但保持 on the side (not on top) */
+@media (max-width: 960px) and (min-width: 721px) {
+  body.theme-washi .app-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  body.theme-washi .side { padding: 22px 14px 20px; gap: 16px; }
+  body.theme-washi .side-nav .category-btn { font-size: 12.5px; padding: 6px 10px; }
+}
+
+/* 真·手機：折疊成單欄 */
+@media (max-width: 720px) {
   body.theme-washi .app-shell { grid-template-columns: 1fr; }
   body.theme-washi .side {
     position: relative;
