@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scholarly · 登入 · 和紙 v2</title>
+<link rel="stylesheet" href="../../colors_and_type.v2.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { min-height: 100%; }
+  body {
+    font-family: var(--font-body); color: var(--ink); background: var(--paper);
+    background-image:
+      radial-gradient(rgba(138,110,50,0.05) 1px, transparent 1.5px),
+      radial-gradient(rgba(138,110,50,0.04) 1px, transparent 1.5px);
+    background-size: 6px 6px, 13px 13px;
+    background-position: 0 0, 3px 4px;
+    font-feature-settings: "palt" 1;
+    letter-spacing: 0.01em;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 40px 24px;
+  }
+  .top-rule { position: fixed; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--accent-gradient-wide); opacity: 0.85; z-index: 10; }
+  .bottom-rule { position: fixed; bottom: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--ink-rule) 20%, var(--ink-rule) 80%, transparent); }
+
+  .shell { width: 100%; max-width: 1080px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 0;
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--r-lg);
+    box-shadow: var(--shadow-modal); overflow: hidden; min-height: 560px; }
+
+  .panel-left { padding: 64px 56px; background: var(--paper-shade);
+    display: flex; flex-direction: column; gap: 28px; justify-content: space-between;
+    border-right: 1px solid var(--card-border); position: relative; }
+  .panel-left::before {
+    content: ''; position: absolute; top: 24px; right: 24px; width: 80px; height: 80px;
+    background: radial-gradient(circle, rgba(230,180,34,0.2) 0%, transparent 70%);
+    border-radius: 50%; pointer-events: none;
+  }
+  .brand-row { display: flex; align-items: baseline; gap: 10px; }
+  .brand-name { font-family: var(--font-display); font-weight: 700; font-size: 2.4rem; letter-spacing: 0.02em; color: var(--ink); }
+  .brand-dot { color: var(--vermillion); }
+  .hanko { display: inline-block; font-family: var(--font-display); font-weight: 700;
+    color: #fff; background: var(--seal); padding: 3px 6px; font-size: 14px;
+    border-radius: 2px; letter-spacing: 0; margin-left: 4px; vertical-align: 5px; }
+
+  .jp-lead { font-family: var(--font-soft); font-size: 13px; letter-spacing: 0.3em; color: var(--ink-mute); }
+  .lead-title { font-family: var(--font-display); font-weight: 700; font-size: 1.75rem; line-height: 1.5; color: var(--ink); letter-spacing: 0.02em; }
+  .lead-title em { font-style: normal; color: var(--vermillion);
+    text-emphasis: filled dot; -webkit-text-emphasis: filled dot var(--vermillion); text-emphasis-color: var(--vermillion); }
+  .lead-body { font-size: 14px; line-height: 1.9; color: var(--ink-soft); }
+
+  .feature-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .feature { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--ink-soft); line-height: 1.7; }
+  .feature-mark { flex: 0 0 24px; height: 24px; border-radius: 3px; background: var(--mustard); color: #fff;
+    font-family: var(--font-display); font-weight: 700; font-size: 12px;
+    display: flex; align-items: center; justify-content: center; letter-spacing: 0; }
+  .feature-mark.v { background: var(--vermillion); }
+  .feature-mark.m { background: var(--matcha); }
+
+  .footnote { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; color: var(--ink-mute); }
+
+  .panel-right { padding: 64px 56px; display: flex; flex-direction: column; justify-content: center; gap: 22px; }
+  .form-head { display: flex; flex-direction: column; gap: 4px; }
+  .jp-label { font-family: var(--font-soft); font-size: 11px; letter-spacing: 0.3em; color: var(--ink-mute); }
+  .form-title { font-family: var(--font-display); font-weight: 700; font-size: 1.5rem; color: var(--ink); letter-spacing: 0.02em; }
+  .form-sub { font-size: 13px; color: var(--ink-mute); line-height: 1.8; }
+
+  .google-btn { display: flex; align-items: center; justify-content: center; gap: 12px;
+    padding: 13px 20px; border-radius: var(--r-md); background: var(--card-bg);
+    border: 1.5px solid var(--ink); color: var(--ink); font-family: var(--font-body);
+    font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.02em;
+    transition: all 0.25s var(--ease-brand); box-shadow: 2px 2px 0 var(--ink);
+    position: relative; top: 0; }
+  .google-btn:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
+
+  .or-rule { display: flex; align-items: center; gap: 12px; color: var(--ink-mute); font-size: 11px; font-family: var(--font-soft); letter-spacing: 0.3em; }
+  .or-rule::before, .or-rule::after { content: ''; flex: 1; height: 1px; background: var(--ink-rule); }
+
+  .guest-btn { display: block; text-align: center; padding: 12px 20px; border-radius: var(--r-md);
+    background: transparent; border: 1px solid var(--card-border); color: var(--ink-soft);
+    font-family: var(--font-body); font-size: 13px; cursor: pointer; letter-spacing: 0.02em; }
+  .guest-btn:hover { border-color: var(--mustard); background: var(--mustard-soft); color: var(--ink); }
+
+  .meta { font-size: 11px; color: var(--ink-mute); line-height: 1.9; font-family: var(--font-body); }
+  .meta a { color: var(--indigo); text-decoration: none; border-bottom: 1px dotted var(--indigo); }
+
+  .kbd-row { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--ink-mute); font-family: var(--font-body); }
+  kbd { font-family: var(--font-mono); font-size: 0.85em;
+    background: var(--paper-deep); border: 1px solid var(--card-border);
+    border-bottom-width: 2px;
+    border-radius: var(--r-xs); padding: 1px 7px; color: var(--ink); }
+
+  @media (max-width: 820px) {
+    .shell { grid-template-columns: 1fr; }
+    .panel-left { padding: 40px 32px 24px; border-right: none; border-bottom: 1px solid var(--card-border); }
+    .panel-right { padding: 32px; }
+  }
+</style>
+</head>
+<body>
+<div class="top-rule"></div>
+<div class="bottom-rule"></div>
+
+<div class="shell">
+  <!-- LEFT: marketing -->
+  <div class="panel-left">
+    <div>
+      <div class="brand-row">
+        <div class="brand-name">Scholarly<span class="brand-dot">.</span></div>
+        <span class="hanko">印</span>
+      </div>
+      <div class="jp-lead" style="margin-top: 12px;">ろんぶん　ついせき</div>
+    </div>
+
+    <div>
+      <h1 class="lead-title">毎日 <em>arXiv</em> から<br>必要な論文だけを届ける。</h1>
+      <p class="lead-body" style="margin-top: 14px;">40+ の研究分野をカバー。AI 要約・引用・GitHub リンク・Signal スコアが一枚のカードにまとまります。</p>
+    </div>
+
+    <div class="feature-list">
+      <div class="feature"><span class="feature-mark">要</span><span><b style="color:var(--ink)">Qwen AI 中文要約</b> — 核心問題 / 方法 / 貢獻 / 結果の四行に自動分解。</span></div>
+      <div class="feature"><span class="feature-mark v">印</span><span><b style="color:var(--ink)">Signal 6 軸スコア</b> — novelty・引用・HF・venue・code・recency の加重平均。</span></div>
+      <div class="feature"><span class="feature-mark m">雲</span><span><b style="color:var(--ink)">クラウド同期</b> — 収藏・既読・筆記を端末をまたいで保持。</span></div>
+    </div>
+
+    <div class="footnote">v2.1 · 和紙 edition · built on arXiv + Semantic Scholar + HF</div>
+  </div>
+
+  <!-- RIGHT: login form -->
+  <div class="panel-right">
+    <div class="form-head">
+      <div class="jp-label">ログイン</div>
+      <div class="form-title">アカウントにサインイン</div>
+      <div class="form-sub">Google アカウントで登入すると、収藏と筆記が自動的にクラウドへ同期されます。</div>
+    </div>
+
+    <button class="google-btn">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.6-6 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-2 1.4-4.5 2.2-7.2 2.2-5.3 0-9.7-3.4-11.3-8l-6.5 5C9.6 39.6 16.3 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.1 4-3.8 5.3l6.2 5.2c-.4.4 6.8-5 6.8-14.5 0-1.3-.1-2.4-.5-3.5z"/></svg>
+      Google でサインイン
+    </button>
+
+    <div class="or-rule">または</div>
+
+    <button class="guest-btn">ゲストとして続行 · 登入せずに使う</button>
+
+    <div class="meta">
+      ログインすると <a href="#">利用規約</a> と <a href="#">プライバシーポリシー</a> に同意したものとみなされます。<br>
+      データはすべて暗号化され、第三者に共有されません。
+    </div>
+
+    <div class="kbd-row" style="margin-top: 8px;">
+      <kbd>Tab</kbd> 移動 · <kbd>Enter</kbd> 決定 · <kbd>Esc</kbd> ゲストへ
+    </div>
+  </div>
+</div>
+</body>
+</html>

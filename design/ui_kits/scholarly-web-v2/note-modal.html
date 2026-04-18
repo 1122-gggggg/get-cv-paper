@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scholarly · 筆記 · 和紙 v2</title>
+<link rel="stylesheet" href="../../colors_and_type.v2.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { min-height: 100%; }
+  body {
+    font-family: var(--font-body); color: var(--ink); background: var(--paper);
+    background-image:
+      radial-gradient(rgba(138,110,50,0.05) 1px, transparent 1.5px),
+      radial-gradient(rgba(138,110,50,0.04) 1px, transparent 1.5px);
+    background-size: 6px 6px, 13px 13px;
+    background-position: 0 0, 3px 4px;
+    font-feature-settings: "palt" 1;
+    letter-spacing: 0.01em;
+    min-height: 100vh; padding: 40px 24px;
+    display: flex; align-items: flex-start; justify-content: center;
+  }
+  .top-rule { position: fixed; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--accent-gradient-wide); opacity: 0.85; z-index: 10; }
+
+  /* backdrop — simulated, since this IS the modal surface */
+  .backdrop-stage { position: fixed; inset: 0;
+    background: rgba(42,36,24,0.35); z-index: 0; pointer-events: none; }
+
+  .modal { position: relative; z-index: 2; width: 100%; max-width: 720px;
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--r-lg);
+    box-shadow: var(--shadow-modal); overflow: hidden; margin-top: 40px; }
+
+  .modal-head { padding: 24px 28px 18px; border-bottom: 1px dashed var(--card-border);
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; }
+  .head-left { flex: 1; min-width: 0; }
+  .jp-label { font-family: var(--font-soft); font-size: 11px; letter-spacing: 0.3em; color: var(--ink-mute); margin-bottom: 2px; }
+  .modal-title { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; color: var(--ink); letter-spacing: 0.02em; }
+  .hanko-sm { display: inline-block; font-family: var(--font-display); font-weight: 700;
+    color: #fff; background: var(--seal); padding: 2px 5px; font-size: 12px;
+    border-radius: 2px; margin-left: 6px; vertical-align: 3px; }
+
+  .close-x { background: transparent; border: none; color: var(--ink-mute); font-size: 20px;
+    cursor: pointer; padding: 4px 8px; border-radius: var(--r-xs); line-height: 1; flex-shrink: 0; }
+  .close-x:hover { background: var(--paper-shade); color: var(--ink); }
+
+  .paper-ref { padding: 14px 28px; background: var(--mustard-soft); border-bottom: 1px solid var(--mustard);
+    display: flex; gap: 12px; align-items: flex-start; }
+  .venue-badge { display: inline-block; padding: 3px 10px; border-radius: var(--r-xs);
+    font-family: var(--font-display); font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+    color: #fff; background: #2e4d7b; flex-shrink: 0; }
+  .paper-ref-body { flex: 1; min-width: 0; }
+  .paper-ref-title { font-family: var(--font-display); font-weight: 700; font-size: 13.5px; color: var(--ink); line-height: 1.5; letter-spacing: 0.01em; }
+  .paper-ref-meta { font-family: var(--font-display); font-style: italic; font-size: 11px; color: #8a6d3a; margin-top: 2px; }
+
+  .modal-body { padding: 22px 28px 10px; display: flex; flex-direction: column; gap: 18px; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--card-border); margin-bottom: 4px; }
+  .tab { padding: 8px 14px; border: none; background: transparent; color: var(--ink-mute);
+    font-family: var(--font-body); font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent;
+    letter-spacing: 0.02em; white-space: nowrap; }
+  .tab.active { color: var(--ink); border-bottom-color: var(--mustard); font-weight: 600; }
+  .tab .count { font-family: var(--font-mono); font-size: 10px; opacity: 0.6; margin-left: 4px; white-space: nowrap; }
+
+  .note-area { background: var(--paper-shade);
+    background-image:
+      linear-gradient(to bottom, transparent 30px, var(--ink-rule) 30px, var(--ink-rule) 31px, transparent 31px);
+    background-size: 100% 32px;
+    background-position: 0 6px;
+    border: 1px solid var(--card-border); border-radius: var(--r-md);
+    padding: 14px 18px; min-height: 200px;
+    font-family: var(--font-soft); font-size: 14px; line-height: 32px; color: var(--ink);
+    outline: none; resize: vertical; width: 100%; letter-spacing: 0.03em;
+  }
+  .note-area:focus { border-color: var(--mustard); box-shadow: 0 0 0 3px var(--mustard-wash); }
+
+  .toolbar { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tool-btn { padding: 4px 10px; background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: var(--r-sm); font-size: 11px; color: var(--ink-soft); cursor: pointer;
+    font-family: var(--font-body); display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap; flex-shrink: 0; }
+  .tool-btn:hover { border-color: var(--mustard); color: var(--ink); }
+  .tool-kbd { font-family: var(--font-mono); font-size: 9px; opacity: 0.6; }
+
+  .meta-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--ink-mute); font-family: var(--font-body); }
+  .tag-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .tag-chip { padding: 2px 10px; border-radius: var(--r-pill); font-size: 11px;
+    background: var(--mustard-soft); border: 1px solid var(--mustard); color: #8a5f0a;
+    font-family: var(--font-body); display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap; }
+  .tag-chip .x { color: #b58820; cursor: pointer; font-weight: 700; }
+  .tag-add { padding: 2px 10px; border-radius: var(--r-pill); font-size: 11px;
+    background: transparent; border: 1.5px dashed var(--ink-pale); color: var(--ink-mute);
+    cursor: pointer; font-family: var(--font-soft); }
+
+  .modal-foot { padding: 16px 28px 20px; border-top: 1px dashed var(--card-border);
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--paper-shade); }
+  .foot-left { font-family: var(--font-mono); font-size: 10px; color: var(--ink-mute); letter-spacing: 0.04em; }
+  .foot-buttons { display: flex; gap: 10px; }
+  .btn { padding: 9px 18px; border-radius: var(--r-sm); font-family: var(--font-body); font-size: 13px;
+    cursor: pointer; letter-spacing: 0.02em; transition: all 0.2s var(--ease-brand);
+    white-space: nowrap; min-width: 72px; }
+  .btn-ghost { background: transparent; border: 1px solid var(--card-border); color: var(--ink-soft); }
+  .btn-ghost:hover { border-color: var(--ink-mute); color: var(--ink); }
+  .btn-danger { background: transparent; border: 1px solid var(--card-border); color: var(--seal); }
+  .btn-danger:hover { background: var(--seal); color: #fff; border-color: var(--seal); }
+  .btn-primary { background: var(--mustard); border: 1.5px solid var(--mustard-deep); color: #2a2418;
+    font-weight: 700; box-shadow: 2px 2px 0 var(--mustard-deep); position: relative; top: 0;
+    letter-spacing: 0.04em; }
+  .btn-primary:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--mustard-deep); }
+
+  .kbd { font-family: var(--font-mono); font-size: 10px;
+    background: var(--paper); border: 1px solid var(--card-border);
+    border-bottom-width: 2px; border-radius: var(--r-xs); padding: 1px 5px; color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="top-rule"></div>
+<div class="backdrop-stage"></div>
+
+<div class="modal">
+  <div class="modal-head">
+    <div class="head-left">
+      <div class="jp-label">しりょう　めもちょう</div>
+      <div class="modal-title">資料メモ<span class="hanko-sm">印</span></div>
+    </div>
+    <button class="close-x" title="閉じる (Esc)">✕</button>
+  </div>
+
+  <div class="paper-ref">
+    <span class="venue-badge">CVPR</span>
+    <div class="paper-ref-body">
+      <div class="paper-ref-title">Efficient Diffusion Training via Two-Stage Distillation</div>
+      <div class="paper-ref-meta">Y. Zhang, W. Chen, H. Liu · 2026-04-15 · arXiv:2604.08912</div>
+    </div>
+  </div>
+
+  <div class="modal-body">
+    <div class="tabs">
+      <button class="tab active">筆記<span class="count">218 字</span></button>
+      <button class="tab">引用フラグメント<span class="count">3</span></button>
+      <button class="tab">関連論文<span class="count">5</span></button>
+    </div>
+
+    <div class="toolbar">
+      <button class="tool-btn"><b>B</b> <span class="tool-kbd">⌘B</span></button>
+      <button class="tool-btn"><i>I</i> <span class="tool-kbd">⌘I</span></button>
+      <button class="tool-btn">&gt; 引用</button>
+      <button class="tool-btn">· 箇条書き</button>
+      <button class="tool-btn">[x] チェック</button>
+      <button class="tool-btn">🔗 リンク挿入</button>
+      <button class="tool-btn">🤖 AI 要約を貼付</button>
+    </div>
+
+    <textarea class="note-area" spellcheck="false">重點：二段階蒸留が核心。第一段で teacher 出力を中間層まで圧縮、第二段で全体を再パラメータ化。
+
+試したい：
+[x] ImageNet 256² の再現（3 epoch で FID 4.1）
+[ ] cosine vs. linear スケジュール比較
+[ ] flow matching との差分を 2 週間で整理
+
+疑問：再パラメータ化で重みが崩れるケース？ 著者は明示していない。
+要フォローアップ：Zhang 22 の 3rd-party 実装と突合。
+</textarea>
+
+    <div class="meta-row">
+      <div class="tag-row">
+        <span class="tag-chip">Diffusion <span class="x">×</span></span>
+        <span class="tag-chip">Distillation <span class="x">×</span></span>
+        <span class="tag-chip">To-Reproduce <span class="x">×</span></span>
+        <button class="tag-add">＋ タグを追加</button>
+      </div>
+      <div><kbd class="kbd">⌘</kbd> <kbd class="kbd">S</kbd> で保存</div>
+    </div>
+  </div>
+
+  <div class="modal-foot">
+    <div class="foot-left">最終更新: 2026-04-18 10:12 · 自動同期 ✓</div>
+    <div class="foot-buttons">
+      <button class="btn btn-danger">削除</button>
+      <button class="btn btn-ghost">取消</button>
+      <button class="btn btn-primary">儲存筆記</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scholarly · 論文が見つかりません · 和紙 v2</title>
+<link rel="stylesheet" href="../../colors_and_type.v2.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { min-height: 100%; }
+  body {
+    font-family: var(--font-body); color: var(--ink); background: var(--paper);
+    background-image:
+      radial-gradient(rgba(138,110,50,0.05) 1px, transparent 1.5px),
+      radial-gradient(rgba(138,110,50,0.04) 1px, transparent 1.5px);
+    background-size: 6px 6px, 13px 13px;
+    background-position: 0 0, 3px 4px;
+    font-feature-settings: "palt" 1;
+    letter-spacing: 0.01em;
+    padding: 48px 48px 80px;
+  }
+  .top-rule { position: fixed; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--accent-gradient-wide); opacity: 0.85; z-index: 10; }
+
+  .header { max-width: 1000px; margin: 0 auto 32px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .breadcrumb { font-family: var(--font-soft); font-size: 12px; letter-spacing: 0.2em; color: var(--ink-mute); }
+  .breadcrumb b { color: var(--ink); letter-spacing: 0.05em; font-family: var(--font-body); }
+  .query-display { font-family: var(--font-mono); font-size: 12px; color: var(--plum); background: var(--plum-soft);
+    padding: 4px 10px; border-radius: var(--r-xs); border: 1px solid rgba(138,58,95,0.25); }
+
+  .empty-wrap { max-width: 1000px; margin: 0 auto;
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--r-lg);
+    padding: 72px 56px; box-shadow: var(--shadow-card); position: relative; overflow: hidden; }
+
+  /* decorative vertical rule — like a scroll's edge */
+  .empty-wrap::before {
+    content: '学術 · 論文 · 研究 · 考察'; position: absolute; top: 0; bottom: 0; left: 20px;
+    writing-mode: vertical-rl; font-family: var(--font-display); font-weight: 700;
+    font-size: 14px; letter-spacing: 0.4em; color: rgba(42,36,24,0.06);
+    display: flex; align-items: center; padding: 40px 0;
+  }
+
+  .illus { display: flex; justify-content: center; margin-bottom: 28px; }
+  .illus-circle { width: 120px; height: 120px; border-radius: 50%;
+    background: radial-gradient(circle at 40% 30%, var(--mustard-soft) 0%, var(--paper-shade) 65%);
+    border: 1.5px dashed var(--mustard); display: flex; align-items: center; justify-content: center;
+    font-size: 56px; line-height: 1; position: relative; }
+  .illus-circle::after {
+    content: '空'; position: absolute; bottom: -10px; right: -6px;
+    background: var(--seal); color: #fff; font-family: var(--font-display); font-weight: 700;
+    width: 28px; height: 28px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+
+  .jp-caption { text-align: center; font-family: var(--font-soft); font-size: 12px;
+    letter-spacing: 0.3em; color: var(--ink-mute); margin-bottom: 6px; }
+  .empty-title { text-align: center; font-family: var(--font-display); font-weight: 700;
+    font-size: 1.7rem; color: var(--ink); letter-spacing: 0.02em; margin-bottom: 10px; }
+  .empty-body { text-align: center; font-size: 14px; color: var(--ink-soft); line-height: 1.9; max-width: 520px; margin: 0 auto; }
+
+  .suggest { margin-top: 36px; padding: 22px 28px;
+    background: var(--mustard-soft); border-left: 3px solid var(--mustard); border-radius: 0 var(--r-md) var(--r-md) 0; }
+  .suggest-label { font-family: var(--font-soft); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.24em; color: #8a5f0a; display: block; margin-bottom: 10px; }
+  .suggest-title { font-family: var(--font-display); font-weight: 700; font-size: 15px; color: var(--ink); margin-bottom: 8px; letter-spacing: 0.02em; }
+  .suggest-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .suggest-chip { padding: 6px 14px; border-radius: var(--r-pill); background: var(--card-bg);
+    border: 1px solid var(--mustard); color: #8a5f0a; font-size: 12px; cursor: pointer;
+    font-family: var(--font-body); letter-spacing: 0.02em; white-space: nowrap; }
+  .suggest-chip:hover { background: var(--mustard); color: #fff; }
+  .suggest-chip .match { font-family: var(--font-mono); font-size: 10px; opacity: 0.7; margin-left: 4px; }
+
+  .actions { margin-top: 32px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .action-card { padding: 18px 20px; background: var(--paper-shade); border: 1px solid var(--card-border);
+    border-radius: var(--r-md); cursor: pointer; transition: all 0.25s var(--ease-brand); }
+  .action-card:hover { border-color: var(--mustard); background: var(--card-bg); transform: translateY(-1px); }
+  .action-mark { display: inline-block; width: 22px; height: 22px; background: var(--ink); color: var(--paper);
+    border-radius: 2px; font-family: var(--font-display); font-size: 11px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center; letter-spacing: 0; margin-bottom: 8px; }
+  .action-card.alt .action-mark { background: var(--indigo); }
+  .action-card.warn .action-mark { background: var(--plum); }
+  .action-title { font-family: var(--font-display); font-weight: 700; font-size: 13px; color: var(--ink); margin-bottom: 4px; letter-spacing: 0.02em; }
+  .action-body { font-size: 12px; color: var(--ink-mute); line-height: 1.7; }
+
+  .footnote { text-align: center; margin-top: 40px; font-family: var(--font-mono);
+    font-size: 11px; color: var(--ink-mute); letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+<div class="top-rule"></div>
+
+<div class="header">
+  <div class="breadcrumb">電腦視覺 · <b>CVPR 嚴選</b> · Signal 推薦</div>
+  <div class="query-display">q: "gaussian splatting sparse"</div>
+</div>
+
+<div class="empty-wrap">
+  <div class="illus"><div class="illus-circle">🔭</div></div>
+
+  <div class="jp-caption">みつかりません</div>
+  <h1 class="empty-title">条件に合う論文が見つかりません</h1>
+  <p class="empty-body">検索キーワードとフィルター条件の両方が厳しすぎる可能性があります。<br>以下の候補を試すか、条件を緩めてもう一度実行してください。</p>
+
+  <div class="suggest">
+    <span class="suggest-label">🤖 Scholarly からの提案</span>
+    <div class="suggest-title">你是不是想搜尋：</div>
+    <div class="suggest-chips">
+      <span class="suggest-chip">gaussian splatting<span class="match">· 142 篇</span></span>
+      <span class="suggest-chip">3d reconstruction<span class="match">· 318 篇</span></span>
+      <span class="suggest-chip">sparse view synthesis<span class="match">· 47 篇</span></span>
+      <span class="suggest-chip">neural radiance field<span class="match">· 591 篇</span></span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <div class="action-card">
+      <span class="action-mark">拡</span>
+      <div class="action-title">範囲を広げる</div>
+      <div class="action-body">CVPR のみ → 全頂會へ拡大。約 380 篇が該当します。</div>
+    </div>
+    <div class="action-card alt">
+      <span class="action-mark">橋</span>
+      <div class="action-title">Bridge で探す</div>
+      <div class="action-body">電腦視覺 × 圖形學 の跨領域フィードを有効化。</div>
+    </div>
+    <div class="action-card warn">
+      <span class="action-mark">月</span>
+      <div class="action-title">期間を拡張</div>
+      <div class="action-body">過去 7 日 → 30 日に変更。深堀りに適しています。</div>
+    </div>
+  </div>
+
+  <div class="footnote">最後の arXiv fetch: 2026-04-18 09:42 UTC · cs.CV カテゴリ · 214 件スキャン</div>
+</div>
+
+</body>
+</html>
