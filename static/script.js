@@ -155,50 +155,156 @@ function renderDisciplineFilters() {
 }
 
 // ── 研究領域選擇器 UI ──────────────────────────────────────────
-function openDisciplinePicker({ closable = true } = {}) {
-    const picker = document.getElementById('disciplinePicker');
-    const grid = document.getElementById('disciplineGrid');
-    const closeBtn = document.getElementById('disciplinePickerClose');
-    if (!picker || !grid) return;
+let _dpState = { filterCat: 'all', query: '' };
 
+function _dpCardHTML(d, activeId, tracked) {
+    const confsPreview = (d.confs || []).slice(0, 4).map(c => c.label).join(' · ');
+    const topicsPreview = (d.topics || []).slice(0, 3).join(' · ');
+    return `
+        <button type="button" class="dp-track-star" data-track-id="${d.id}" title="加入追蹤清單（跨領域 Bridge 權重）" aria-label="追蹤 ${d.name}">${tracked ? '★' : '☆'}</button>
+        <div class="dp-card-head">
+            <div class="dp-card-icon">${d.icon || '📘'}</div>
+            <div class="dp-card-titles">
+                <div class="dp-card-name">${d.name}</div>
+                <div class="dp-card-name-en">${d.nameEn || ''}</div>
+            </div>
+        </div>
+        <div class="dp-card-arxiv">arXiv · ${d.arxivCat || '—'}</div>
+        ${confsPreview ? `<div class="dp-card-confs">🏆 ${confsPreview}</div>` : ''}
+        ${topicsPreview ? `<div class="dp-card-topics">🏷️ ${topicsPreview}</div>` : ''}
+    `;
+}
+
+function _dpMatches(d, query) {
+    if (!query) return true;
+    const q = query.toLowerCase().trim();
+    if (!q) return true;
+    const hay = [
+        d.name, d.nameEn, d.brand, d.arxivCat, d.id,
+        ...(d.topics || []),
+        ...(d.confs || []).map(c => c.label || ''),
+    ].join(' ').toLowerCase();
+    return hay.includes(q);
+}
+
+function _dpBindCardEvents(card, id) {
+    card.addEventListener('click', (e) => {
+        const starBtn = e.target.closest('.dp-track-star');
+        if (starBtn) {
+            e.stopPropagation();
+            const tid = starBtn.dataset.trackId;
+            const next = new Set((window.getTracks && window.getTracks()) || []);
+            if (next.has(tid)) next.delete(tid); else next.add(tid);
+            window.setTracks && window.setTracks([...next]);
+            starBtn.textContent = next.has(tid) ? '★' : '☆';
+            card.classList.toggle('tracked', next.has(tid));
+            return;
+        }
+        selectDiscipline(id);
+    });
+}
+
+function renderDisciplineGrid() {
+    const grid = document.getElementById('disciplineGrid');
+    const emptyEl = document.getElementById('dpEmpty');
+    if (!grid) return;
     grid.innerHTML = '';
+
     const activeId = ACTIVE_DISCIPLINE?.id;
     const tracks = new Set((window.getTracks && window.getTracks()) || []);
-    for (const id of (window.DISCIPLINE_ORDER || Object.keys(window.DISCIPLINES || {}))) {
-        const d = window.DISCIPLINES[id];
-        if (!d) continue;
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.className = 'dp-card' + (id === activeId ? ' active' : '') + (tracks.has(id) ? ' tracked' : '');
-        card.dataset.disciplineId = id;
-        const confsPreview = d.confs.slice(0, 5).map(c => c.label).join(' · ');
-        card.innerHTML = `
-            <button type="button" class="dp-track-star" data-track-id="${id}" title="加入追蹤清單（跨領域 Bridge 權重）" aria-label="追蹤 ${d.name}">${tracks.has(id) ? '★' : '☆'}</button>
-            <div class="dp-card-icon">${d.icon}</div>
-            <div class="dp-card-name">${d.name}</div>
-            <div class="dp-card-name-en">${d.nameEn}</div>
-            <div class="dp-card-arxiv">arXiv: ${d.arxivCat}</div>
-            <div class="dp-card-confs">${confsPreview}</div>
+    const cats = window.DISCIPLINE_CATEGORIES || [];
+    const { filterCat, query } = _dpState;
+    let totalShown = 0;
+
+    for (const cat of cats) {
+        if (filterCat !== 'all' && filterCat !== cat.id) continue;
+        const members = (cat.ids || [])
+            .map(id => window.DISCIPLINES[id])
+            .filter(d => d && _dpMatches(d, query));
+        if (members.length === 0) continue;
+
+        const section = document.createElement('section');
+        section.className = 'dp-section';
+        section.dataset.catId = cat.id;
+
+        const header = document.createElement('div');
+        header.className = 'dp-section-head';
+        header.innerHTML = `
+            <span class="dp-section-icon" aria-hidden="true">${cat.icon}</span>
+            <span class="dp-section-title">${cat.name}</span>
+            <span class="dp-section-en">${cat.nameEn}</span>
+            <span class="dp-section-count">${members.length}</span>
         `;
-        card.addEventListener('click', (e) => {
-            const starBtn = e.target.closest('.dp-track-star');
-            if (starBtn) {
-                e.stopPropagation();
-                const tid = starBtn.dataset.trackId;
-                const next = new Set((window.getTracks && window.getTracks()) || []);
-                if (next.has(tid)) next.delete(tid); else next.add(tid);
-                window.setTracks && window.setTracks([...next]);
-                starBtn.textContent = next.has(tid) ? '★' : '☆';
-                card.classList.toggle('tracked', next.has(tid));
-                return;
-            }
-            selectDiscipline(id);
+        section.appendChild(header);
+
+        const grid2 = document.createElement('div');
+        grid2.className = 'dp-grid';
+        for (const d of members) {
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = 'dp-card' + (d.id === activeId ? ' active' : '') + (tracks.has(d.id) ? ' tracked' : '');
+            card.dataset.disciplineId = d.id;
+            card.innerHTML = _dpCardHTML(d, activeId, tracks.has(d.id));
+            _dpBindCardEvents(card, d.id);
+            grid2.appendChild(card);
+            totalShown += 1;
+        }
+        section.appendChild(grid2);
+        grid.appendChild(section);
+    }
+
+    if (emptyEl) emptyEl.classList.toggle('hidden', totalShown > 0);
+}
+
+function renderDpCategoryChips() {
+    const bar = document.getElementById('dpCategoryChips');
+    if (!bar) return;
+    bar.innerHTML = '';
+    const cats = window.DISCIPLINE_CATEGORIES || [];
+    const total = cats.reduce((n, c) => n + (c.ids?.length || 0), 0);
+
+    const mk = (id, label, count) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dp-chip' + (_dpState.filterCat === id ? ' active' : '');
+        btn.dataset.catId = id;
+        btn.innerHTML = `<span>${label}</span><span class="dp-chip-count">${count}</span>`;
+        btn.addEventListener('click', () => {
+            _dpState.filterCat = id;
+            renderDpCategoryChips();
+            renderDisciplineGrid();
         });
-        grid.appendChild(card);
+        bar.appendChild(btn);
+    };
+
+    mk('all', '全部', total);
+    for (const c of cats) mk(c.id, `${c.icon} ${c.name}`, c.ids.length);
+}
+
+function openDisciplinePicker({ closable = true } = {}) {
+    const picker = document.getElementById('disciplinePicker');
+    const closeBtn = document.getElementById('disciplinePickerClose');
+    if (!picker) return;
+
+    _dpState.filterCat = 'all';
+    _dpState.query = '';
+    const searchInput = document.getElementById('dpSearchInput');
+    if (searchInput) searchInput.value = '';
+
+    renderDpCategoryChips();
+    renderDisciplineGrid();
+
+    if (!picker.dataset.bound) {
+        searchInput?.addEventListener('input', () => {
+            _dpState.query = searchInput.value;
+            renderDisciplineGrid();
+        });
+        picker.dataset.bound = '1';
     }
 
     if (closeBtn) closeBtn.hidden = !closable;
     picker.classList.remove('hidden');
+    setTimeout(() => searchInput?.focus(), 60);
 }
 
 function closeDisciplinePicker() {
@@ -2246,50 +2352,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// ── BibTeX 匯出 ──────────────────────────────────────────────
-function exportFavoritesBibtex() {
-    const favPapers = allPapers.filter(p => favorites.has(p.url));
-    if (favPapers.length === 0) {
-        showToast('收藏夾是空的，無法匯出');
-        return;
-    }
-    const entries = favPapers.map(p => {
-        const arxivId = p.url.match(/abs\/(\d{4}\.\d+)/)?.[1] || p.url;
-        const firstAuthor = p.authors[0]?.split(' ').pop() || 'Unknown';
-        const year = p.published?.substring(0, 4) || '2024';
-        const key = `${firstAuthor}${year}_${arxivId.replace('.', '')}`;
-        const authorsStr = p.authors.join(' and ');
-        const title = p.title.replace(/[{}]/g, '');
-        const primary = ACTIVE_DISCIPLINE?.arxivCat || 'cs.CV';
-        return `@article{${key},\n  title={${title}},\n  author={${authorsStr}},\n  year={${year}},\n  eprint={${arxivId}},\n  archivePrefix={arXiv},\n  primaryClass={${primary}},\n  url={${p.url}}\n}`;
-    });
-    const blob = new Blob([entries.join('\n\n')], { type: 'text/plain;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `visionary_favorites_${new Date().toISOString().slice(0,10)}.bib`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    showToast(`已匯出 ${favPapers.length} 篇論文的 BibTeX`);
-}
-
-// ── BibTeX 匯出按鈕（動態插入到收藏夾篩選按鈕後方）──────────────
-const bibBtn = document.createElement('button');
-bibBtn.id = 'exportBibBtn';
-bibBtn.className = 'bib-export-btn hidden';
-bibBtn.title = '匯出收藏夾為 BibTeX';
-bibBtn.innerHTML = '📄 匯出 .bib';
-const favBtn = document.querySelector('.category-btn[data-filter="favorites"]');
-if (favBtn) favBtn.after(bibBtn);
-bibBtn.addEventListener('click', exportFavoritesBibtex);
-
-// 監聽分類切換：只在收藏夾模式顯示匯出按鈕
-document.querySelector('.category-filters')?.addEventListener('click', () => {
-    setTimeout(() => {
-        const isFav = currentCategory === 'favorites';
-        bibBtn.classList.toggle('hidden', !isFav);
-    }, 50);
-});
-
 // ── 閱讀統計面板（快取 DOM refs，僅在資料變動時更新）────────────
 const _statsEls = {};
 let _statsSnapshot = '';
@@ -2328,7 +2390,7 @@ function applyTheme(mode) {
         if (themeToggleBtn) { themeToggleBtn.textContent = '🌙'; themeToggleBtn.title = '切換淺色模式'; }
     }
 }
-applyTheme(localStorage.getItem(THEME_KEY) || 'dark');
+applyTheme(localStorage.getItem(THEME_KEY) || 'light');
 themeToggleBtn?.addEventListener('click', () => {
     const next = document.body.classList.contains('light-mode') ? 'dark' : 'light';
     localStorage.setItem(THEME_KEY, next);

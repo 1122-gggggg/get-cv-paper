@@ -1,61 +1,78 @@
 /* ============================================================
-   Scholarly · 和紙 Washi Edition
-   Port of ui_kits/scholarly-web-v2 — 繁體中文版
-   載入順序需在 style.css 之後；以特異性 + body.theme-washi 覆蓋
+   Scholarly · 和紙 Washi Edition v2 (scholarly-washi handoff)
+   Loaded after style.css — overrides via body.theme-washi
+   Tokens & rules mirror prototype/design/colors_and_type.v2.css
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&family=Zen+Maru+Gothic:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap');
-
+/* ============================================================
+   Tokens
+   ============================================================ */
 body.theme-washi {
-  /* === 色彩 tokens === */
-  --paper: #faf4e6;
-  --paper-shade: #f2e9d3;
-  --paper-deep: #e8dcba;
-  --ink: #2a2418;
-  --ink-soft: #4a3f2a;
-  --ink-mute: #8a7c5f;
-  --ink-pale: #b8a98a;
-  --ink-rule: #d9cba8;
-  --card-bg: #fefaf0;
-  --card-border: #e5d9b8;
+  /* paper / ink neutrals */
+  --paper:        #faf6ec;
+  --paper-shade:  #f1eadb;
+  --paper-deep:   #e8dfc9;
+  --card-bg:      #fdfaf2;
+  --card-border:  #e2d9c4;
 
-  /* 五彩 — 山吹 / 朱 / 柿 / 梅 / 抹茶 / 藍 */
-  --mustard: #e6b422;
-  --mustard-deep: #b89000;
-  --mustard-soft: #fff6cf;
-  --mustard-softer: #fff0b8;
-  --vermillion: #c1440e;
-  --persimmon: #e8711a;
-  --persimmon-soft: #ffe2c2;
-  --plum: #8a3a5f;
-  --plum-soft: #f5d8e2;
-  --matcha: #6b8e23;
-  --matcha-soft: #e5eec9;
-  --indigo: #2e4d7b;
-  --seal: #c1440e;
+  --ink:          #2a2418;
+  --ink-soft:     #4d4330;
+  --ink-mute:     #8a7e63;
+  --ink-pale:     #b9ad90;
+  --ink-rule:     rgba(42,36,24,0.12);
 
-  --accent-gradient-wide: linear-gradient(90deg, #e6b422 0%, #e8711a 40%, #c1440e 70%, #8a3a5f 100%);
+  /* accents (japanese palette) */
+  --mustard:        #e6b422;
+  --mustard-deep:   #b58820;
+  --mustard-soft:   #fbecb0;
+  --mustard-wash:   rgba(230,180,34,0.18);
 
-  /* === 字體 === */
-  --font-display: 'Noto Serif TC', 'Noto Serif JP', Georgia, 'Songti TC', serif;
-  --font-body: 'Noto Sans TC', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, 'PingFang TC', sans-serif;
-  --font-soft: 'Zen Maru Gothic', 'Noto Sans TC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --vermillion:     #c1440e;
+  --persimmon:      #e8711a;
+  --persimmon-soft: #fde1c2;
 
-  /* === 形狀 / 陰影 / 動畫 === */
+  --matcha:         #6b8e23;
+  --matcha-soft:    #e0ebc7;
+
+  --indigo:         #2e4d7b;
+  --indigo-soft:    #d6deee;
+
+  --plum:           #8a3a5f;
+  --plum-soft:      #f0dfe7;
+
+  --seal:           #a83232;
+
+  --accent-gradient-wide:
+    linear-gradient(90deg, var(--mustard) 0%, var(--persimmon) 45%, var(--vermillion) 75%, var(--plum) 100%);
+
+  /* type */
+  --font-display: "Noto Serif TC", "Noto Serif JP", "Songti TC", "PingFang TC", serif;
+  --font-body:    "Zen Kaku Gothic New", "Inter", "PingFang TC", system-ui, sans-serif;
+  --font-soft:    "Zen Maru Gothic", "Zen Kaku Gothic New", sans-serif;
+  --font-mono:    "JetBrains Mono", "SF Mono", Menlo, monospace;
+
+  /* radii */
+  --r-xs: 3px;
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
-  --r-xl: 20px;
-  --shadow-card: 0 2px 0 rgba(42, 36, 24, 0.04), 0 1px 3px rgba(42, 36, 24, 0.08);
-  --shadow-card-hover: 0 6px 20px rgba(42, 36, 24, 0.12);
-  --shadow-modal: 0 20px 48px rgba(42, 36, 24, 0.22);
-  --ease-brand: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --r-pill: 999px;
 
-  /* 覆蓋 style.css 的變數（避免兩套打架） */
+  /* shadows */
+  --shadow-card:       0 1px 2px rgba(42,36,24,0.04), 0 4px 12px rgba(42,36,24,0.05);
+  --shadow-card-hover: 0 2px 4px rgba(42,36,24,0.06), 0 10px 30px rgba(42,36,24,0.10);
+  --shadow-modal:      0 20px 60px rgba(42,36,24,0.25), 0 2px 6px rgba(42,36,24,0.08);
+
+  /* motion */
+  --ease-brand: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* override style.css legacy vars so existing selectors pick washi palette */
   --primary: var(--mustard);
   --primary-2: var(--persimmon);
   --accent-glow: rgba(230, 180, 34, 0.28);
+  --accent-gradient: linear-gradient(90deg, var(--mustard) 0%, var(--persimmon) 100%);
+  --accent-from: var(--mustard);
+  --accent-to: var(--persimmon);
   --surface-strong: var(--card-bg);
   --surface-soft: var(--paper-shade);
   --surface-muted: var(--paper-deep);
@@ -66,25 +83,40 @@ body.theme-washi {
   --border-strong: var(--ink-pale);
   --bg-0: var(--paper);
   --bg-1: var(--paper-shade);
+  --bg-color: var(--paper);
+
+  /* sidebar vars used by .side, .side-nav rules in style.css */
+  --side-bg:        var(--paper-shade);
+  --side-line:      var(--card-border);
+  --side-line-soft: var(--ink-rule);
+  --ink-side:       var(--ink);
+  --ink-side-soft:  var(--ink-soft);
+  --ink-side-mute:  var(--ink-mute);
+  --purple-ink:     var(--paper);
+  --purple-soft:    var(--ink);
+  --purple-line:    var(--mustard);
+  --side-item-hover: var(--card-bg);
+  --hero-tint: transparent;
 }
 
 /* ============================================================
-   Body · 和紙背景（雙層 dot-grain）
+   Body · washi background (two-layer dot-grain)
    ============================================================ */
 body.theme-washi {
   font-family: var(--font-body);
   color: var(--ink);
   background-color: var(--paper);
   background-image:
-    radial-gradient(rgba(138, 110, 50, 0.06) 1px, transparent 1.5px),
-    radial-gradient(rgba(138, 110, 50, 0.04) 1px, transparent 1.5px);
+    radial-gradient(rgba(138,110,50,0.055) 1px, transparent 1.5px),
+    radial-gradient(rgba(138,110,50,0.04)  1px, transparent 1.5px);
   background-size: 6px 6px, 13px 13px;
   background-position: 0 0, 3px 4px;
   font-feature-settings: "palt" 1;
   letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* 頂部漸層尺規：3px 山吹→柿→朱→梅 */
+/* 3px 頂部尺規（mustard→persimmon→vermillion→plum） */
 body.theme-washi::before {
   content: '';
   position: fixed;
@@ -96,88 +128,73 @@ body.theme-washi::before {
   pointer-events: none;
 }
 
-/* 隱藏原先漂浮 blobs（與和紙美學不符） */
 body.theme-washi .background-blobs { display: none; }
-
-/* 舊的頂部進度條改到尺規下方 */
 body.theme-washi .top-progress-bar { top: 3px; background: var(--vermillion); }
 
 /* ============================================================
-   App shell / Sidebar
+   App shell
    ============================================================ */
 body.theme-washi .app-shell {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
   background: var(--paper);
   min-height: 100vh;
 }
 
+/* ============================================================
+   Sidebar
+   ============================================================ */
 body.theme-washi .side {
   background: var(--paper-shade);
   border-right: 1px solid var(--card-border);
-  padding: 32px 22px 24px;
-  gap: 24px;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 28px 22px 24px;
+  gap: 22px;
 }
 
 body.theme-washi .side-brand {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   padding: 0;
 }
-
-body.theme-washi .brand-mark {
-  font-size: 1.8rem;
-  filter: sepia(0.3) hue-rotate(-10deg);
+body.theme-washi .side-brand .brand-mark {
+  display: none; /* 替代為 hanko；logo 以 Serif 字樣呈現 */
 }
-
 body.theme-washi .logo {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 1.85rem;
+  font-size: 2rem !important;
   letter-spacing: 0.02em;
-  color: var(--ink);
   line-height: 1;
+  color: var(--ink) !important;
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  -webkit-text-fill-color: currentColor !important;
+  background-clip: initial;
   margin: 0;
 }
-body.theme-washi .logo span { color: var(--vermillion); }
-
-/* 印 hanko 印章 */
-body.theme-washi .side-brand::after {
-  content: '印';
-  display: inline-block;
-  font-family: var(--font-display);
-  font-weight: 700;
-  color: #fff;
-  background: var(--seal);
-  padding: 2px 6px;
-  font-size: 13px;
-  border-radius: 2px;
-  align-self: center;
-  margin-left: 2px;
-  box-shadow: 1px 1px 0 rgba(42, 36, 24, 0.2);
+body.theme-washi .logo span {
+  color: var(--vermillion) !important;
+  background: none !important;
+  -webkit-text-fill-color: currentColor !important;
+  font-size: inherit;
 }
 
-/* 小字 JP-style label（疎組） */
-body.theme-washi .side-section-label {
+/* JP 副標 (学術・論文追跡) */
+body.theme-washi .side-brand::after {
+  content: '学術・論文追跡 · v2';
   font-family: var(--font-soft);
   font-size: 11px;
-  font-weight: 500;
   letter-spacing: 0.3em;
   color: var(--ink-mute);
-  text-transform: none;
-  padding: 0;
-  margin-top: 8px;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-body.theme-washi .side-section-label .hint {
-  font-family: var(--font-body);
-  letter-spacing: 0.02em;
-  font-size: 11px;
-  color: var(--ink-pale);
+  text-transform: lowercase;
 }
 
-/* Discipline switcher — 卡片按鈕 */
+/* Discipline switcher */
+body.theme-washi .side-discipline { padding: 0; }
 body.theme-washi .switch-discipline-btn {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -186,365 +203,616 @@ body.theme-washi .switch-discipline-btn {
   padding: 11px 14px;
   font-family: var(--font-body);
   font-size: 13px;
-  transition: all 0.22s var(--ease-brand);
+  transition: all .22s var(--ease-brand);
+  width: 100%;
 }
 body.theme-washi .switch-discipline-btn:hover {
-  background: var(--mustard-soft);
+  background: var(--mustard-wash);
   border-color: var(--mustard);
 }
 body.theme-washi .discipline-badge {
   font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.02em;
-}
-
-/* 分類篩選 chips */
-body.theme-washi .category-filters-wrapper { padding: 0; }
-body.theme-washi .category-filters {
-  flex-direction: column;
-  gap: 6px;
-  overflow: visible;
+  background: none;
+  border: none;
   padding: 0;
 }
-body.theme-washi .category-btn {
-  text-align: left;
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  color: var(--ink-soft);
+
+/* Section heading (jp-label 風) */
+body.theme-washi .side-section-label {
+  font-family: var(--font-soft);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3em;
+  color: var(--ink-mute);
+  text-transform: lowercase;
+  padding: 6px 4px 2px;
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+body.theme-washi .side-section-label .hint {
   font-family: var(--font-body);
-  font-size: 13px;
-  letter-spacing: 0.02em;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--ink-pale);
   font-weight: 400;
-  transition: all 0.2s var(--ease-brand);
-  white-space: nowrap;
-}
-body.theme-washi .category-btn:hover {
-  border-color: var(--mustard);
-  background: var(--mustard-soft);
-  color: var(--ink);
-}
-body.theme-washi .category-btn.active {
-  background: var(--ink);
-  color: var(--paper);
-  border-color: var(--ink);
-  font-weight: 600;
-}
-body.theme-washi .category-btn.top-conf-btn.active,
-body.theme-washi .category-btn[data-filter="top_conf"].active {
-  background: var(--persimmon-soft);
-  color: #b35a0c;
-  border: 1px solid var(--persimmon);
 }
 
+/* Sidebar nav list */
+body.theme-washi .side-nav {
+  padding: 0;
+  gap: 4px;
+}
+body.theme-washi .side-nav .category-filters-wrapper { padding: 0; }
+body.theme-washi .side-nav .category-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  overflow: visible;
+}
+
+/* Sidebar category pill buttons */
+body.theme-washi .side-nav .category-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 14px !important;
+  border-radius: var(--r-pill) !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  color: var(--ink-soft) !important;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-align: left;
+  justify-content: flex-start;
+  transition: all .15s var(--ease-brand) !important;
+  box-shadow: none;
+  line-height: 1.4;
+  min-height: 0;
+}
+body.theme-washi .side-nav .category-btn:hover {
+  background: var(--card-bg) !important;
+  border-color: var(--card-border) !important;
+  color: var(--ink) !important;
+  transform: none;
+}
+body.theme-washi .side-nav .category-btn.active {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: var(--paper) !important;
+  font-weight: 600;
+}
+
+/* 特殊 active: 收藏（朱）、頂會（柿）、HF Daily（山吹） */
+body.theme-washi .side-nav .category-btn[data-filter="favorites"].active {
+  background: var(--vermillion) !important;
+  border-color: var(--vermillion) !important;
+  color: #fff !important;
+}
+body.theme-washi .side-nav .category-btn.top-conf-btn.active,
+body.theme-washi .side-nav .category-btn[data-filter="top_conf"].active {
+  background: var(--persimmon-soft) !important;
+  border-color: var(--persimmon) !important;
+  color: #b35a0c !important;
+}
+body.theme-washi .side-nav .category-btn[data-filter="hf_daily"].active {
+  background: var(--mustard-soft) !important;
+  border-color: var(--mustard) !important;
+  color: var(--mustard-deep) !important;
+}
+
+body.theme-washi .side-nav .top-conf-wrapper .category-btn .chevron-icon {
+  margin-left: auto;
+}
 body.theme-washi .top-conf-wrapper { width: 100%; }
 body.theme-washi .conf-submenu {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-card);
+  padding: 6px;
 }
-
-/* 新增主題 input */
-body.theme-washi .add-topic-wrapper {
-  border: 1.5px dashed var(--ink-pale);
+body.theme-washi .conf-submenu .conf-item {
   background: transparent;
-  border-radius: 999px;
-  padding: 0;
-}
-body.theme-washi .add-topic-wrapper input {
-  background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: var(--ink-soft);
   font-family: var(--font-body);
-  padding: 8px 14px;
-  font-size: 13px;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
 }
-body.theme-washi .add-topic-wrapper input::placeholder { color: var(--ink-pale); }
-body.theme-washi .add-topic-btn {
+body.theme-washi .conf-submenu .conf-item:hover {
+  background: var(--paper-shade);
+  border-color: var(--card-border);
+  color: var(--ink);
+}
+body.theme-washi .conf-submenu .conf-item.active {
+  background: var(--mustard-soft);
+  border-color: var(--mustard);
+  color: var(--mustard-deep);
+}
+
+/* 新增主題 (dashed pill) */
+body.theme-washi .side-nav .add-topic-wrapper {
+  margin-top: 6px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1.5px dashed var(--ink-pale);
+  border-radius: var(--r-pill);
   background: transparent;
-  border: none;
+}
+body.theme-washi .side-nav .add-topic-wrapper:hover {
+  border-color: var(--mustard);
+}
+body.theme-washi .side-nav .add-topic-wrapper input {
+  flex: 1; min-width: 0;
+  background: transparent !important;
+  border: none !important;
+  color: var(--ink-soft);
+  font-family: var(--font-soft);
+  font-size: 12px;
+  padding: 6px 14px;
+}
+body.theme-washi .side-nav .add-topic-wrapper input::placeholder { color: var(--ink-pale); }
+body.theme-washi .side-nav .add-topic-wrapper input:focus {
+  outline: none;
+  border-color: transparent !important;
+}
+body.theme-washi .side-nav .add-topic-wrapper .add-topic-btn {
+  width: auto;
+  height: auto;
+  background: transparent !important;
+  border: none !important;
   color: var(--ink-mute);
   font-size: 15px;
-  padding: 0 12px;
+  padding: 0 12px 0 0;
+  cursor: pointer;
 }
+body.theme-washi .side-nav .add-topic-wrapper .add-topic-btn:hover { color: var(--mustard-deep); }
 
-/* 左/右箭頭（筆記頁面型態時仍顯示） */
-body.theme-washi .filter-arrow {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  color: var(--ink-mute);
-  border-radius: 999px;
-}
+body.theme-washi .filter-arrow { display: none !important; }
 
-/* Sidebar footer — 疎組 kbd 提示 */
+/* Sidebar foot */
 body.theme-washi .side-foot {
   margin-top: auto;
-  padding-top: 18px;
-  border-top: 1px solid var(--card-border);
+  padding: 18px 0 4px;
+  border-top: 1px dashed var(--card-border);
   font-size: 11px;
   color: var(--ink-mute);
   font-family: var(--font-body);
-  gap: 8px;
+  gap: 6px;
 }
 body.theme-washi .side-foot-item { letter-spacing: 0.04em; }
 body.theme-washi kbd,
+body.theme-washi .side-foot-item kbd,
 body.theme-washi .kbd-hint kbd {
   font-family: var(--font-mono);
-  background: var(--card-bg);
-  border: 1px solid var(--ink-pale);
+  font-size: 10px;
+  background: var(--paper-deep);
+  border: 1px solid var(--card-border);
+  border-bottom-width: 2px;
   color: var(--ink);
   padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  box-shadow: 0 1px 0 var(--ink-rule);
+  border-radius: var(--r-xs);
+  margin-right: 3px;
+  box-shadow: none;
 }
 
 /* ============================================================
-   Header / Controls
+   Container / header
    ============================================================ */
-body.theme-washi .container { padding: 36px 44px; max-width: 1280px; }
-body.theme-washi header {
+body.theme-washi .container,
+body.theme-washi .app-shell > .container {
+  background: transparent;
+  padding: 32px 44px 80px;
+  max-width: 1320px;
+}
+body.theme-washi header,
+body.theme-washi .app-shell > .container > header {
   background: transparent;
   border: none;
   box-shadow: none;
   padding: 0;
-  margin-bottom: 24px;
-}
-
-/* 問候語「こんにちは → 你好」+ 今日の注目 */
-body.theme-washi .container > header::before {
-  content: '您好';
-  display: block;
-  font-family: var(--font-soft);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.3em;
-  color: var(--ink-mute);
-  margin-bottom: 4px;
-}
-body.theme-washi .container > header::after {
-  content: '今日精選 · Today\'s papers';
-  display: block;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.5rem;
-  color: var(--ink);
-  letter-spacing: 0.02em;
-  margin-top: -28px;
-  margin-bottom: 14px;
-  padding-left: 0;
+  margin: 0 0 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 body.theme-washi .header-content {
-  background: transparent;
-  padding: 0;
+  background: transparent !important;
+  padding: 0 !important;
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin: 0;
 }
 
-body.theme-washi .auth-box { gap: 6px; }
+/* Page title block (今日 · today / Signal 推薦 · signal feed) */
+body.theme-washi .page-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+body.theme-washi .page-title-block .jp-label {
+  font-family: var(--font-soft);
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  color: var(--ink-mute);
+  text-transform: lowercase;
+}
+body.theme-washi .page-title-block .page-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.7rem;
+  line-height: 1.1;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+}
+body.theme-washi .page-title-block .page-title-sub {
+  font-family: var(--font-soft);
+  font-size: 0.6em;
+  color: var(--ink-mute);
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
+/* Hide original ::before/::after header greetings */
+body.theme-washi .container > header::before,
+body.theme-washi .container > header::after { content: none !important; display: none !important; }
+
+/* Auth / data IO chips */
 body.theme-washi .sign-in-btn,
 body.theme-washi .data-io-btn,
 body.theme-washi .sign-out-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   color: var(--ink-soft);
-  border-radius: var(--r-md);
-  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  padding: 7px 12px;
   font-size: 12px;
   font-family: var(--font-body);
-  transition: all 0.2s var(--ease-brand);
+  transition: all .15s var(--ease-brand);
 }
 body.theme-washi .sign-in-btn:hover,
 body.theme-washi .data-io-btn:hover {
   border-color: var(--mustard);
-  background: var(--mustard-soft);
+  background: var(--mustard-wash);
+  color: var(--ink);
 }
 body.theme-washi .user-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: var(--r-md);
-  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  padding: 5px 12px 5px 5px;
+  font-size: 12px;
+  color: var(--ink);
+}
+body.theme-washi .user-info img {
+  width: 24px; height: 24px; border-radius: 50%;
+}
+body.theme-washi .user-info #userName {
+  font-family: var(--font-display);
+  font-weight: 500;
 }
 
+/* Controls row */
 body.theme-washi .controls {
   display: flex;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 4px;
+  margin: 0;
 }
-
 body.theme-washi .search-box {
   flex: 1;
   min-width: 280px;
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 body.theme-washi .search-box input {
+  width: 100%;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-md);
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 14px;
-  padding: 11px 16px 11px 40px;
+  padding: 11px 44px 11px 42px;
+  outline: none;
+  box-shadow: none;
+  transition: all .18s var(--ease-brand);
 }
 body.theme-washi .search-box input::placeholder { color: var(--ink-mute); }
 body.theme-washi .search-box input:focus {
   border-color: var(--mustard);
-  background: #fff;
-  outline: 2px solid var(--mustard);
-  outline-offset: 1px;
+  background: var(--card-bg);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--mustard-wash);
 }
-body.theme-washi .search-icon { color: var(--ink-mute); }
-
+body.theme-washi .search-icon {
+  color: var(--ink-mute);
+  left: 14px;
+  opacity: 1;
+}
 body.theme-washi .pin-search-btn {
+  position: absolute;
+  right: 6px;
   background: transparent;
   border: none;
   color: var(--ink-mute);
-  font-size: 14px;
+  font-size: 15px;
+  padding: 4px 6px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
 }
-body.theme-washi .pin-search-btn:hover { color: var(--vermillion); }
+body.theme-washi .pin-search-btn:hover {
+  color: var(--mustard-deep);
+  background: var(--mustard-wash);
+}
 
-/* 排序按鈕 */
+/* Sort dropdown */
 body.theme-washi .sort-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-md);
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 13px;
-  padding: 10px 16px;
+  padding: 10px 14px;
+  box-shadow: none;
+  transition: all .15s var(--ease-brand);
 }
 body.theme-washi .sort-trigger:hover {
   border-color: var(--mustard);
-  background: var(--mustard-soft);
+  background: var(--card-bg);
 }
+body.theme-washi .sort-chevron { color: var(--ink-mute); }
 body.theme-washi .sort-submenu {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-modal);
+  padding: 6px;
+  min-width: 240px;
 }
 body.theme-washi .sort-item {
   font-family: var(--font-body);
   color: var(--ink);
-  padding: 8px 12px;
+  padding: 9px 12px;
   border-radius: var(--r-sm);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: transparent;
+  border: none;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
 }
+body.theme-washi .sort-item:hover { background: var(--paper-shade); }
 body.theme-washi .sort-item.active { background: var(--mustard-soft); }
 body.theme-washi .sort-item span {
   font-family: var(--font-mono);
   color: var(--ink-mute);
   font-size: 10px;
-  opacity: 0.7;
+  opacity: 0.6;
 }
-body.theme-washi .sort-item:hover { background: var(--mustard-softer); }
 
+/* Per-page */
 body.theme-washi .per-page-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-md);
-  padding: 4px 10px;
+  padding: 5px 10px;
 }
+body.theme-washi .per-page-wrapper:hover { border-color: var(--mustard); }
+body.theme-washi .per-page-label { color: var(--ink-mute); font-size: 12px; font-family: var(--font-body); }
 body.theme-washi .per-page-select {
   background: transparent;
   color: var(--ink);
   font-family: var(--font-body);
   border: none;
+  font-size: 12px;
+  outline: none;
 }
-body.theme-washi .per-page-label { color: var(--ink-mute); font-size: 12px; }
 
 /* ============================================================
-   Paper card · 和紙卡片
+   Papers grid
    ============================================================ */
 body.theme-washi .papers-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+@media (max-width: 880px) {
+  body.theme-washi .papers-grid { grid-template-columns: 1fr !important; }
 }
 
+/* ============================================================
+   Paper card
+   ============================================================ */
 body.theme-washi .paper-card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-lg);
-  padding: 20px 22px;
+  padding: 18px 20px 14px;
   box-shadow: var(--shadow-card);
-  transition: all 0.28s var(--ease-brand);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  transition: all .28s var(--ease-brand);
+  overflow: hidden;
   position: relative;
+  opacity: 1;
+  animation: none;
+}
+
+/* mustard 頂部 2px 線（hover 現） */
+body.theme-washi .paper-card::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 2px;
+  background: var(--mustard);
+  border-radius: 0;
+  opacity: 0;
+  transition: opacity .24s var(--ease-brand);
 }
 body.theme-washi .paper-card:hover {
   box-shadow: var(--shadow-card-hover);
   transform: translateY(-2px);
   border-color: var(--mustard);
 }
+body.theme-washi .paper-card:hover::before { opacity: 1; }
 
-/* 已讀 ribbon 改為淡抹茶 */
-body.theme-washi .paper-card.read .read-ribbon {
+/* 既読 斜絲帶（repurpose .read-ribbon div） */
+body.theme-washi .paper-card .read-ribbon {
+  display: none;
+}
+body.theme-washi .paper-card.is-read { opacity: 0.74; }
+body.theme-washi .paper-card.is-read .paper-title,
+body.theme-washi .paper-card.is-read .paper-title-link { color: var(--ink-mute); }
+body.theme-washi .paper-card.is-read::after {
+  content: '既読';
+  position: absolute;
+  top: 14px;
+  left: -24px;
+  transform: rotate(-45deg);
   background: var(--matcha);
-  opacity: 0.6;
+  color: #fff;
+  font-family: var(--font-soft);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  padding: 2px 26px;
+  z-index: 3;
+  pointer-events: none;
 }
 
+/* star */
 body.theme-washi .star-btn {
-  background: none;
+  position: absolute;
+  top: 12px; right: 12px;
+  background: none !important;
   border: none;
   color: var(--ink-pale);
-  top: 12px;
-  right: 12px;
+  min-width: 0;
+  min-height: 0;
+  width: auto; height: auto;
+  padding: 4px;
+  font-size: 18px;
+  border-radius: 50%;
+  transition: transform .18s var(--ease-brand), color .18s;
+  z-index: 2;
+}
+body.theme-washi .star-btn:hover {
+  color: var(--vermillion);
+  background: transparent !important;
+  transform: scale(1.15);
 }
 body.theme-washi .paper-card.starred .star-btn,
-body.theme-washi .star-btn.starred,
-body.theme-washi .star-btn:hover { color: var(--vermillion); }
+body.theme-washi .star-btn.starred { color: var(--vermillion); }
 
+/* read toggle small pill */
 body.theme-washi .read-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: var(--paper-shade);
   border: 1px solid var(--card-border);
   color: var(--ink-mute);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-family: var(--font-body);
   font-size: 10px;
+  padding: 3px 9px;
+  box-shadow: none;
 }
-body.theme-washi .paper-card.read .read-btn {
+body.theme-washi .paper-card.is-read .read-btn {
   background: var(--matcha-soft);
   color: #557019;
-  border-color: var(--matcha);
+  border-color: #9cb45a;
 }
 
-/* Venue badge — 色塊 */
+/* Venue + signal row (inline) */
 body.theme-washi .venue-badge {
   display: inline-block;
+  vertical-align: middle;
   padding: 3px 10px;
   border-radius: 3px;
+  margin: 0 6px 0 0;
   font-family: var(--font-display);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: #fff;
-  background: var(--ink);
+  background: #6b6247; /* fallback = arXiv */
+  box-shadow: none;
+  text-shadow: none;
 }
-body.theme-washi .venue-badge[data-venue="CVPR"]    { background: var(--indigo); }
-body.theme-washi .venue-badge[data-venue="ACL"]     { background: var(--vermillion); }
-body.theme-washi .venue-badge[data-venue="NeurIPS"] { background: var(--matcha); }
-body.theme-washi .venue-badge[data-venue="ICML"]    { background: var(--plum); }
-body.theme-washi .venue-badge[data-venue="ICLR"]    { background: var(--persimmon); }
+body.theme-washi .venue-badge[data-venue="CVPR"]    { background: #2e4d7b; }
+body.theme-washi .venue-badge[data-venue="ACL"]     { background: #c1440e; }
+body.theme-washi .venue-badge[data-venue="NeurIPS"] { background: #6b8e23; }
+body.theme-washi .venue-badge[data-venue="ICML"]    { background: #8a3a5f; }
+body.theme-washi .venue-badge[data-venue="ICLR"]    { background: #e8711a; }
+body.theme-washi .venue-badge[data-venue="SIGGRAPH"]{ background: #4a3a8a; }
+body.theme-washi .venue-badge[data-venue="arXiv"]   { background: #6b6247; }
+body.theme-washi .venue-badge[data-venue="Bridge"]  { background: #2a2418; }
 body.theme-washi .venue-badge[data-venue="EMNLP"]   { background: #3e6b4a; }
 body.theme-washi .venue-badge[data-venue="AAAI"]    { background: #5a3a7b; }
 body.theme-washi .venue-badge[data-venue="KDD"]     { background: #6b4a1e; }
 
-/* Signal 列 */
+/* Signal block — inline chip 風 */
 body.theme-washi .signal-block {
+  display: inline-flex;
+  vertical-align: middle;
   background: transparent;
   border: none;
-  padding: 2px 0 0 0;
+  padding: 0;
   margin: 0;
+  box-shadow: none;
 }
-body.theme-washi .signal-head { gap: 10px; align-items: center; }
+body.theme-washi .signal-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+}
 body.theme-washi .signal-score {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -552,27 +820,32 @@ body.theme-washi .signal-score {
   background: transparent;
   padding: 0;
   border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 body.theme-washi .signal-score b {
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: 700;
   color: var(--mustard-deep);
 }
 body.theme-washi .signal-axes { gap: 3px; }
-body.theme-washi .signal-axis-bar { background: var(--mustard); opacity: 0.8; }
+body.theme-washi .signal-axis-bar { background: var(--mustard); opacity: 0.85; }
 body.theme-washi .signal-axis-bar.empty { background: var(--ink-rule); opacity: 0.5; }
 
-/* AI 摘要 — 山吹軟底 + 左朱線 */
-body.theme-washi .zh-summary-block {
-  background: var(--mustard-softer);
+/* AI summary block — mustard-soft + 左 3px mustard */
+body.theme-washi .zh-summary-block,
+body.theme-washi .zh-summary-block.zh-summary-lead {
+  background: var(--mustard-soft);
   border: none;
   border-left: 3px solid var(--mustard);
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
   padding: 10px 14px;
+  margin: 4px 0 0 0;
   color: var(--ink-soft);
+  font-family: var(--font-body);
   font-size: 12.5px;
   line-height: 1.85;
-  font-family: var(--font-body);
 }
 body.theme-washi .zh-summary-block .zh-label {
   display: block;
@@ -580,21 +853,27 @@ body.theme-washi .zh-summary-block .zh-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.24em;
-  color: #8a5f0a;
+  color: var(--mustard-deep);
   margin-bottom: 4px;
+  background: transparent;
+  padding: 0;
 }
-body.theme-washi .zh-summary-block.loading .zh-summary-text { color: var(--ink-mute); font-style: italic; }
+body.theme-washi .zh-summary-block.loading .zh-summary-text {
+  color: var(--ink-mute);
+  font-style: italic;
+}
 
-/* 標題 · 作者 */
+/* Title / authors */
 body.theme-washi .paper-title {
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 15.5px;
   line-height: 1.55;
-  color: var(--ink);
-  padding-right: 24px;
   letter-spacing: 0.01em;
+  color: var(--ink);
+  padding-right: 28px;
   margin: 0;
+  text-wrap: pretty;
 }
 body.theme-washi .paper-title-link {
   color: var(--ink);
@@ -614,18 +893,37 @@ body.theme-washi .paper-authors {
   color: #8a6d3a;
   margin: 0;
 }
+body.theme-washi .paper-authors .author-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+body.theme-washi .paper-authors .author-btn:hover {
+  color: var(--vermillion);
+  text-decoration: underline;
+}
 
-/* 標籤 chips */
-body.theme-washi .paper-tags { gap: 6px; flex-wrap: wrap; align-items: center; }
-body.theme-washi .tag-chips { gap: 6px; flex-wrap: wrap; }
+/* Tags */
+body.theme-washi .paper-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 2px 0 0 0;
+}
+body.theme-washi .tag-chips { gap: 6px; flex-wrap: wrap; display: flex; }
 body.theme-washi .tag-chip {
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: 11px;
   background: var(--mustard-soft);
   border: 1px solid var(--mustard);
-  color: #8a5f0a;
+  color: var(--mustard-deep);
   font-family: var(--font-body);
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 body.theme-washi .tag-chip.tag-bridge {
@@ -633,28 +931,29 @@ body.theme-washi .tag-chip.tag-bridge {
   border-color: var(--plum);
   color: var(--plum);
 }
-body.theme-washi .tag-chip .tag-remove { color: #8a5f0a; opacity: 0.55; }
+body.theme-washi .tag-chip .tag-remove { color: var(--mustard-deep); opacity: 0.55; }
 body.theme-washi .tag-add-btn {
   background: transparent;
   border: 1px dashed var(--ink-pale);
   color: var(--ink-mute);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: 11px;
   padding: 2px 10px;
   font-family: var(--font-soft);
+  cursor: pointer;
 }
 body.theme-washi .tag-add-btn:hover {
   border-color: var(--mustard);
   color: var(--mustard-deep);
 }
 
-/* details — 原文摘要可摺疊 */
+/* Collapsible summary */
 body.theme-washi .summary-collapse-wrapper {
   background: transparent;
   border: none;
   border-top: 1px dashed var(--card-border);
-  padding: 8px 0 0 0;
-  margin: 4px 0 0 0;
+  padding: 8px 0 0;
+  margin: 4px 0 0;
 }
 body.theme-washi .summary-toggle-btn {
   cursor: pointer;
@@ -664,12 +963,15 @@ body.theme-washi .summary-toggle-btn {
   color: var(--ink-mute);
   list-style: none;
   padding: 2px 0;
+  background: transparent;
+  border: none;
+  text-align: left;
 }
 body.theme-washi .summary-toggle-btn::-webkit-details-marker { display: none; }
 body.theme-washi .summary-toggle-btn::before {
   content: '▸ ';
   color: var(--mustard-deep);
-  transition: transform 0.2s;
+  transition: transform .2s;
 }
 body.theme-washi details[open] .summary-toggle-btn::before { content: '▾ '; }
 body.theme-washi .paper-summary {
@@ -677,11 +979,11 @@ body.theme-washi .paper-summary {
   color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.9;
-  padding: 8px 0 0 0;
+  padding: 8px 0 0;
   margin: 0;
 }
 
-/* Note panel */
+/* Note panel (washi 記事箋) */
 body.theme-washi .note-panel {
   background: var(--paper-shade);
   border: 1px solid var(--card-border);
@@ -715,6 +1017,7 @@ body.theme-washi .note-cancel-btn {
   font-family: var(--font-body);
   border-radius: var(--r-sm);
   padding: 6px 14px;
+  cursor: pointer;
 }
 body.theme-washi .note-save-btn {
   background: var(--mustard);
@@ -725,23 +1028,26 @@ body.theme-washi .note-save-btn {
   border-radius: var(--r-sm);
   padding: 6px 14px;
   box-shadow: 2px 2px 0 var(--mustard-deep);
-  transition: all 0.18s var(--ease-brand);
+  transition: all .18s var(--ease-brand);
+  cursor: pointer;
 }
 body.theme-washi .note-save-btn:hover {
   transform: translate(-1px, -1px);
   box-shadow: 3px 3px 0 var(--mustard-deep);
 }
 
-/* 卡片頁腳 — 虛線隔開 */
+/* Card footer */
 body.theme-washi .paper-footer {
   border-top: 1px dashed var(--card-border);
-  padding-top: 12px;
+  padding-top: 11px;
   margin-top: auto;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  background: transparent;
+  box-shadow: none;
 }
 body.theme-washi .paper-date {
   font-family: var(--font-mono);
@@ -751,10 +1057,11 @@ body.theme-washi .paper-date {
   padding: 0;
   border: none;
 }
-body.theme-washi .paper-footer .citation-badge,
+
+/* Stat chips — citation (matcha), hf (mustard), github (paper) */
 body.theme-washi .citation-badge {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: 11px;
   color: #557019;
   background: var(--matcha-soft);
@@ -763,33 +1070,59 @@ body.theme-washi .citation-badge {
 }
 body.theme-washi .hf-badge {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: 11px;
-  color: #8a5f0a;
-  background: var(--mustard-softer);
+  color: var(--mustard-deep);
+  background: #fff1b8;
   border: 1px solid var(--mustard);
-  font-family: var(--font-body);
+  font-family: var(--font-mono);
 }
-body.theme-washi .github-badge,
+body.theme-washi .influential-badge,
+body.theme-washi .survey-badge,
+body.theme-washi .speed-badge,
+body.theme-washi .h5-badge {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: var(--paper-shade);
+  border: 1px solid var(--card-border);
+  font-family: var(--font-mono);
+}
+body.theme-washi .influential-badge { color: var(--plum); background: var(--plum-soft); border-color: var(--plum); }
+body.theme-washi .speed-badge { color: var(--vermillion); background: var(--persimmon-soft); border-color: var(--persimmon); }
+
+body.theme-washi .github-link-btn,
 body.theme-washi .github-slot a {
-  color: var(--ink-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   padding: 2px 8px;
   font-family: var(--font-mono);
   font-size: 11px;
+  text-decoration: none;
 }
-body.theme-washi .github-badge:hover { color: var(--ink); border-color: var(--ink); }
+body.theme-washi .github-link-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
 
 body.theme-washi .note-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: var(--plum-soft);
-  border: 1px solid #b06080;
+  border: 1px solid var(--plum);
   color: var(--plum);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   padding: 3px 10px;
   font-size: 11px;
   font-family: var(--font-body);
+  cursor: pointer;
 }
 body.theme-washi .paper-card.has-note .note-btn {
   background: var(--plum);
@@ -817,25 +1150,90 @@ body.theme-washi .paper-link:hover { color: var(--vermillion); }
    Discipline picker modal
    ============================================================ */
 body.theme-washi .discipline-picker .dp-backdrop {
-  background: rgba(42, 36, 24, 0.4);
+  background: rgba(42, 36, 24, 0.45);
   backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
 }
 body.theme-washi .dp-modal {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-lg);
-  padding: 32px;
-  max-width: 820px;
   box-shadow: var(--shadow-modal);
 }
+/* Toolbar · search bar */
+body.theme-washi .dp-toolbar {
+  border-bottom: 1px solid var(--ink-rule);
+}
+body.theme-washi .dp-search svg { color: var(--ink-mute); }
+body.theme-washi .dp-search input {
+  background: var(--paper);
+  border: 1px solid var(--card-border);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+body.theme-washi .dp-search input:focus {
+  border-color: var(--mustard);
+  background: var(--paper-shade);
+  box-shadow: 0 0 0 3px var(--mustard-wash);
+}
+body.theme-washi .dp-search input::placeholder { color: var(--ink-pale); }
+/* Category chips */
+body.theme-washi .dp-chip {
+  background: var(--paper);
+  border: 1px solid var(--card-border);
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+body.theme-washi .dp-chip:hover {
+  background: var(--mustard-soft);
+  color: var(--ink);
+  border-color: var(--mustard);
+}
+body.theme-washi .dp-chip.active {
+  background: var(--mustard);
+  border-color: var(--ink);
+  color: var(--ink);
+  box-shadow: 2px 2px 0 var(--mustard-deep);
+}
+body.theme-washi .dp-chip-count {
+  background: var(--paper-deep);
+  color: var(--ink-mute);
+}
+body.theme-washi .dp-chip.active .dp-chip-count {
+  background: var(--ink);
+  color: var(--paper);
+}
+/* Section headers */
+body.theme-washi .dp-section-head {
+  border-bottom: 1px dashed var(--ink-rule);
+}
+body.theme-washi .dp-section-title {
+  font-family: var(--font-display);
+  color: var(--ink);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+body.theme-washi .dp-section-en {
+  font-family: var(--font-soft);
+  color: var(--ink-mute);
+}
+body.theme-washi .dp-section-count {
+  background: var(--paper-shade);
+  color: var(--ink-mute);
+  border: 1px solid var(--card-border);
+}
+body.theme-washi .dp-empty { color: var(--ink-mute); }
+body.theme-washi .dp-body::-webkit-scrollbar-thumb { background: var(--ink-rule); }
 body.theme-washi .dp-header::before {
-  content: '研究領域';
+  content: 'discipline · 研究領域';
   display: block;
   font-family: var(--font-soft);
   font-size: 11px;
   letter-spacing: 0.3em;
   color: var(--ink-mute);
   margin-bottom: 4px;
+  text-transform: lowercase;
 }
 body.theme-washi .dp-title {
   font-family: var(--font-display);
@@ -843,62 +1241,50 @@ body.theme-washi .dp-title {
   font-size: 1.5rem;
   color: var(--ink);
   letter-spacing: 0.02em;
+  margin: 0 0 4px;
 }
 body.theme-washi .dp-subtitle {
   color: var(--ink-mute);
   font-size: 13px;
   line-height: 1.8;
   font-family: var(--font-body);
-}
-body.theme-washi .dp-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
+  margin: 0 0 16px;
 }
 body.theme-washi .dp-card {
-  padding: 16px 14px;
-  border-radius: 12px;
   background: var(--paper-shade);
   border: 1px solid var(--card-border);
-  transition: all 0.2s var(--ease-brand);
   color: var(--ink);
-  cursor: pointer;
+  box-shadow: none;
 }
 body.theme-washi .dp-card:hover {
-  background: var(--mustard-soft);
+  background: var(--mustard-wash);
   border-color: var(--mustard);
+  box-shadow: 2px 2px 0 var(--mustard-deep);
 }
 body.theme-washi .dp-card.active {
   background: var(--mustard-soft);
   border: 1.5px solid var(--mustard);
+  box-shadow: 2px 2px 0 var(--mustard-deep);
 }
-body.theme-washi .dp-card .dp-icon { font-size: 26px; margin-bottom: 4px; }
-body.theme-washi .dp-card .dp-name {
+body.theme-washi .dp-card-name {
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 15px;
   color: var(--ink);
 }
-body.theme-washi .dp-card .dp-name-en,
-body.theme-washi .dp-card .dp-brand {
+body.theme-washi .dp-card-name-en {
   font-family: var(--font-soft);
-  font-size: 11px;
-  letter-spacing: 0.06em;
   color: var(--ink-mute);
 }
-body.theme-washi .dp-card .dp-arxiv,
-body.theme-washi .dp-card .dp-cat {
+body.theme-washi .dp-card-arxiv {
   font-family: var(--font-mono);
-  font-size: 10px;
   color: var(--plum);
-  margin-top: 6px;
 }
-body.theme-washi .dp-track-star {
-  color: var(--ink-pale);
+body.theme-washi .dp-card-confs,
+body.theme-washi .dp-card-topics {
+  color: var(--ink-mute);
 }
+body.theme-washi .dp-track-star { color: var(--ink-pale); }
 body.theme-washi .dp-track-star.active,
 body.theme-washi .dp-track-star:hover { color: var(--vermillion); }
-
 body.theme-washi .dp-close {
   background: transparent;
   border: none;
@@ -908,7 +1294,7 @@ body.theme-washi .dp-close {
 body.theme-washi .dp-close:hover { color: var(--ink); }
 
 /* ============================================================
-   Loader / no-results
+   Loader / empty state
    ============================================================ */
 body.theme-washi .loader-container { color: var(--ink-mute); }
 body.theme-washi .spinner {
@@ -917,11 +1303,14 @@ body.theme-washi .spinner {
 }
 body.theme-washi #loaderText { font-family: var(--font-body); color: var(--ink-mute); }
 
+body.theme-washi .no-results { padding: 40px 20px; text-align: center; }
+body.theme-washi .no-results-icon { font-size: 48px; }
 body.theme-washi .no-results-title {
   font-family: var(--font-display);
   font-size: 1.3rem;
   font-weight: 700;
   color: var(--ink);
+  margin: 12px 0 4px;
 }
 body.theme-washi .no-results-hint {
   color: var(--ink-mute);
@@ -937,21 +1326,42 @@ body.theme-washi .no-results-action {
   border-radius: var(--r-sm);
   padding: 10px 18px;
   box-shadow: 2px 2px 0 var(--mustard-deep);
-  transition: all 0.18s var(--ease-brand);
+  transition: all .18s var(--ease-brand);
+  cursor: pointer;
+  margin-top: 16px;
 }
 body.theme-washi .no-results-action:hover {
   transform: translate(-1px, -1px);
   box-shadow: 3px 3px 0 var(--mustard-deep);
 }
+body.theme-washi .topic-suggestions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  margin-top: 16px;
+}
+body.theme-washi .topic-suggestions .ts-label {
+  font-family: var(--font-soft);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: var(--ink-mute);
+}
 body.theme-washi .topic-suggestions .ts-chip {
   background: var(--mustard-soft);
   border: 1px solid var(--mustard);
-  color: #8a5f0a;
-  border-radius: 999px;
+  color: var(--mustard-deep);
+  border-radius: var(--r-pill);
   padding: 4px 12px;
   font-family: var(--font-body);
   font-size: 12px;
   white-space: nowrap;
+  cursor: pointer;
+}
+body.theme-washi .topic-suggestions .ts-chip:hover {
+  background: var(--mustard);
+  color: var(--ink);
 }
 
 /* ============================================================
@@ -965,12 +1375,12 @@ body.theme-washi .back-to-top {
   color: var(--ink-soft);
   border-radius: 50%;
   box-shadow: var(--shadow-card);
-  transition: all 0.2s var(--ease-brand);
+  transition: all .2s var(--ease-brand);
 }
 body.theme-washi .kbd-hint-btn:hover,
 body.theme-washi .theme-toggle-btn:hover,
 body.theme-washi .back-to-top:hover {
-  background: var(--mustard-soft);
+  background: var(--mustard-wash);
   border-color: var(--mustard);
   color: var(--ink);
 }
@@ -978,21 +1388,24 @@ body.theme-washi .back-to-top:hover {
 body.theme-washi .kbd-hint {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  color: var(--ink);
+  color: var(--ink-soft);
   font-family: var(--font-body);
-  box-shadow: var(--shadow-modal);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-md);
 }
 
 body.theme-washi .ctx-menu {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   box-shadow: var(--shadow-modal);
+  border-radius: var(--r-md);
 }
 body.theme-washi .ctx-item {
   font-family: var(--font-body);
   color: var(--ink);
+  background: transparent;
 }
-body.theme-washi .ctx-item:hover { background: var(--mustard-soft); }
+body.theme-washi .ctx-item:hover { background: var(--paper-shade); }
 body.theme-washi .ctx-danger { color: var(--vermillion); }
 
 /* ============================================================
@@ -1010,14 +1423,54 @@ body.theme-washi textarea:focus-visible {
    Responsive
    ============================================================ */
 @media (max-width: 960px) {
-  body.theme-washi .app-shell { flex-direction: column; }
+  body.theme-washi .app-shell { grid-template-columns: 1fr; }
   body.theme-washi .side {
-    width: 100%;
-    border-right: none;
+    position: relative;
+    height: auto;
+    max-height: none;
+    border-right: 0;
     border-bottom: 1px solid var(--card-border);
-    position: static;
-    min-height: auto;
+    padding: 18px 16px;
   }
-  body.theme-washi .container { padding: 24px 20px; }
-  body.theme-washi .papers-grid { grid-template-columns: 1fr; }
+  body.theme-washi .side-nav .category-filters {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  body.theme-washi .side-foot { display: none; }
+  body.theme-washi .container,
+  body.theme-washi .app-shell > .container { padding: 22px 18px 60px; }
+}
+
+/* ============================================================
+   Dark washi (sumi 墨 on aged paper)
+   ============================================================ */
+body.theme-washi.light-mode,
+body.theme-washi.light-mode .app-shell { /* light already default */ }
+
+body.theme-washi:not(.light-mode) {
+  --paper:        #1c1812;
+  --paper-shade:  #262017;
+  --paper-deep:   #332b1f;
+  --card-bg:      #221d15;
+  --card-border:  #3a3122;
+  --ink:          #f3ead3;
+  --ink-soft:     #d9ceae;
+  --ink-mute:     #9a8c6d;
+  --ink-pale:     #6b6247;
+  --ink-rule:     rgba(243,234,211,0.12);
+  --mustard-soft: #4a3c10;
+  --mustard-wash: rgba(230,180,34,0.15);
+  --persimmon-soft: #4a2a10;
+  --matcha-soft:  #2f3a1a;
+  --indigo-soft:  #1e2a42;
+  --plum-soft:    #3a1f2c;
+}
+body.theme-washi:not(.light-mode) .paper-authors { color: #c5a976; }
+body.theme-washi:not(.light-mode) .zh-summary-block { color: var(--ink); }
+body.theme-washi:not(.light-mode) .hf-badge { background: #4a3c10; color: var(--mustard); }
+body.theme-washi:not(.light-mode) {
+  background-image:
+    radial-gradient(rgba(243,234,211,0.035) 1px, transparent 1.5px),
+    radial-gradient(rgba(243,234,211,0.025) 1px, transparent 1.5px);
 }

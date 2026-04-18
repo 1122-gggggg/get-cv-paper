@@ -82,6 +82,34 @@ DISCIPLINES: dict[str, dict[str, str]] = {
     "biomed":      {"cat": "q-bio.TO",           "name": "生醫工程",     "role": "生醫工程研究助理"},
     "music":       {"cat": "cs.SD",              "name": "音樂學",       "role": "音樂研究助理"},
     "design":      {"cat": "cs.HC",              "name": "設計",         "role": "設計研究助理"},
+    # 工程延伸
+    "chemeng":     {"cat": "physics.chem-ph",    "name": "化學工程",     "role": "化工研究助理"},
+    "aero":        {"cat": "physics.flu-dyn",    "name": "航太工程",     "role": "航太工程研究助理"},
+    "nuclear":     {"cat": "physics.ins-det",    "name": "核能工程",     "role": "核能工程研究助理"},
+    "indus":       {"cat": "math.OC",            "name": "工業工程",     "role": "工業工程研究助理"},
+    "bioeng":      {"cat": "q-bio.TO",           "name": "生物工程",     "role": "生物工程研究助理"},
+    # 自然延伸
+    "envsci":      {"cat": "physics.geo-ph",     "name": "環境科學",     "role": "環境科學研究助理"},
+    "agri":        {"cat": "q-bio.PE",           "name": "農業科學",     "role": "農業科學研究助理"},
+    "ocean":       {"cat": "physics.ao-ph",      "name": "海洋科學",     "role": "海洋科學研究助理"},
+    # 醫療延伸
+    "pharma":      {"cat": "q-bio.BM",           "name": "藥學",         "role": "藥學研究助理"},
+    "nursing":     {"cat": "q-bio.QM",           "name": "護理學",       "role": "護理研究助理"},
+    "dentistry":   {"cat": "q-bio.QM",           "name": "牙醫學",       "role": "牙醫研究助理"},
+    "sports":      {"cat": "q-bio.QM",           "name": "運動科學",     "role": "運動科學研究助理"},
+    # 商業管理
+    "management":  {"cat": "econ.GN",            "name": "企業管理",     "role": "管理研究助理"},
+    "marketing":   {"cat": "econ.GN",            "name": "行銷",         "role": "行銷研究助理"},
+    "accounting":  {"cat": "econ.GN",            "name": "會計",         "role": "會計研究助理"},
+    # 社會延伸
+    "commun":      {"cat": "cs.CY",              "name": "傳播學",       "role": "傳播研究助理"},
+    "geography":   {"cat": "physics.geo-ph",     "name": "地理學",       "role": "地理學研究助理"},
+    "religion":    {"cat": "cs.CY",              "name": "宗教研究",     "role": "宗教研究助理"},
+    # 藝術延伸
+    "arthistory":  {"cat": "cs.DL",              "name": "藝術史",       "role": "藝術史研究助理"},
+    "film":        {"cat": "cs.MM",              "name": "電影與媒體",   "role": "電影研究助理"},
+    "theater":     {"cat": "cs.HC",              "name": "劇場表演",     "role": "劇場研究助理"},
+    "architecture":{"cat": "cs.CG",              "name": "建築學",       "role": "建築研究助理"},
 }
 DEFAULT_DISCIPLINE = "cv"
 

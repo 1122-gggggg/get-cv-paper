@@ -1299,17 +1299,497 @@ Object.assign(window.DISCIPLINES, {
     },
 });
 
-// 預設顯示順序：CS 12 + STEM 跨領域 11 + 人文／社會／工程／藝術 20
-window.DISCIPLINE_ORDER = [
-    'cv', 'nlp', 'ml', 'ai', 'robotics', 'graphics',
-    'security', 'systems', 'db', 'hci', 'ir', 'speech',
-    'stats', 'math', 'physics', 'astro', 'quantum',
-    'chem', 'bio', 'neuro', 'econ', 'finance', 'eess',
-    'philosophy', 'linguistics', 'psychology', 'sociology',
-    'political', 'law', 'education', 'history', 'literature', 'anthro',
-    'earth', 'climate', 'materials', 'mecheng', 'civil',
-    'medimg', 'pubhealth', 'biomed', 'music', 'design',
+// ───── 大學全科延伸（v3：工程 / 醫療 / 商管 / 社會 / 藝術）─────
+Object.assign(window.DISCIPLINES, {
+    // ── 工程延伸 ─────────────────────────────────
+    chemeng: {
+        id: 'chemeng', icon: '⚗️', name: '化學工程', nameEn: 'Chemical Engineering',
+        brand: 'Reactor', arxivCat: 'physics.chem-ph',
+        promptRole: '化工研究助理',
+        accent: { from: '#0d9488', to: '#f97316', tint: 'rgba(13,148,136,0.18)' },
+        loaderHints: ['整理本週化工論文（Process / Reaction Eng / Separation 等）...'],
+        confs: [
+            { key: 'aiche journal', label: 'AIChE J.',   color: '#0d9488' },
+            { key: 'chemical engineering science', label: 'Chem. Eng. Sci.', color: '#0f766e' },
+            { key: 'industrial & engineering chemistry research', label: 'I&EC Res.', color: '#115e59' },
+        ],
+        topics: [
+            'Process Engineering', 'Reaction Engineering', 'Separation',
+            'Distillation', 'Catalyst', 'Transport Phenomena',
+            'Polymer Processing', 'Biochemical Engineering', 'CO2 Capture',
+        ],
+        synonyms: { 'process engineering': ['unit operation', 'flowsheet'] },
+    },
+    aero: {
+        id: 'aero', icon: '✈️', name: '航太工程', nameEn: 'Aerospace Engineering',
+        brand: 'Aviatus', arxivCat: 'physics.flu-dyn',
+        promptRole: '航太工程研究助理',
+        accent: { from: '#1e3a8a', to: '#0891b2', tint: 'rgba(30,58,138,0.18)' },
+        loaderHints: ['整理本週航太論文（Aerodynamics / Propulsion / UAV / Space 等）...'],
+        confs: [
+            { key: 'aiaa journal',   label: 'AIAA J.',     color: '#1e3a8a' },
+            { key: 'journal of aircraft', label: 'J. of Aircraft', color: '#1e40af' },
+            { key: 'journal of spacecraft and rockets', label: 'J. Spacecr. Rockets', color: '#0891b2' },
+            { key: 'acta astronautica', label: 'Acta Astro.', color: '#0369a1' },
+        ],
+        topics: [
+            'Aerodynamics', 'Propulsion', 'Flight Control', 'UAV',
+            'Drone', 'Satellite', 'Orbit Mechanics', 'Hypersonic',
+            'Structural Dynamics', 'Aeroelasticity', 'Space Exploration',
+        ],
+        synonyms: { 'uav': ['drone', 'quadcopter'], 'orbit mechanics': ['astrodynamics'] },
+    },
+    nuclear: {
+        id: 'nuclear', icon: '☢️', name: '核能工程', nameEn: 'Nuclear Engineering',
+        brand: 'Fission', arxivCat: 'physics.ins-det',
+        promptRole: '核能工程研究助理',
+        accent: { from: '#84cc16', to: '#a16207', tint: 'rgba(132,204,22,0.18)' },
+        loaderHints: ['整理本週核工論文（Reactor / Fusion / Radiation / Shielding 等）...'],
+        confs: [
+            { key: 'nuclear engineering and design', label: 'Nucl. Eng. Des.', color: '#84cc16' },
+            { key: 'journal of nuclear materials',   label: 'J. Nucl. Mat.',   color: '#65a30d' },
+            { key: 'annals of nuclear energy',       label: 'Ann. Nucl. Energy', color: '#a16207' },
+            { key: 'fusion engineering and design',  label: 'Fusion Eng. Des.', color: '#ca8a04' },
+        ],
+        topics: [
+            'Reactor Physics', 'Fusion', 'Plasma Confinement', 'Fuel Cycle',
+            'Radiation Shielding', 'Small Modular Reactor', 'Tokamak',
+            'Monte Carlo Transport', 'Neutronics', 'Fuel Materials',
+        ],
+        synonyms: { 'fusion': ['iter', 'deuterium tritium'], 'smr': ['small modular reactor'] },
+    },
+    indus: {
+        id: 'indus', icon: '🏭', name: '工業工程', nameEn: 'Industrial & Systems Engineering',
+        brand: 'Optima', arxivCat: 'math.OC',
+        promptRole: '工業工程研究助理',
+        accent: { from: '#0f766e', to: '#64748b', tint: 'rgba(15,118,110,0.18)' },
+        loaderHints: ['整理本週 IE / OR 論文（Scheduling / Supply Chain / Simulation 等）...'],
+        confs: [
+            { key: 'operations research',    label: 'Oper. Res.',    color: '#0f766e' },
+            { key: 'management science',     label: 'Mgmt. Sci.',    color: '#115e59' },
+            { key: 'iise transactions',      label: 'IISE Trans.',   color: '#134e4a' },
+            { key: 'ejor',                   label: 'EJOR',          color: '#64748b' },
+        ],
+        topics: [
+            'Operations Research', 'Scheduling', 'Supply Chain',
+            'Queueing', 'Simulation', 'Logistics', 'Lean Manufacturing',
+            'Quality Control', 'Facility Location', 'Inventory',
+            'Stochastic Programming',
+        ],
+        synonyms: {
+            'operations research': ['or', 'optimization'],
+            'supply chain': ['scm', 'logistics network'],
+        },
+    },
+    bioeng: {
+        id: 'bioeng', icon: '🧪', name: '生物工程', nameEn: 'Bioengineering',
+        brand: 'Bioworks', arxivCat: 'q-bio.TO',
+        promptRole: '生物工程研究助理',
+        accent: { from: '#16a34a', to: '#0ea5e9', tint: 'rgba(22,163,74,0.18)' },
+        loaderHints: ['整理本週生物工程論文（Synthetic Bio / Tissue / Bioreactor 等）...'],
+        confs: [
+            { key: 'nature biotechnology',     label: 'Nat. Biotech.',  color: '#16a34a' },
+            { key: 'metabolic engineering',    label: 'Metab. Eng.',    color: '#15803d' },
+            { key: 'biotechnology and bioengineering', label: 'Biotech. Bioeng.', color: '#0ea5e9' },
+            { key: 'acs synthetic biology',    label: 'ACS Syn. Bio.',  color: '#22c55e' },
+        ],
+        topics: [
+            'Synthetic Biology', 'Metabolic Engineering', 'Tissue Engineering',
+            'Biomaterial', 'Bioreactor', 'Directed Evolution',
+            'Protein Engineering', 'Cell Therapy', 'Fermentation',
+            'Gene Circuit',
+        ],
+        synonyms: { 'synthetic biology': ['synbio', 'genetic circuit'] },
+    },
+
+    // ── 自然延伸 ─────────────────────────────────
+    envsci: {
+        id: 'envsci', icon: '🌱', name: '環境科學', nameEn: 'Environmental Science',
+        brand: 'Eco', arxivCat: 'physics.geo-ph',
+        promptRole: '環境科學研究助理',
+        accent: { from: '#15803d', to: '#0d9488', tint: 'rgba(21,128,61,0.18)' },
+        loaderHints: ['整理本週環境論文（Pollution / Ecology / Sustainability 等）...'],
+        confs: [
+            { key: 'environmental science & technology', label: 'ES&T',             color: '#15803d' },
+            { key: 'nature sustainability',              label: 'Nat. Sustain.',    color: '#166534' },
+            { key: 'environmental research letters',     label: 'ERL',              color: '#16a34a' },
+            { key: 'one earth',                          label: 'One Earth',        color: '#0d9488' },
+        ],
+        topics: [
+            'Air Pollution', 'Water Quality', 'Ecology',
+            'Biodiversity', 'Sustainability', 'Carbon Emission',
+            'Life Cycle Assessment', 'Waste Management',
+            'Ecosystem', 'Environmental Monitoring', 'Microplastic',
+        ],
+        synonyms: {
+            'air pollution': ['pm2.5', 'particulate matter'],
+            'life cycle assessment': ['lca'],
+        },
+    },
+    agri: {
+        id: 'agri', icon: '🌾', name: '農業科學', nameEn: 'Agricultural Science',
+        brand: 'Terraform', arxivCat: 'q-bio.PE',
+        promptRole: '農業科學研究助理',
+        accent: { from: '#ca8a04', to: '#65a30d', tint: 'rgba(202,138,4,0.18)' },
+        loaderHints: ['整理本週農業論文（Crop / Soil / Precision Ag / Plant Science 等）...'],
+        confs: [
+            { key: 'nature food',            label: 'Nat. Food',       color: '#ca8a04' },
+            { key: 'field crops research',   label: 'Field Crops Res.', color: '#65a30d' },
+            { key: 'agricultural systems',   label: 'Agric. Sys.',      color: '#a16207' },
+            { key: 'plant cell',             label: 'Plant Cell',       color: '#854d0e' },
+        ],
+        topics: [
+            'Precision Agriculture', 'Crop Yield', 'Plant Breeding',
+            'Soil Science', 'Irrigation', 'Pest Management',
+            'Phenotyping', 'Genomic Selection', 'Remote Sensing',
+            'Agroforestry', 'Food Security',
+        ],
+        synonyms: {
+            'precision agriculture': ['smart farming', 'digital agriculture'],
+            'phenotyping': ['plant phenomics'],
+        },
+    },
+    ocean: {
+        id: 'ocean', icon: '🌊', name: '海洋科學', nameEn: 'Oceanography',
+        brand: 'Abyss', arxivCat: 'physics.ao-ph',
+        promptRole: '海洋科學研究助理',
+        accent: { from: '#0369a1', to: '#0891b2', tint: 'rgba(3,105,161,0.18)' },
+        loaderHints: ['整理本週海洋論文（Circulation / Marine Bio / Sea Level 等）...'],
+        confs: [
+            { key: 'journal of physical oceanography', label: 'JPO',         color: '#0369a1' },
+            { key: 'ocean modelling',                  label: 'Ocean Mod.',  color: '#0284c7' },
+            { key: 'deep-sea research',                label: 'Deep Sea Res.', color: '#075985' },
+            { key: 'limnology and oceanography',       label: 'Limnol. Oceanogr.', color: '#0c4a6e' },
+        ],
+        topics: [
+            'Ocean Circulation', 'Marine Ecology', 'Sea Level',
+            'Biogeochemistry', 'Coral Reef', 'Estuary', 'Deep Sea',
+            'Ocean Acidification', 'Fisheries', 'Coastal Engineering',
+        ],
+        synonyms: { 'ocean acidification': ['ph decrease', 'carbonate chemistry'] },
+    },
+
+    // ── 醫療／生命延伸 ────────────────────────
+    pharma: {
+        id: 'pharma', icon: '💊', name: '藥學', nameEn: 'Pharmacy & Pharmacology',
+        brand: 'Pharma', arxivCat: 'q-bio.BM',
+        promptRole: '藥學研究助理',
+        accent: { from: '#db2777', to: '#0891b2', tint: 'rgba(219,39,119,0.18)' },
+        loaderHints: ['整理本週藥學論文（Drug Discovery / Pharmacokinetics / Formulation 等）...'],
+        confs: [
+            { key: 'nature reviews drug discovery', label: 'Nat. Rev. Drug Disc.', color: '#db2777' },
+            { key: 'journal of medicinal chemistry', label: 'J. Med. Chem.',        color: '#be185d' },
+            { key: 'clinical pharmacology & therapeutics', label: 'Clin. Pharmacol. Ther.', color: '#9d174d' },
+        ],
+        topics: [
+            'Drug Discovery', 'Pharmacokinetics', 'Pharmacodynamics',
+            'Clinical Pharmacology', 'Formulation', 'Drug Delivery',
+            'Pharmacogenomics', 'Antibiotic', 'Oncology',
+            'Medicinal Chemistry', 'Biologics',
+        ],
+        synonyms: {
+            'drug discovery': ['hit-to-lead', 'lead optimization'],
+            'pharmacokinetics': ['pk/pd', 'adme'],
+        },
+    },
+    nursing: {
+        id: 'nursing', icon: '👩‍⚕️', name: '護理學', nameEn: 'Nursing & Care',
+        brand: 'Caritas', arxivCat: 'q-bio.QM',
+        promptRole: '護理研究助理',
+        accent: { from: '#f472b6', to: '#0ea5e9', tint: 'rgba(244,114,182,0.18)' },
+        loaderHints: ['整理本週護理論文（Patient Care / Clinical Outcome / Workforce 等）...'],
+        confs: [
+            { key: 'journal of nursing scholarship', label: 'J. Nurs. Scholar.', color: '#f472b6' },
+            { key: 'nursing research',               label: 'Nurs. Res.',        color: '#db2777' },
+            { key: 'international journal of nursing studies', label: 'Int. J. Nurs. Stud.', color: '#0ea5e9' },
+        ],
+        topics: [
+            'Patient Outcome', 'Clinical Nursing', 'Geriatric Care',
+            'Palliative Care', 'Pediatric Nursing', 'Mental Health',
+            'Nursing Workforce', 'Telehealth', 'Patient Safety',
+            'Evidence-Based Practice',
+        ],
+        synonyms: { 'telehealth': ['telemedicine', 'remote care'] },
+    },
+    dentistry: {
+        id: 'dentistry', icon: '🦷', name: '牙醫學', nameEn: 'Dentistry',
+        brand: 'Dentis', arxivCat: 'q-bio.QM',
+        promptRole: '牙醫研究助理',
+        accent: { from: '#0ea5e9', to: '#f472b6', tint: 'rgba(14,165,233,0.18)' },
+        loaderHints: ['整理本週牙醫論文（Implant / Orthodontics / CBCT / Periodontal 等）...'],
+        confs: [
+            { key: 'journal of dental research', label: 'J. Dent. Res.',  color: '#0ea5e9' },
+            { key: 'journal of periodontology',  label: 'J. Periodontol.', color: '#0284c7' },
+            { key: 'clinical oral implants research', label: 'Clin. Oral Impl. Res.', color: '#075985' },
+        ],
+        topics: [
+            'Dental Implant', 'Orthodontics', 'Periodontology',
+            'Endodontics', 'Cariology', 'CBCT', 'Prosthodontics',
+            'Oral Pathology', 'Dental Materials', 'Digital Dentistry',
+        ],
+        synonyms: { 'cbct': ['cone beam ct'] },
+    },
+    sports: {
+        id: 'sports', icon: '🏃', name: '運動科學', nameEn: 'Sports Science & Kinesiology',
+        brand: 'Kinesia', arxivCat: 'q-bio.QM',
+        promptRole: '運動科學研究助理',
+        accent: { from: '#ea580c', to: '#10b981', tint: 'rgba(234,88,12,0.18)' },
+        loaderHints: ['整理本週運動科學論文（Biomechanics / Training / Nutrition / IMU 等）...'],
+        confs: [
+            { key: 'medicine & science in sports & exercise', label: 'MSSE',       color: '#ea580c' },
+            { key: 'journal of biomechanics',                  label: 'J. Biomech.', color: '#c2410c' },
+            { key: 'sports medicine',                          label: 'Sports Med.', color: '#10b981' },
+        ],
+        topics: [
+            'Biomechanics', 'Exercise Physiology', 'Strength Training',
+            'Endurance', 'Sports Nutrition', 'Injury Prevention',
+            'Motion Capture', 'IMU Sensor', 'Rehabilitation',
+            'Athlete Monitoring',
+        ],
+        synonyms: { 'imu sensor': ['inertial measurement unit', 'wearable sensor'] },
+    },
+
+    // ── 商業／管理 ────────────────────────────
+    management: {
+        id: 'management', icon: '💼', name: '企業管理', nameEn: 'Management',
+        brand: 'Strato', arxivCat: 'econ.GN',
+        promptRole: '管理研究助理',
+        accent: { from: '#1e293b', to: '#ca8a04', tint: 'rgba(30,41,59,0.18)' },
+        loaderHints: ['整理本週管理論文（Strategy / Organization / Innovation 等）...'],
+        confs: [
+            { key: 'strategic management journal', label: 'SMJ',               color: '#1e293b' },
+            { key: 'academy of management journal', label: 'AMJ',              color: '#0f172a' },
+            { key: 'administrative science quarterly', label: 'ASQ',           color: '#334155' },
+            { key: 'organization science',             label: 'Org. Sci.',      color: '#ca8a04' },
+        ],
+        topics: [
+            'Strategy', 'Corporate Governance', 'Innovation',
+            'Entrepreneurship', 'Leadership', 'HR',
+            'Organizational Behavior', 'M&A', 'Platform Strategy',
+            'Dynamic Capabilities', 'Knowledge Management',
+        ],
+        synonyms: { 'hr': ['human resources', 'talent management'] },
+    },
+    marketing: {
+        id: 'marketing', icon: '📣', name: '行銷', nameEn: 'Marketing',
+        brand: 'Brand', arxivCat: 'econ.GN',
+        promptRole: '行銷研究助理',
+        accent: { from: '#ec4899', to: '#f59e0b', tint: 'rgba(236,72,153,0.18)' },
+        loaderHints: ['整理本週行銷論文（Consumer / Digital / Brand / Pricing 等）...'],
+        confs: [
+            { key: 'journal of marketing',           label: 'J. of Marketing', color: '#ec4899' },
+            { key: 'journal of consumer research',    label: 'JCR',            color: '#db2777' },
+            { key: 'marketing science',              label: 'Mkt. Sci.',      color: '#be185d' },
+            { key: 'journal of marketing research',  label: 'JMR',             color: '#f59e0b' },
+        ],
+        topics: [
+            'Consumer Behavior', 'Brand', 'Digital Marketing',
+            'Pricing', 'Advertising', 'Recommendation',
+            'Social Media', 'Customer Lifetime Value',
+            'A/B Testing', 'Conjoint Analysis', 'Choice Model',
+        ],
+        synonyms: {
+            'a/b testing': ['randomized experiment', 'split test'],
+            'customer lifetime value': ['clv', 'ltv'],
+        },
+    },
+    accounting: {
+        id: 'accounting', icon: '📒', name: '會計', nameEn: 'Accounting',
+        brand: 'Ledger', arxivCat: 'econ.GN',
+        promptRole: '會計研究助理',
+        accent: { from: '#166534', to: '#1e293b', tint: 'rgba(22,101,52,0.18)' },
+        loaderHints: ['整理本週會計論文（Financial Reporting / Audit / Disclosure / Tax 等）...'],
+        confs: [
+            { key: 'journal of accounting research',   label: 'JAR',               color: '#166534' },
+            { key: 'the accounting review',            label: 'TAR',               color: '#15803d' },
+            { key: 'journal of accounting and economics', label: 'JAE',            color: '#14532d' },
+            { key: 'review of accounting studies',     label: 'RAST',              color: '#1e293b' },
+        ],
+        topics: [
+            'Financial Reporting', 'Auditing', 'Disclosure',
+            'Earnings Management', 'Tax', 'IFRS', 'GAAP',
+            'Corporate Governance', 'ESG Reporting', 'Fraud Detection',
+            'Textual Analysis',
+        ],
+        synonyms: { 'earnings management': ['accrual'], 'textual analysis': ['10-k', 'mda'] },
+    },
+
+    // ── 社會／人文延伸 ────────────────────────
+    commun: {
+        id: 'commun', icon: '📺', name: '傳播學', nameEn: 'Communication & Media',
+        brand: 'Broadcast', arxivCat: 'cs.CY',
+        promptRole: '傳播研究助理',
+        accent: { from: '#7c3aed', to: '#f43f5e', tint: 'rgba(124,58,237,0.18)' },
+        loaderHints: ['整理本週傳播論文（Media / Journalism / Platform / Misinformation 等）...'],
+        confs: [
+            { key: 'journal of communication',         label: 'J. of Commun.',      color: '#7c3aed' },
+            { key: 'new media & society',              label: 'New Media & Soc.',   color: '#6d28d9' },
+            { key: 'communication research',           label: 'Commun. Res.',       color: '#5b21b6' },
+            { key: 'ica',                              label: 'ICA',                color: '#f43f5e' },
+        ],
+        topics: [
+            'Media Effects', 'Journalism', 'Platform Governance',
+            'Political Communication', 'Social Media',
+            'Misinformation', 'Algorithmic Curation',
+            'Public Opinion', 'Framing', 'Agenda Setting',
+            'Computational Communication',
+        ],
+        synonyms: {
+            'platform governance': ['content moderation'],
+            'misinformation': ['disinformation', 'fake news'],
+        },
+    },
+    geography: {
+        id: 'geography', icon: '🗺️', name: '地理學', nameEn: 'Geography & Urban',
+        brand: 'Cartos', arxivCat: 'physics.geo-ph',
+        promptRole: '地理學研究助理',
+        accent: { from: '#0284c7', to: '#78350f', tint: 'rgba(2,132,199,0.18)' },
+        loaderHints: ['整理本週地理論文（GIS / Urban / Mobility / Spatial Analysis 等）...'],
+        confs: [
+            { key: 'annals of the american association of geographers', label: 'AAG Annals', color: '#0284c7' },
+            { key: 'transactions in gis',             label: 'T-GIS',                    color: '#0369a1' },
+            { key: 'urban studies',                   label: 'Urban Studies',             color: '#78350f' },
+            { key: 'landscape and urban planning',    label: 'Landsc. Urban Plan.',      color: '#92400e' },
+        ],
+        topics: [
+            'GIS', 'Spatial Analysis', 'Urban Planning', 'Mobility',
+            'Remote Sensing', 'Cartography', 'Urban Form',
+            'Segregation', 'Transportation', 'Smart City',
+            'Land Use', 'Environmental Justice',
+        ],
+        synonyms: { 'gis': ['geographic information system'], 'urban form': ['urban morphology'] },
+    },
+    religion: {
+        id: 'religion', icon: '🕊️', name: '宗教研究', nameEn: 'Religious Studies',
+        brand: 'Sanctus', arxivCat: 'cs.CY',
+        promptRole: '宗教研究助理',
+        accent: { from: '#713f12', to: '#b45309', tint: 'rgba(113,63,18,0.18)' },
+        loaderHints: ['整理本週宗教研究論文（Theology / Comparative / Ritual / Digital Religion 等）...'],
+        confs: [
+            { key: 'journal of religion',                label: 'J. of Religion',      color: '#713f12' },
+            { key: 'religion',                           label: 'Religion',            color: '#92400e' },
+            { key: 'journal for the scientific study of religion', label: 'JSSR',      color: '#b45309' },
+        ],
+        topics: [
+            'Theology', 'Comparative Religion', 'Secularization',
+            'Ritual', 'Buddhism', 'Christianity', 'Islam', 'Judaism',
+            'Hinduism', 'Digital Religion', 'Religion and AI',
+        ],
+        synonyms: {},
+    },
+
+    // ── 藝術／人文延伸 ────────────────────────
+    arthistory: {
+        id: 'arthistory', icon: '🖼️', name: '藝術史', nameEn: 'Art History & Visual Studies',
+        brand: 'Pinakotheke', arxivCat: 'cs.DL',
+        promptRole: '藝術史研究助理',
+        accent: { from: '#831843', to: '#92400e', tint: 'rgba(131,24,67,0.18)' },
+        loaderHints: ['整理本週藝術史論文（Iconography / Digital Art History / Attribution 等）...'],
+        confs: [
+            { key: 'art bulletin',                 label: 'Art Bulletin',      color: '#831843' },
+            { key: 'art history',                  label: 'Art History',       color: '#9d174d' },
+            { key: 'journal of the warburg and courtauld institutes', label: 'JWCI', color: '#92400e' },
+            { key: 'dhq',                          label: 'DHQ',               color: '#78350f' },
+        ],
+        topics: [
+            'Iconography', 'Renaissance', 'Modern Art', 'Contemporary Art',
+            'Visual Studies', 'Attribution', 'Museum Studies',
+            'Digital Art History', 'Print Culture', 'Curatorial',
+            'Non-Western Art',
+        ],
+        synonyms: { 'attribution': ['stylistic analysis', 'connoisseurship'] },
+    },
+    film: {
+        id: 'film', icon: '🎬', name: '電影與媒體', nameEn: 'Film & Media Studies',
+        brand: 'Cinema', arxivCat: 'cs.MM',
+        promptRole: '電影研究助理',
+        accent: { from: '#111827', to: '#eab308', tint: 'rgba(17,24,39,0.2)' },
+        loaderHints: ['整理本週電影研究論文（Cinema Studies / Digital Media / Platform 等）...'],
+        confs: [
+            { key: 'cinema journal',           label: 'Cinema J.',          color: '#111827' },
+            { key: 'screen',                   label: 'Screen',             color: '#1f2937' },
+            { key: 'film quarterly',           label: 'Film Quart.',        color: '#374151' },
+            { key: 'journal of film and video', label: 'JFV',               color: '#eab308' },
+        ],
+        topics: [
+            'Cinema Studies', 'Genre', 'Auteur', 'Film Theory',
+            'Visual Effects', 'Streaming Platform', 'Documentary',
+            'Animation', 'Virtual Production', 'Computational Cinema',
+        ],
+        synonyms: { 'visual effects': ['vfx'] },
+    },
+    theater: {
+        id: 'theater', icon: '🎭', name: '劇場表演', nameEn: 'Theater & Performance',
+        brand: 'Proskenion', arxivCat: 'cs.HC',
+        promptRole: '劇場研究助理',
+        accent: { from: '#6b21a8', to: '#dc2626', tint: 'rgba(107,33,168,0.18)' },
+        loaderHints: ['整理本週表演藝術論文（Drama / Dance / Embodiment / Immersive 等）...'],
+        confs: [
+            { key: 'theatre journal',        label: 'Theatre J.',      color: '#6b21a8' },
+            { key: 'tdr',                    label: 'TDR',             color: '#7e22ce' },
+            { key: 'performance research',   label: 'Perf. Research',  color: '#9333ea' },
+            { key: 'dance research journal', label: 'Dance Res. J.',   color: '#dc2626' },
+        ],
+        topics: [
+            'Drama', 'Performance Studies', 'Dance', 'Choreography',
+            'Immersive Theatre', 'Acting', 'Playwriting', 'Dramaturgy',
+            'Embodiment', 'Motion Capture Performance', 'VR Performance',
+        ],
+        synonyms: {},
+    },
+    architecture: {
+        id: 'architecture', icon: '🏛️', name: '建築學', nameEn: 'Architecture',
+        brand: 'Archon', arxivCat: 'cs.CG',
+        promptRole: '建築研究助理',
+        accent: { from: '#57534e', to: '#0891b2', tint: 'rgba(87,83,78,0.18)' },
+        loaderHints: ['整理本週建築論文（Parametric / Sustainability / Urban / BIM 等）...'],
+        confs: [
+            { key: 'journal of architectural education', label: 'JAE',            color: '#57534e' },
+            { key: 'architectural design',              label: 'AD',              color: '#44403c' },
+            { key: 'automation in construction',        label: 'Autom. Constr.',  color: '#0891b2' },
+            { key: 'building and environment',          label: 'Build. Environ.', color: '#155e75' },
+        ],
+        topics: [
+            'Parametric Design', 'BIM', 'Sustainability',
+            'Architectural Theory', 'Computational Design',
+            'Urban Design', 'Energy Performance', 'Daylighting',
+            'Facade', 'Generative Design', 'Digital Fabrication',
+        ],
+        synonyms: { 'bim': ['building information modeling'] },
+    },
+});
+
+// ───── 類別分組（picker 顯示用）─────
+window.DISCIPLINE_CATEGORIES = [
+    { id: 'computing',   name: '電腦科學',   nameEn: 'Computing',             icon: '💻',
+      ids: ['cv', 'nlp', 'ml', 'ai', 'robotics', 'graphics',
+            'security', 'systems', 'db', 'hci', 'ir', 'speech'] },
+    { id: 'math_stats',  name: '數理統計',   nameEn: 'Math & Statistics',     icon: '∑',
+      ids: ['math', 'stats'] },
+    { id: 'natural',     name: '自然科學',   nameEn: 'Natural Sciences',      icon: '⚛️',
+      ids: ['physics', 'astro', 'quantum', 'chem', 'bio', 'neuro',
+            'earth', 'climate', 'envsci', 'ocean', 'agri'] },
+    { id: 'engineering', name: '工程科學',   nameEn: 'Engineering',           icon: '⚙️',
+      ids: ['eess', 'materials', 'mecheng', 'civil',
+            'chemeng', 'aero', 'nuclear', 'indus', 'bioeng'] },
+    { id: 'medical',     name: '醫療生命',   nameEn: 'Medical & Life',        icon: '🩺',
+      ids: ['medimg', 'pubhealth', 'biomed',
+            'pharma', 'nursing', 'dentistry', 'sports'] },
+    { id: 'business',    name: '商業管理',   nameEn: 'Business & Economics',  icon: '💼',
+      ids: ['econ', 'finance', 'management', 'marketing', 'accounting'] },
+    { id: 'social',      name: '社會科學',   nameEn: 'Social Sciences',       icon: '🏛️',
+      ids: ['psychology', 'sociology', 'political', 'anthro',
+            'commun', 'geography'] },
+    { id: 'humanities',  name: '人文學科',   nameEn: 'Humanities',            icon: '📜',
+      ids: ['philosophy', 'linguistics', 'history', 'literature', 'religion'] },
+    { id: 'law_edu',     name: '法律教育',   nameEn: 'Law & Education',       icon: '⚖️',
+      ids: ['law', 'education'] },
+    { id: 'arts',        name: '藝術設計',   nameEn: 'Arts & Design',         icon: '🎨',
+      ids: ['music', 'design', 'arthistory', 'film', 'theater', 'architecture'] },
 ];
+
+// 預設顯示順序：依類別展開（picker 也照此順）
+window.DISCIPLINE_ORDER = window.DISCIPLINE_CATEGORIES.flatMap(c => c.ids);
 
 window.getActiveDiscipline = function () {
     const saved = localStorage.getItem('visionary_discipline');
