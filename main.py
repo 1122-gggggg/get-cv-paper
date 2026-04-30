@@ -368,11 +368,11 @@ async def get_papers(request: Request, max_results: int = 1000, days: int = 7, d
     if cached is not None:
         etag = _papers_etag.get(cache_key)
         if etag and request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
         if etag:
             body = _json.dumps({"papers": cached}, ensure_ascii=False).encode("utf-8")
             return Response(content=body, media_type="application/json",
-                            headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
+                            headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
         return {"papers": cached}
 
     url = (
@@ -392,7 +392,7 @@ async def get_papers(request: Request, max_results: int = 1000, days: int = 7, d
     etag = _make_etag(body)
     _papers_etag[cache_key] = etag
     return Response(content=body, media_type="application/json",
-                    headers={"ETag": etag, "Cache-Control": "public, max-age=300"})
+                    headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
 
 
 _trending_store = LRUStore("trending", maxsize=8, ttl=3 * 3600, persist=False)
