@@ -903,38 +903,6 @@ body.theme-washi .signal-axis .sa-fill {
   transition: width 0.4s ease;
 }
 
-/* AI summary block — paper tint + mustard accent */
-body.theme-washi .zh-summary-block,
-body.theme-washi .zh-summary-block.zh-summary-lead {
-  background: #fbf6e4;
-  border: none;
-  border-left: 3px solid var(--mustard);
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
-  padding: 10px 14px;
-  margin: 6px 0 0 0;
-  color: var(--ink-soft);
-  font-family: var(--font-body);
-  font-size: 12.5px;
-  line-height: 1.85;
-  box-shadow: none;
-}
-body.theme-washi .zh-summary-block .zh-label {
-  display: block;
-  font-family: var(--font-soft);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.24em;
-  color: var(--mustard-deep);
-  margin-bottom: 4px;
-  background: transparent;
-  padding: 0;
-  text-transform: uppercase;
-}
-body.theme-washi .zh-summary-block.loading .zh-summary-text {
-  color: var(--ink-mute);
-  font-style: italic;
-}
-
 /* Title / authors */
 body.theme-washi .paper-title {
   font-family: var(--font-display);
@@ -1019,40 +987,14 @@ body.theme-washi .tag-add-btn:hover {
   color: var(--mustard-deep);
 }
 
-/* Collapsible summary */
-body.theme-washi .summary-collapse-wrapper {
-  background: transparent;
-  border: none;
-  border-top: 1px dashed var(--card-border);
-  padding: 8px 0 0;
-  margin: 4px 0 0;
-}
-body.theme-washi .summary-toggle-btn {
-  cursor: pointer;
-  font-family: var(--font-soft);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: var(--ink-mute);
-  list-style: none;
-  padding: 2px 0;
-  background: transparent;
-  border: none;
-  text-align: left;
-}
-body.theme-washi .summary-toggle-btn::-webkit-details-marker { display: none; }
-body.theme-washi .summary-toggle-btn::before {
-  content: '▸ ';
-  color: var(--mustard-deep);
-  transition: transform .2s;
-}
-body.theme-washi details[open] .summary-toggle-btn::before { content: '▾ '; }
 body.theme-washi .paper-summary {
+  border-top: 1px dashed var(--card-border);
   font-family: var(--font-body);
   color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.9;
-  padding: 8px 0 0;
-  margin: 0;
+  padding: 10px 0 0;
+  margin: 4px 0 0;
 }
 
 /* Note panel (washi 記事箋) */
@@ -1472,7 +1414,6 @@ body.theme-washi .topic-suggestions .ts-chip:hover {
    Floating utility buttons
    ============================================================ */
 body.theme-washi .kbd-hint-btn,
-body.theme-washi .theme-toggle-btn,
 body.theme-washi .back-to-top {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -1482,7 +1423,6 @@ body.theme-washi .back-to-top {
   transition: all .2s var(--ease-brand);
 }
 body.theme-washi .kbd-hint-btn:hover,
-body.theme-washi .theme-toggle-btn:hover,
 body.theme-washi .back-to-top:hover {
   background: var(--mustard-wash);
   border-color: var(--mustard);

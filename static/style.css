@@ -130,12 +130,6 @@ body.light-mode .ai-contrib-block {
     background: rgba(16, 185, 129, 0.07);
     color: #065f46;
 }
-body.light-mode .zh-summary-block {
-    background: rgba(99, 102, 241, 0.06);
-    color: #3730a3;
-}
-body.light-mode .zh-summary-block .zh-label { color: #6d28d9; }
-
 /* 引用 badge */
 body.light-mode .citation-badge {
     background: rgba(52, 211, 153, 0.1);
@@ -152,13 +146,11 @@ body.light-mode .count-meta {
 
 /* 右下角按鈕 */
 body.light-mode .back-to-top,
-body.light-mode .theme-toggle-btn,
 body.light-mode .kbd-hint-btn {
     background: #ffffff;
     border-color: rgba(99, 102, 241, 0.18);
     box-shadow: 0 2px 12px rgba(79, 70, 229, 0.12);
 }
-body.light-mode .theme-toggle-btn,
 body.light-mode .kbd-hint-btn { color: #4f46e5; }
 
 /* header badges */
@@ -655,6 +647,9 @@ header {
     animation: fadeIn 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     position: relative;
     overflow: hidden;
+    /* viewport 外的卡片跳過渲染與佈局，回滾不再雪崩 */
+    content-visibility: auto;
+    contain-intrinsic-size: 0 420px;
 }
 
 /* 卡片頂部的彩色裝飾線（hover 時顯現） */
@@ -810,63 +805,6 @@ header {
     opacity: 0.6;
     vertical-align: middle;
     margin-left: 4px;
-}
-
-/* ── 中文摘要區塊 ── */
-.zh-summary-block {
-    background: rgba(79, 70, 229, 0.07);
-    border-left: 3px solid rgba(124, 58, 237, 0.55);
-    border-radius: 0 0.65rem 0.65rem 0;
-    padding: 0.7rem 1rem;
-    margin-bottom: 1.25rem;
-    font-size: 0.88rem;
-    line-height: 1.75;
-    color: #c4b5fd;
-}
-
-.zh-summary-block .zh-summary-text {
-    display: block;
-    margin-top: 0.4rem;
-}
-
-.zh-summary-block .zh-label {
-    font-size: 0.72rem;
-    color: #9333ea;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    margin-bottom: 0.3rem;
-    display: block;
-    text-transform: uppercase;
-}
-
-.zh-summary-block.loading {
-    color: #64748b;
-    font-style: italic;
-}
-
-.zh-summary-block.loading .zh-summary-text {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-}
-
-.zh-summary-block.loading .zh-summary-text::after {
-    content: '';
-    display: inline-block;
-    width: 24px;
-    height: 5px;
-    background: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
-    border-radius: 999px;
-    animation: shimmer-bar 1.2s ease-in-out infinite;
-    opacity: 0.6;
-    vertical-align: middle;
-    margin-left: 4px;
-}
-
-@keyframes shimmer-bar {
-    0%   { transform: scaleX(0.3); opacity: 0.3; }
-    50%  { transform: scaleX(1);   opacity: 0.8; }
-    100% { transform: scaleX(0.3); opacity: 0.3; }
 }
 
 /* ── Citation Badge ── */
@@ -1940,19 +1878,6 @@ body.light-mode .survey-badge {
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
-.summary-toggle-btn {
-    background: none;
-    border: none;
-    color: #7c6ef7;
-    font-size: 0.77rem;
-    cursor: pointer;
-    padding: 2px 0;
-    margin-top: 2px;
-    font-family: inherit;
-    transition: color 0.15s;
-}
-.summary-toggle-btn:hover { color: #a855f7; }
-
 /* ── Per Page Selector ── */
 .per-page-wrapper {
     display: flex;
@@ -2029,31 +1954,6 @@ body.light-mode .survey-badge {
     pointer-events: none;
 }
 .top-progress-bar.active { opacity: 1; }
-
-/* ── Theme Toggle ── */
-.theme-toggle-btn {
-    position: fixed;
-    bottom: 5rem;
-    right: 1.5rem;
-    z-index: 900;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 50%;
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    font-size: 1.15rem;
-    backdrop-filter: blur(10px);
-    transition: transform 0.2s, box-shadow 0.2s;
-    box-shadow: 0 2px 14px rgba(0,0,0,0.25);
-}
-.theme-toggle-btn:hover {
-    transform: scale(1.1);
-    box-shadow: 0 4px 22px rgba(0,0,0,0.35);
-}
 
 /* ── Back to Top ── */
 .back-to-top {
@@ -2734,38 +2634,6 @@ body.light-mode .side-foot-item kbd {
 /* ==================================================================
    PR#2 · Signal — AI 摘要前置 + 6 軸分數條 + 原文摘要 <details>
    ================================================================== */
-.zh-summary-block.zh-summary-lead {
-    margin: 4px 0 10px;
-    padding: 10px 12px;
-    border-left: 3px solid var(--purple-line, rgba(139, 92, 246, 0.35));
-    background: linear-gradient(
-        90deg,
-        rgba(139, 92, 246, 0.06) 0%,
-        rgba(139, 92, 246, 0.01) 100%
-    );
-    border-radius: 4px 8px 8px 4px;
-    font-size: 0.92rem;
-    line-height: 1.55;
-}
-.zh-summary-block.zh-summary-lead .zh-label {
-    display: block;
-    font-size: 0.72rem;
-    letter-spacing: 0.04em;
-    color: var(--purple-ink, #a78bfa);
-    margin-bottom: 4px;
-    opacity: 0.85;
-}
-.zh-summary-block.zh-summary-lead .zh-summary-text {
-    color: var(--text-color);
-}
-body.light-mode .zh-summary-block.zh-summary-lead {
-    background: linear-gradient(
-        90deg,
-        rgba(91, 79, 201, 0.05) 0%,
-        rgba(91, 79, 201, 0.01) 100%
-    );
-}
-
 /* Signal 6 軸：緊貼 venue badge 下方 */
 .signal-block {
     margin: 6px 0 8px;
@@ -2830,55 +2698,6 @@ body.light-mode .zh-summary-block.zh-summary-lead {
 }
 body.light-mode .signal-axis .sa-track {
     background: rgba(91, 79, 201, 0.08);
-}
-
-/* <details> 原文摘要：預設收合，點擊展開 */
-details.summary-collapse-wrapper {
-    margin: 8px 0 4px;
-    font-size: 0.82rem;
-    color: var(--sidebar-text, #a2acd0);
-}
-details.summary-collapse-wrapper > summary.summary-toggle-btn {
-    list-style: none;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 0.72rem;
-    letter-spacing: 0.02em;
-    color: var(--purple-ink, #a78bfa);
-    background: transparent;
-    user-select: none;
-    opacity: 0.8;
-}
-details.summary-collapse-wrapper > summary.summary-toggle-btn::-webkit-details-marker { display: none; }
-details.summary-collapse-wrapper > summary.summary-toggle-btn::before {
-    content: '▸';
-    display: inline-block;
-    font-size: 0.68rem;
-    transition: transform 0.2s ease;
-}
-details[open].summary-collapse-wrapper > summary.summary-toggle-btn::before {
-    transform: rotate(90deg);
-}
-details.summary-collapse-wrapper > summary.summary-toggle-btn:hover {
-    opacity: 1;
-    background: var(--purple-soft, rgba(139, 92, 246, 0.08));
-}
-details.summary-collapse-wrapper .paper-summary {
-    margin: 8px 0 0;
-    padding: 8px 10px;
-    background: rgba(255, 255, 255, 0.02);
-    border-left: 2px solid var(--side-line, rgba(255, 255, 255, 0.06));
-    border-radius: 0 4px 4px 0;
-    font-size: 0.82rem;
-    line-height: 1.55;
-    color: var(--sidebar-text, #a2acd0);
-}
-body.light-mode details.summary-collapse-wrapper .paper-summary {
-    background: rgba(20, 25, 48, 0.02);
 }
 
 /* ==================================================================

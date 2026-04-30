@@ -19,7 +19,6 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from huggingface_hub import InferenceClient
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -173,7 +172,6 @@ class LRUStore:
 _paper_store = LRUStore("papers", maxsize=16, ttl=3600, persist=False)
 _s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600)
 _pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600)
-_summary_store = LRUStore("summary", maxsize=5000, ttl=0)
 
 
 # ── HTTP client 單例 ─────────────────────────────────────────────
@@ -196,7 +194,7 @@ def _client() -> httpx.AsyncClient:
 async def _flush_task():
     while True:
         await asyncio.sleep(60)
-        for s in (_s2_store, _pwc_store, _summary_store):
+        for s in (_s2_store, _pwc_store):
             s.flush()
 
 
@@ -207,7 +205,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         task.cancel()
-        for s in (_s2_store, _pwc_store, _summary_store):
+        for s in (_s2_store, _pwc_store):
             s.flush()
         if _http_client is not None:
             await _http_client.aclose()
@@ -229,6 +227,9 @@ class HeadersMiddleware(BaseHTTPMiddleware):
             elif path.endswith((".woff2", ".woff", ".ttf", ".png", ".jpg", ".webp")):
                 # 字型 / 圖檔極少變更，長快取
                 response.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+            elif path.endswith("/disciplines.js"):
+                # disciplines.js（~97KB 領域字典）極少更新，7 天 + revalidate
+                response.headers["Cache-Control"] = "public, max-age=604800, must-revalidate"
             elif path.endswith((".css", ".js", ".svg")):
                 # CSS / JS：短快取 + must-revalidate，瀏覽器以 ETag/Last-Modified 比對 304
                 response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
@@ -396,6 +397,8 @@ async def get_papers(request: Request, max_results: int = 1000, days: int = 7, d
 
 
 _trending_store = LRUStore("trending", maxsize=8, ttl=3 * 3600, persist=False)
+_trending_etag: dict[str, str] = {}
+_pwc_etag: dict[str, str] = {}
 
 
 async def _fetch_hf_daily(days: int = 7) -> list[dict[str, Any]]:
@@ -438,17 +441,28 @@ async def _fetch_hf_daily(days: int = 7) -> list[dict[str, Any]]:
 
 
 @app.get("/api/trending")
-async def get_trending(source: str = "hf_daily", days: int = 7):
+async def get_trending(request: Request, source: str = "hf_daily", days: int = 7):
     cache_key = f"{source}:{days}"
     cached = _trending_store.get(cache_key)
     if cached is not None:
+        etag = _trending_etag.get(cache_key)
+        if etag and request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
+        if etag:
+            body = _json.dumps({"papers": cached, "source": source}, ensure_ascii=False).encode("utf-8")
+            return Response(content=body, media_type="application/json",
+                            headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
         return {"papers": cached, "source": source}
     if source == "hf_daily":
         papers = await _fetch_hf_daily(days)
     else:
         raise HTTPException(status_code=400, detail=f"unknown source: {source}")
     _trending_store.set(cache_key, papers)
-    return {"papers": papers, "source": source}
+    body = _json.dumps({"papers": papers, "source": source}, ensure_ascii=False).encode("utf-8")
+    etag = _make_etag(body)
+    _trending_etag[cache_key] = etag
+    return Response(content=body, media_type="application/json",
+                    headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
 
 
 @app.get("/api/search")
@@ -568,7 +582,7 @@ async def _fetch_pwc_one(arxiv_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/pwc")
-async def get_pwc(arxiv_ids: str):
+async def get_pwc(request: Request, arxiv_ids: str):
     ids = [a.strip() for a in arxiv_ids.split(",") if a.strip()]
 
     missing = [a for a in ids if _pwc_store.get(a) is None]
@@ -587,98 +601,13 @@ async def get_pwc(arxiv_ids: str):
         v = _pwc_store.get(a)
         if v:
             out[a] = {"github_url": v.get("github_url"), "stars": v.get("stars", 0)}
-    return {"results": out}
 
-
-# ── Google Translate proxy（避免前端直接呼叫外部）────────────────
-class TranslateRequest(BaseModel):
-    text: str
-    target: str = "zh-TW"
-
-
-@app.post("/api/translate")
-async def translate(req: TranslateRequest):
-    text = (req.text or "").strip()
-    if not text:
-        return {"translated": ""}
-    short = text[:1000]
-    url = (
-        "https://translate.googleapis.com/translate_a/single?client=gtx"
-        f"&sl=en&tl={urllib.parse.quote(req.target)}&dt=t&q={urllib.parse.quote(short)}"
-    )
-    try:
-        r = await _client().get(url, timeout=10.0)
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail="translate failed")
-        data = r.json()
-        translated = "".join(item[0] for item in (data[0] or []) if item and item[0])
-        return {"translated": translated}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning("translate proxy failed: %s", e)
-        raise HTTPException(status_code=502, detail="translate upstream failed")
-
-
-# ── HuggingFace Gemma 中文摘要 ────────────────────────────────────
-_hf_client: InferenceClient | None = None
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HF_MODEL = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-72B-Instruct-Turbo")
-HF_PROVIDER = os.environ.get("HF_PROVIDER") or "together"
-
-
-def _build_summarize_prompt(role: str) -> str:
-    return (
-        f"你是一位{role}。請根據以下論文摘要，用繁體中文輸出結構化重點分析。"
-        "嚴格按照以下格式輸出，每個項目用一到兩句話，不要多餘說明：\n\n"
-        "🔍 核心問題：\n"
-        "⚙️ 提出方法：\n"
-        "🏆 主要貢獻：\n"
-        "📊 實驗結果：\n\n"
-        "論文摘要：\n"
-    )
-
-
-class SummarizeRequest(BaseModel):
-    arxiv_id: str
-    abstract: str
-    discipline: str = DEFAULT_DISCIPLINE
-
-
-def _blocking_summarize(text: str, role: str) -> str:
-    global _hf_client
-    if _hf_client is None:
-        _hf_client = InferenceClient(token=HF_TOKEN, provider=HF_PROVIDER)
-    resp = _hf_client.chat.completions.create(
-        model=HF_MODEL,
-        messages=[{"role": "user", "content": _build_summarize_prompt(role) + text}],
-        max_tokens=300,
-        temperature=0.3,
-    )
-    return resp.choices[0].message.content.strip()
-
-
-@app.post("/api/summarize")
-async def summarize(req: SummarizeRequest):
-    if not HF_TOKEN:
-        raise HTTPException(status_code=503, detail="HF_TOKEN not set")
-
-    disc = _discipline(req.discipline)
-    # 摘要快取加上 discipline 前綴，避免不同領域共用同一份摘要
-    cache_key = f"{disc['cat']}:{req.arxiv_id}"
-    cached = _summary_store.get(cache_key)
-    if cached is not None:
-        return {"summary": cached}
-
-    text = req.abstract[:2000]
-    try:
-        summary = await asyncio.to_thread(_blocking_summarize, text, disc["role"])
-    except Exception as e:
-        logger.error("summarize failed: %s", e)
-        raise HTTPException(status_code=502, detail="summarization upstream failed")
-
-    _summary_store.set(cache_key, summary)
-    return {"summary": summary}
+    body = _json.dumps({"results": out}, ensure_ascii=False).encode("utf-8")
+    etag = _make_etag(body)
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
+    return Response(content=body, media_type="application/json",
+                    headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
 
 
 @app.get("/api/disciplines")

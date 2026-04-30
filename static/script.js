@@ -634,9 +634,9 @@ async function fetchPapers() {
     startLoaderMessages();
 
     try {
-        // 200 篇足夠 7-day 視窗（單一領域日均 < 30 篇），相較 1000 後端 arXiv proxy 快數倍
+        // 50 篇對 7-day 視窗已足夠（單一領域日均 < 10 篇），縮短上游解析與 JSON 載荷
         const disc = ACTIVE_DISCIPLINE?.id || 'cv';
-        const res = await fetch(`/api/papers?max_results=200&discipline=${encodeURIComponent(disc)}`);
+        const res = await fetch(`/api/papers?max_results=50&discipline=${encodeURIComponent(disc)}`);
         if (!res.ok) throw new Error('Failed to fetch data');
         const data = await res.json();
         allPapers = indexPapers(data.papers);
@@ -1599,7 +1599,7 @@ function handleSearchInput() {
         filterPapers();
         return;
     }
-    searchDebounceTimer = setTimeout(() => searchAllPapers(query), 500);
+    searchDebounceTimer = setTimeout(() => searchAllPapers(query), 250);
 }
 
 // ── 模糊主題匹配（由 applyDiscipline 填入）─────────────────────
