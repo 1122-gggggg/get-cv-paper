@@ -627,25 +627,50 @@ function stopLoaderMessages() {
     loaderMsgInterval = null;
 }
 
+const PAPERS_SWR_KEY = 'visionary_papers_swr_v1';
+const PAPERS_SWR_MAX_AGE = 30 * 60 * 1000; // 30 分鐘內 SWR 命中
+
 async function fetchPapers() {
     papersGrid.classList.add('hidden');
     noResults.classList.add('hidden');
     loader.classList.remove('hidden');
     startLoaderMessages();
 
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    const swrKey = `${PAPERS_SWR_KEY}:${disc}`;
+
+    // SWR：先用快取秒開（bypass loader 直接渲染）
+    let usedCache = false;
     try {
-        // 50 篇對 7-day 視窗已足夠（單一領域日均 < 10 篇），縮短上游解析與 JSON 載荷
-        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+        const cached = localStorage.getItem(swrKey);
+        if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.papers && (Date.now() - (parsed.t || 0) < PAPERS_SWR_MAX_AGE)) {
+                allPapers = indexPapers(parsed.papers);
+                usedCache = true;
+                await filterPapers();
+                scheduleBadgeUpdate();
+            }
+        }
+    } catch (e) { /* 快取壞了沒關係，照常 fetch */ }
+
+    try {
         const res = await fetch(`/api/papers?max_results=50&discipline=${encodeURIComponent(disc)}`);
         if (!res.ok) throw new Error('Failed to fetch data');
         const data = await res.json();
+        try {
+            localStorage.setItem(swrKey, JSON.stringify({ t: Date.now(), papers: data.papers }));
+        } catch (e) { /* localStorage 滿了也不致命 */ }
         allPapers = indexPapers(data.papers);
-        await filterPapers();           // 第一頁立即顯示
-        scheduleBadgeUpdate();          // 引用 / venue badge 在 idle 時補上，不阻塞首屏
+        await filterPapers();
+        scheduleBadgeUpdate();
     } catch (e) {
-        console.error(e);
-        alert('獲取論文失敗，請稍後再試。 Error: ' + e.message);
-        loader.classList.add('hidden');
+        if (!usedCache) {
+            console.error(e);
+            alert('獲取論文失敗，請稍後再試。 Error: ' + e.message);
+            loader.classList.add('hidden');
+        }
+        // 已用快取就吞掉錯誤，下次重整再試
     } finally {
         stopLoaderMessages();
     }

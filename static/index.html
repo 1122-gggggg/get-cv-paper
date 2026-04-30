@@ -14,6 +14,8 @@
     <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap"></noscript>
     <link rel="stylesheet" href="/static/style.css" fetchpriority="high">
     <link rel="stylesheet" href="/static/washi.css" fetchpriority="high">
+    <!-- 預先發 /api/papers 預設 cv 領域，與 CSS/JS 平行下載，省 1 RTT -->
+    <link rel="preload" as="fetch" href="/api/papers?max_results=50&amp;discipline=cv" fetchpriority="high">
     <script src="/static/disciplines.js" defer></script>
     <script src="/static/auth.js" defer></script>
     <script src="/static/script.js" defer></script>
