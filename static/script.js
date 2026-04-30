@@ -721,22 +721,20 @@ function stopLoaderMessages() {
 }
 
 async function fetchPapers() {
-    // Show loader
     papersGrid.classList.add('hidden');
     noResults.classList.add('hidden');
     loader.classList.remove('hidden');
     startLoaderMessages();
 
     try {
-        // 一次拿1000篇(大約一週的量)，後端已有快取機制
+        // 200 篇足夠 7-day 視窗（單一領域日均 < 30 篇），相較 1000 後端 arXiv proxy 快數倍
         const disc = ACTIVE_DISCIPLINE?.id || 'cv';
-        const res = await fetch(`/api/papers?max_results=1000&discipline=${encodeURIComponent(disc)}`);
+        const res = await fetch(`/api/papers?max_results=200&discipline=${encodeURIComponent(disc)}`);
         if (!res.ok) throw new Error('Failed to fetch data');
         const data = await res.json();
         allPapers = indexPapers(data.papers);
-        filterPapers(); // Auto filter after fetch
-        // 背景抓 S2 venue + 引用數，完成後重新渲染以顯示出處
-        fetchCitationCounts(allPapers).then(() => renderPapers(currentFilteredPapers, lastCustomTitle));
+        await filterPapers();           // 第一頁立即顯示
+        scheduleBadgeUpdate();          // 引用 / venue badge 在 idle 時補上，不阻塞首屏
     } catch (e) {
         console.error(e);
         alert('獲取論文失敗，請稍後再試。 Error: ' + e.message);
@@ -744,6 +742,65 @@ async function fetchPapers() {
     } finally {
         stopLoaderMessages();
     }
+}
+
+// 首屏渲染後在 idle 階段補引用數 + 在原地更新 badge（避免重 render 整個網格）
+function scheduleBadgeUpdate() {
+    const work = async () => {
+        if (!currentFilteredPapers?.length) return;
+        // 只抓當前已渲染卡片對應的 paper（最多 currentFilteredPapers.length，但只更新可見卡片）
+        const visibleCards = papersGrid.querySelectorAll('.paper-card');
+        const urlSet = new Set(Array.from(visibleCards, c => c.dataset.url));
+        const target = currentFilteredPapers.filter(p => urlSet.has(p.url));
+        if (!target.length) return;
+        await fetchCitationCounts(target);
+        for (const card of visibleCards) {
+            const p = currentFilteredPapers.find(x => x.url === card.dataset.url);
+            if (p) updateCardBadgesInPlace(card, p);
+        }
+    };
+    if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(() => work(), { timeout: 1500 });
+    } else {
+        setTimeout(work, 50);
+    }
+}
+
+// 共用 badge 渲染：buildCard 與 idle 補強都呼叫這個，避免重複規則漂移
+function populateBadgeSlot(badgeSlot, paper) {
+    if (!badgeSlot) return;
+    badgeSlot.innerHTML = '';
+    const citCount = getCitationCount(paper.url);
+    const inflCount = getInfluentialCitations(paper.url);
+    const refCount = getRefCount(paper.url);
+    const speed = getCitationSpeed(paper);
+    const h5 = getVenueH5(paper);
+    const items = [];
+    if (citCount >= 0)         items.push(['citation-badge', `📈 ${citCount} 引用`, null]);
+    if (inflCount > 0)         items.push(['influential-badge', `💡 ${inflCount} 高影響`, '高影響引用：被後續研究大量採用']);
+    if (refCount > 100)        items.push(['survey-badge', '📚 綜述', `引用文獻數 ${refCount}，可能為綜述論文`]);
+    if (speed >= 2)            items.push(['speed-badge', `🚀 ${speed >= 10 ? speed.toFixed(0) : speed.toFixed(1)}/月`, '引用速度：每月新增的引用數']);
+    if (h5 >= 100)             items.push(['h5-badge', `h5·${h5}`, 'Google Scholar h5-index：期刊/會議近 5 年影響力指標']);
+    if (paper.hf_upvotes >= 5) items.push(['hf-badge', `🤗 ${paper.hf_upvotes}`, 'HuggingFace Daily Papers 社群 upvote 數']);
+    for (const [cls, txt, title] of items) {
+        const s = document.createElement('span');
+        s.className = cls;
+        s.textContent = txt;
+        if (title) s.title = title;
+        badgeSlot.appendChild(s);
+    }
+}
+
+// 在原地更新 venue / citation badge，不重 render 整個網格
+function updateCardBadgesInPlace(card, paper) {
+    const existingVenue = card.querySelector('.venue-badge');
+    const venue = detectVenue(paper);
+    if (venue && existingVenue) {
+        existingVenue.style.setProperty('--venue-color', venue.color);
+        existingVenue.setAttribute('data-venue', venue.label);
+        existingVenue.textContent = venue.label;
+    }
+    populateBadgeSlot(card.querySelector('.badge-slot'), paper);
 }
 
 function goToPage(page) {
@@ -1004,59 +1061,8 @@ function buildCard(paper, index) {
     // Footer
     card.querySelector('.paper-date').textContent = paper.published;
 
-    // Badges（引用、高影響、綜述）
-    const badgeSlot = card.querySelector('.badge-slot');
-    const citCount = getCitationCount(paper.url);
-    const inflCount = getInfluentialCitations(paper.url);
-    const refCount = getRefCount(paper.url);
-    const badgeFrag = document.createDocumentFragment();
-    if (citCount >= 0) {
-        const s = document.createElement('span');
-        s.className = 'citation-badge';
-        s.textContent = `📈 ${citCount} 引用`;
-        badgeFrag.appendChild(s);
-    }
-    if (inflCount > 0) {
-        const s = document.createElement('span');
-        s.className = 'influential-badge';
-        s.title = '高影響引用：被後續研究大量採用';
-        s.textContent = `💡 ${inflCount} 高影響`;
-        badgeFrag.appendChild(s);
-    }
-    if (refCount > 100) {
-        const s = document.createElement('span');
-        s.className = 'survey-badge';
-        s.title = `引用文獻數 ${refCount}，可能為綜述論文`;
-        s.textContent = '📚 綜述';
-        badgeFrag.appendChild(s);
-    }
-    // 引用速度（快速竄紅指標）
-    const speed = getCitationSpeed(paper);
-    if (speed >= 2) {
-        const s = document.createElement('span');
-        s.className = 'speed-badge';
-        s.title = '引用速度：每月新增的引用數';
-        s.textContent = `🚀 ${speed >= 10 ? speed.toFixed(0) : speed.toFixed(1)}/月`;
-        badgeFrag.appendChild(s);
-    }
-    // 頂會 h5 指標
-    const h5 = getVenueH5(paper);
-    if (h5 >= 100) {
-        const s = document.createElement('span');
-        s.className = 'h5-badge';
-        s.title = 'Google Scholar h5-index：期刊/會議近 5 年影響力指標';
-        s.textContent = `h5·${h5}`;
-        badgeFrag.appendChild(s);
-    }
-    // HF Daily 社群 upvote
-    if (paper.hf_upvotes >= 5) {
-        const s = document.createElement('span');
-        s.className = 'hf-badge';
-        s.title = 'HuggingFace Daily Papers 社群 upvote 數';
-        s.textContent = `🤗 ${paper.hf_upvotes}`;
-        badgeFrag.appendChild(s);
-    }
-    badgeSlot.replaceWith(badgeFrag);
+    // Badges（引用、高影響、綜述、引用速度、h5、HF）
+    populateBadgeSlot(card.querySelector('.badge-slot'), paper);
 
     // GitHub
     const pwcData = getPwcData(paper.url);
@@ -1525,10 +1531,60 @@ function filterHfDailyByDiscipline(papers) {
     return hit.length > 0 ? hit : papers;
 }
 
+// 收藏夾資料來源：union 所有已知論文池
+// 修 bug：原本 pool=allPapers（7 天窗），若使用者從 HF Daily / 頂會 / 全網搜尋按下星星，
+// 那篇論文不在 7 天窗，切到收藏夾會看到 0 篇。
+function _favoritesPool() {
+    const known = new Map();
+    const sources = [allPapers, monthPapers, _hfDailyCache];
+    for (const arr of sources) {
+        if (!arr) continue;
+        for (const p of arr) if (p && p.url) known.set(p.url, p);
+    }
+    const list = [];
+    for (const url of favorites) {
+        const p = known.get(url);
+        if (p) list.push(p);
+        // 完全沒收錄（例如從全網搜尋結果按下星星）→ 補 stub，至少能顯示連結與標題
+        else list.push({
+            url,
+            title: (url.split('/abs/')[1] || url),
+            summary: '',
+            authors: [],
+            published: '',
+        });
+    }
+    return indexPapers(list);
+}
+
 async function filterPapers() {
     currentPage = 1;
     const query = searchInput.value.toLowerCase().trim();
     const sortValue = currentSortValue;
+
+    // 收藏夾：使用所有已知來源 union，不受 7-day 視窗限制
+    if (currentCategory === 'favorites') {
+        let papers = _favoritesPool();
+        if (query) {
+            papers = papers.filter(p => {
+                const tLc = p._titleLc ?? (p.title || '').toLowerCase();
+                const sLc = p._summaryLc ?? (p.summary || '').toLowerCase();
+                const aLc = p._authorsLc ?? (p.authors || []).join(' ').toLowerCase();
+                return tLc.includes(query) || sLc.includes(query) || aLc.includes(query);
+            });
+        }
+        if (sortValue === 'citations' || sortValue === 'hot_week' || sortValue === 'hot_month') {
+            await fetchCitationCounts(papers);
+            papers.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
+        } else if (sortValue === 'signal') {
+            await fetchCitationCounts(papers);
+            papers.sort((a, b) => computeSignal(b).score - computeSignal(a).score);
+        } else {
+            papers.sort((a, b) => (b.published || '').localeCompare(a.published || ''));
+        }
+        renderPapers(papers, `⭐ 我的收藏（${papers.length} 篇）`);
+        return;
+    }
 
     // HF Daily：由後端拉 HuggingFace 每日精選
     if (currentCategory === 'hf_daily') {

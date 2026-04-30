@@ -226,6 +226,12 @@ class HeadersMiddleware(BaseHTTPMiddleware):
             # sw.js 不得長快取，否則新版 SW 卡住
             if path.endswith("/sw.js"):
                 response.headers["Cache-Control"] = "no-cache"
+            elif path.endswith((".woff2", ".woff", ".ttf", ".png", ".jpg", ".webp")):
+                # 字型 / 圖檔極少變更，長快取
+                response.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+            elif path.endswith((".css", ".js", ".svg")):
+                # CSS / JS：短快取 + must-revalidate，瀏覽器以 ETag/Last-Modified 比對 304
+                response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
             else:
                 response.headers["Cache-Control"] = "public, max-age=86400"
         response.headers.setdefault("X-Content-Type-Options", "nosniff")

@@ -160,8 +160,36 @@ body.theme-washi .side-brand {
   gap: 6px;
   padding: 0;
 }
+/* hanko 印 — 重新利用 .brand-mark 作為紅方印章 */
+body.theme-washi .side-brand {
+  flex-direction: row !important;
+  align-items: center !important;
+  flex-wrap: wrap;
+  gap: 8px !important;
+}
 body.theme-washi .side-brand .brand-mark {
-  display: none; /* 替代為 hanko；logo 以 Serif 字樣呈現 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--seal);
+  color: var(--paper);
+  font-size: 0; /* 隱藏原本的 emoji */
+  border-radius: 2px;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.15) inset, 0 0 0 1px rgba(255,255,255,0.05) inset;
+  transform: rotate(-3deg);
+  flex-shrink: 0;
+  user-select: none;
+  font-feature-settings: normal;
+}
+body.theme-washi .side-brand .brand-mark::before {
+  content: '印';
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0;
 }
 body.theme-washi .logo {
   font-family: var(--font-display);
@@ -183,9 +211,10 @@ body.theme-washi .logo span {
   font-size: inherit;
 }
 
-/* JP 副標 (学術・論文追跡) */
+/* JP 副標 (学術・論文追跡) — 整行另起，跳到 hanko + logo 下方 */
 body.theme-washi .side-brand::after {
   content: '学術・論文追跡 · v2';
+  flex-basis: 100%;
   font-family: var(--font-soft);
   font-size: 11px;
   letter-spacing: 0.3em;
@@ -1563,4 +1592,266 @@ body.theme-washi:not(.light-mode) {
   background-image:
     radial-gradient(rgba(243,234,211,0.035) 1px, transparent 1.5px),
     radial-gradient(rgba(243,234,211,0.025) 1px, transparent 1.5px);
+}
+
+/* ============================================================
+   v3 polish — hanko, watermark, micro-interactions
+   ============================================================ */
+
+/* Page title hanko — "今" 紅方印 在主標旁 */
+body.theme-washi .page-title-block .page-title::after {
+  content: '今';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 4px;
+  background: var(--seal);
+  color: var(--paper);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 2px;
+  transform: translateY(-2px) rotate(3deg);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.15) inset, 0 0 0 1px rgba(255,255,255,0.06) inset;
+  vertical-align: middle;
+  user-select: none;
+}
+
+/* Empty state — 漢字 縦書 watermark + 望遠鏡 dashed mustard ring */
+body.theme-washi .no-results {
+  position: relative;
+  padding: 64px 20px 56px !important;
+  overflow: hidden;
+}
+body.theme-washi .no-results::before {
+  content: '学術 · 論文 · 研究 · 考察';
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  writing-mode: vertical-rl;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: 0.6em;
+  color: var(--ink);
+  opacity: 0.06;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+body.theme-washi .no-results-icon {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border: 2px dashed var(--mustard);
+  border-radius: 50%;
+  background: var(--mustard-soft);
+  font-size: 40px !important;
+  position: relative;
+  margin: 0 auto;
+}
+body.theme-washi .no-results-icon::after {
+  content: '空';
+  position: absolute;
+  bottom: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  background: var(--seal);
+  color: var(--paper);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  transform: rotate(-6deg);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.18) inset;
+  user-select: none;
+}
+
+/* Card hover — 更明確的 lift + mustard 邊 + 內側微紙紋 */
+body.theme-washi .paper-card {
+  transition:
+    transform .28s var(--ease-brand),
+    box-shadow .28s var(--ease-brand),
+    border-color .28s var(--ease-brand);
+}
+body.theme-washi .paper-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--mustard) !important;
+}
+
+/* Card focus-within ring（鍵盤導覽友善） */
+body.theme-washi .paper-card:focus-within {
+  border-color: var(--mustard) !important;
+  box-shadow: var(--shadow-card-hover), 0 0 0 2px var(--mustard-wash);
+}
+
+/* Filter chip：active 時加上 2px offset 印章感陰影 */
+body.theme-washi .category-btn.active {
+  box-shadow: 2px 2px 0 var(--mustard-deep);
+  transform: translate(-1px, -1px);
+}
+body.theme-washi .category-btn.active:hover {
+  box-shadow: 3px 3px 0 var(--mustard-deep);
+  transform: translate(-2px, -2px);
+}
+
+/* Sort trigger / per-page select 與 search 對齊高度 + hover 微提 */
+body.theme-washi .sort-trigger,
+body.theme-washi .per-page-select {
+  transition: all .18s var(--ease-brand);
+}
+body.theme-washi .sort-trigger:hover,
+body.theme-washi .per-page-select:hover {
+  border-color: var(--mustard);
+  background: var(--mustard-wash);
+}
+
+/* Note save button 已有 2px offset，補強 active pressed 感 */
+body.theme-washi .note-save-btn:active {
+  transform: translate(0, 0);
+  box-shadow: 0 0 0 var(--mustard-deep);
+}
+body.theme-washi .no-results-action:active {
+  transform: translate(0, 0);
+  box-shadow: 0 0 0 var(--mustard-deep);
+}
+
+/* Loader spinner — 補強：環形漸層更明確 */
+body.theme-washi .spinner {
+  width: 44px;
+  height: 44px;
+  position: relative;
+}
+
+/* Top progress bar 更醒目 — 加上微脈動 */
+body.theme-washi .top-progress-bar {
+  background: linear-gradient(90deg, var(--mustard) 0%, var(--persimmon) 50%, var(--vermillion) 100%) !important;
+  height: 2px;
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Dark mode：hanko 顏色微調為 鎌倉朱紅 */
+body.theme-washi:not(.light-mode) .side-brand .brand-mark,
+body.theme-washi:not(.light-mode) .page-title-block .page-title::after,
+body.theme-washi:not(.light-mode) .no-results-icon::after {
+  background: #c75250;
+}
+body.theme-washi:not(.light-mode) .no-results-icon {
+  background: rgba(230,180,34,0.08);
+  border-color: var(--mustard);
+}
+body.theme-washi:not(.light-mode) .no-results::before {
+  color: var(--ink);
+  opacity: 0.05;
+}
+
+/* 行動裝置：卡片 hover lift 縮小避免 sticky hover */
+@media (hover: none) {
+  body.theme-washi .paper-card:hover {
+    transform: none;
+    box-shadow: var(--shadow-card);
+  }
+}
+
+/* Reduced motion 尊重系統設定 */
+@media (prefers-reduced-motion: reduce) {
+  body.theme-washi *,
+  body.theme-washi *::before,
+  body.theme-washi *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+  body.theme-washi .paper-card:hover { transform: none; }
+}
+
+/* ── Loader 容器：搭配 skeleton 改為靠上排列 ───────────── */
+body.theme-washi .loader-container {
+  height: auto;
+  min-height: 30vh;
+  justify-content: flex-start;
+  padding-top: 1.5rem;
+  width: 100%;
+  align-self: stretch;
+}
+body.theme-washi .loader-container .spinner {
+  width: 36px;
+  height: 36px;
+}
+body.theme-washi .loader-container p {
+  margin-top: 0.85rem;
+  font-size: 0.85rem;
+}
+
+/* ── Skeleton 占位卡片：首屏感知速度 ─────────────────────── */
+body.theme-washi .skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+  padding: 0 0.25rem;
+  width: 100%;
+}
+body.theme-washi .skeleton-card {
+  background: var(--washi-paper, #f9f4e7);
+  border: 1px solid rgba(120, 100, 70, 0.12);
+  border-radius: 14px;
+  padding: 1.5rem 1.4rem;
+  min-height: 220px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  position: relative;
+  overflow: hidden;
+}
+body.theme-washi .skeleton-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.55) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: sk-shimmer 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+body.theme-washi .sk-line,
+body.theme-washi .sk-block {
+  background: rgba(120, 100, 70, 0.14);
+  border-radius: 4px;
+}
+body.theme-washi .sk-line { height: 14px; margin-bottom: 10px; }
+body.theme-washi .sk-title { height: 22px; width: 78%; margin-bottom: 14px; }
+body.theme-washi .sk-author { width: 48%; }
+body.theme-washi .sk-tag { width: 32%; height: 12px; margin-top: 6px; }
+body.theme-washi .sk-block {
+  height: 64px;
+  margin: 14px 0 12px;
+  border-radius: 8px;
+  background: rgba(120, 100, 70, 0.09);
+}
+@keyframes sk-shimmer {
+  0%   { background-position: 220% 0; }
+  100% { background-position: -120% 0; }
+}
+@media (prefers-color-scheme: dark) {
+  body.theme-washi .skeleton-card {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+  body.theme-washi .sk-line,
+  body.theme-washi .sk-block { background: rgba(255, 255, 255, 0.08); }
+  body.theme-washi .skeleton-card::after {
+    background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.08) 50%, transparent 70%);
+    background-size: 220% 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.theme-washi .skeleton-card::after { animation: none; opacity: 0.5; }
 }

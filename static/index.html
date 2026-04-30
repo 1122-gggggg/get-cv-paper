@@ -10,8 +10,8 @@
     <!-- Google Fonts：preload + 非阻塞套用 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;500;700;900&family=Noto+Serif+TC:wght@400;500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;500;700;900&family=Noto+Serif+TC:wght@400;500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap"></noscript>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap"></noscript>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/washi.css">
     <script src="/static/disciplines.js" defer></script>
@@ -143,6 +143,14 @@
             <div id="loader" class="loader-container">
                 <div class="spinner"></div>
                 <p id="loaderText">正在自動為您抓取最新論文...</p>
+                <div class="skeleton-grid" aria-hidden="true">
+                    <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
+                    <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
+                    <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
+                    <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
+                    <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
+                    <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
+                </div>
             </div>
 
             <div id="papersGrid" class="papers-grid hidden">
@@ -162,18 +170,18 @@
                     </button>
                     <div>
                         <span class="venue-badge-slot"></span>
+                        <h2 class="paper-title"><a class="paper-title-link" target="_blank" rel="noopener noreferrer"></a></h2>
+                        <p class="paper-authors"></p>
                         <div class="signal-block" hidden>
                             <div class="signal-head">
                                 <span class="signal-score">✨ Signal <b class="signal-score-num">–</b></span>
                                 <div class="signal-axes" aria-hidden="true"></div>
                             </div>
                         </div>
-                        <div class="zh-summary-block loading zh-summary-lead">
+                        <div class="zh-summary-block loading">
                             <span class="zh-label">🤖 AI 重點分析</span>
                             <span class="zh-summary-text">分析中…</span>
                         </div>
-                        <h2 class="paper-title"><a class="paper-title-link" target="_blank" rel="noopener noreferrer"></a></h2>
-                        <p class="paper-authors"></p>
                         <div class="paper-tags">
                             <div class="tag-chips"></div>
                             <button class="tag-add-btn" title="新增標籤">＋ 標籤</button>
