@@ -511,7 +511,6 @@ body.theme-washi .container > header::after { content: none !important; display:
 
 /* Auth / data IO chips */
 body.theme-washi .sign-in-btn,
-body.theme-washi .data-io-btn,
 body.theme-washi .sign-out-btn {
   display: inline-flex;
   align-items: center;
@@ -525,8 +524,7 @@ body.theme-washi .sign-out-btn {
   font-family: var(--font-body);
   transition: all .15s var(--ease-brand);
 }
-body.theme-washi .sign-in-btn:hover,
-body.theme-washi .data-io-btn:hover {
+body.theme-washi .sign-in-btn:hover {
   border-color: var(--mustard);
   background: var(--mustard-wash);
   color: var(--ink);

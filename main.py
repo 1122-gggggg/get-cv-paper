@@ -109,6 +109,68 @@ DISCIPLINES: dict[str, dict[str, str]] = {
     "film":        {"cat": "cs.MM",              "name": "電影與媒體",   "role": "電影研究助理"},
     "theater":     {"cat": "cs.HC",              "name": "劇場表演",     "role": "劇場研究助理"},
     "architecture":{"cat": "cs.CG",              "name": "建築學",       "role": "建築研究助理"},
+    # ── 補強：CS 系統與工程相關（多數大學主修）──
+    "softeng":     {"cat": "cs.SE",              "name": "軟體工程",     "role": "軟體工程研究助理"},
+    "networks":    {"cat": "cs.NI",              "name": "網路工程",     "role": "網路研究助理"},
+    "distsys":     {"cat": "cs.DC",              "name": "分散式系統",   "role": "分散式系統研究助理"},
+    "control":     {"cat": "eess.SY",            "name": "控制與系統工程","role": "控制工程研究助理"},
+    "infotheory":  {"cat": "cs.IT",              "name": "資訊理論",     "role": "資訊理論研究助理"},
+    "multimedia":  {"cat": "cs.MM",              "name": "多媒體",       "role": "多媒體研究助理"},
+    # ── 補強：CS 理論 ──
+    "proglang":    {"cat": "cs.PL",              "name": "程式語言",     "role": "程式語言研究助理"},
+    "complexity":  {"cat": "cs.CC",              "name": "計算複雜度",   "role": "計算理論研究助理"},
+    "logic":       {"cat": "cs.LO",              "name": "計算邏輯",     "role": "計算邏輯研究助理"},
+    "gametheory":  {"cat": "cs.GT",              "name": "賽局論",       "role": "賽局論研究助理"},
+    "datastruct":  {"cat": "cs.DS",              "name": "資料結構與演算法","role": "演算法研究助理"},
+    # ── 補強：資料 / 社群 ──
+    "datasci":     {"cat": "stat.ML",            "name": "資料科學",     "role": "資料科學研究助理"},
+    "socialnet":   {"cat": "cs.SI",              "name": "社群網路分析", "role": "社群網路研究助理"},
+    "numerical":   {"cat": "cs.NA",              "name": "數值分析",     "role": "數值分析研究助理"},
+    # ── 補強：數學細分 ──
+    "probability": {"cat": "math.PR",            "name": "機率論",       "role": "機率論研究助理"},
+    "combinatorics":{"cat": "math.CO",           "name": "組合數學",     "role": "組合數學研究助理"},
+    "numbertheory":{"cat": "math.NT",            "name": "數論",         "role": "數論研究助理"},
+    "algebra":     {"cat": "math.AG",            "name": "代數幾何",     "role": "代數幾何研究助理"},
+    "topology":    {"cat": "math.AT",            "name": "拓樸學",       "role": "拓樸學研究助理"},
+    "diffgeom":    {"cat": "math.DG",            "name": "微分幾何",     "role": "微分幾何研究助理"},
+    "analysis":    {"cat": "math.AP",            "name": "分析與偏微方程","role": "數學分析研究助理"},
+    # ── 補強：物理細分 ──
+    "particle":    {"cat": "hep-ph",             "name": "粒子物理",     "role": "粒子物理研究助理"},
+    "hepth":       {"cat": "hep-th",             "name": "高能物理理論", "role": "高能理論研究助理"},
+    "relativity":  {"cat": "gr-qc",              "name": "廣義相對論",   "role": "廣義相對論研究助理"},
+    "nucphys":     {"cat": "nucl-th",            "name": "核物理理論",   "role": "核物理研究助理"},
+    "plasma":      {"cat": "physics.plasm-ph",   "name": "電漿物理",     "role": "電漿物理研究助理"},
+    "optics":      {"cat": "physics.optics",     "name": "光學",         "role": "光學研究助理"},
+    "biophysics":  {"cat": "physics.bio-ph",     "name": "生物物理",     "role": "生物物理研究助理"},
+    # ── 補強：生命科學細分 ──
+    "genomics":    {"cat": "q-bio.GN",           "name": "基因體學",     "role": "基因體學研究助理"},
+    "molbio":      {"cat": "q-bio.MN",           "name": "分子生物",     "role": "分子生物研究助理"},
+    "cellbio":     {"cat": "q-bio.SC",           "name": "細胞生物",     "role": "細胞生物研究助理"},
+    "epidem":      {"cat": "q-bio.PE",           "name": "流行病學",     "role": "流行病學研究助理"},
+    "bioinfo":     {"cat": "q-bio.QM",           "name": "生物資訊",     "role": "生物資訊研究助理"},
+    "neuroai":     {"cat": "q-bio.NC",           "name": "認知與神經 AI","role": "認知科學研究助理"},
+    # ── 補強：金融細分 ──
+    "quantfin":    {"cat": "q-fin.MF",           "name": "計量金融",     "role": "計量金融研究助理"},
+    "finengineer": {"cat": "q-fin.CP",           "name": "金融工程",     "role": "金融工程研究助理"},
+    "riskmgmt":    {"cat": "q-fin.RM",           "name": "風險管理",     "role": "風險管理研究助理"},
+    "tradingstrat":{"cat": "q-fin.TR",           "name": "交易策略",     "role": "交易策略研究助理"},
+    "econometrics":{"cat": "econ.EM",            "name": "計量經濟",     "role": "計量經濟研究助理"},
+    "thecon":      {"cat": "econ.TH",            "name": "理論經濟",     "role": "理論經濟研究助理"},
+    # ── 補強：社會 / 公共領域 ──
+    "intlrelat":   {"cat": "econ.GN",            "name": "國際關係",     "role": "國際關係研究助理"},
+    "publicpolicy":{"cat": "cs.CY",              "name": "公共政策",     "role": "公共政策研究助理"},
+    "socialwork":  {"cat": "cs.CY",              "name": "社會工作",     "role": "社會工作研究助理"},
+    "urbanplan":   {"cat": "physics.geo-ph",     "name": "都市規劃",     "role": "都市規劃研究助理"},
+    # ── 補強：應用科學 / 醫療延伸 ──
+    "foodsci":     {"cat": "q-bio.QM",           "name": "食品科學",     "role": "食品科學研究助理"},
+    "veterinary":  {"cat": "q-bio.TO",           "name": "獸醫學",       "role": "獸醫研究助理"},
+    "therapy":     {"cat": "q-bio.NC",           "name": "復健治療",     "role": "復健治療研究助理"},
+    "audiology":   {"cat": "eess.AS",            "name": "聽力與語言治療","role": "聽語研究助理"},
+    "gerontology": {"cat": "q-bio.PE",           "name": "老人學",       "role": "老人學研究助理"},
+    # ── 補強：藝術 / 設計延伸 ──
+    "gamedesign":  {"cat": "cs.GR",              "name": "遊戲設計",     "role": "遊戲設計研究助理"},
+    "uxdesign":    {"cat": "cs.HC",              "name": "使用者經驗設計","role": "UX 研究助理"},
+    "industdesign":{"cat": "cs.HC",              "name": "工業設計",     "role": "工業設計研究助理"},
 }
 DEFAULT_DISCIPLINE = "cv"
 
@@ -352,32 +414,20 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
 
 
 _papers_etag: dict[str, str] = {}
+_papers_body: dict[str, bytes] = {}
+_papers_inflight: dict[str, asyncio.Future] = {}
+
+_PAPERS_HEADERS = {"Cache-Control": "public, max-age=60, must-revalidate"}
 
 
 def _make_etag(payload: bytes) -> str:
     return 'W/"' + hashlib.md5(payload).hexdigest()[:16] + '"'
 
 
-@app.get("/api/papers")
-async def get_papers(request: Request, max_results: int = 1000, days: int = 7, discipline: str = DEFAULT_DISCIPLINE):
-    if days >= 30 and max_results < 5000:
-        max_results = 5000
-
-    disc = _discipline(discipline)
-    cache_key = f"{disc['cat']}:{days}:{max_results}"
-    cached = _paper_store.get(cache_key)
-    if cached is not None:
-        etag = _papers_etag.get(cache_key)
-        if etag and request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
-        if etag:
-            body = _json.dumps({"papers": cached}, ensure_ascii=False).encode("utf-8")
-            return Response(content=body, media_type="application/json",
-                            headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
-        return {"papers": cached}
-
+async def _build_papers_payload(cat: str, days: int, max_results: int, cache_key: str) -> tuple[bytes, str]:
+    """打 arXiv → 解析 → 序列化一次，body bytes + ETag 快取在記憶體，warm hit 不再重做。"""
     url = (
-        f"{ARXIV_BASE}?search_query=cat:{disc['cat']}"
+        f"{ARXIV_BASE}?search_query=cat:{cat}"
         f"&sortBy=submittedDate&sortOrder=descending&max_results={max_results}"
     )
     try:
@@ -391,9 +441,49 @@ async def get_papers(request: Request, max_results: int = 1000, days: int = 7, d
     _paper_store.set(cache_key, papers)
     body = _json.dumps({"papers": papers}, ensure_ascii=False).encode("utf-8")
     etag = _make_etag(body)
+    _papers_body[cache_key] = body
     _papers_etag[cache_key] = etag
+    return body, etag
+
+
+@app.get("/api/papers")
+async def get_papers(request: Request, max_results: int = 1000, days: int = 7, discipline: str = DEFAULT_DISCIPLINE):
+    if days >= 30 and max_results < 5000:
+        max_results = 5000
+
+    disc = _discipline(discipline)
+    cache_key = f"{disc['cat']}:{days}:{max_results}"
+
+    # warm hit：body bytes 已經序列化好，省 JSON dump
+    body = _papers_body.get(cache_key)
+    etag = _papers_etag.get(cache_key)
+    if body is not None and etag is not None and _paper_store.get(cache_key) is not None:
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, **_PAPERS_HEADERS})
+        return Response(content=body, media_type="application/json",
+                        headers={"ETag": etag, **_PAPERS_HEADERS})
+
+    # single-flight：併發同 key 共享一次 arXiv 拉取
+    inflight = _papers_inflight.get(cache_key)
+    if inflight is not None:
+        body, etag = await inflight
+    else:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        _papers_inflight[cache_key] = fut
+        try:
+            body, etag = await _build_papers_payload(disc["cat"], days, max_results, cache_key)
+            fut.set_result((body, etag))
+        except BaseException as e:
+            fut.set_exception(e)
+            raise
+        finally:
+            _papers_inflight.pop(cache_key, None)
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, **_PAPERS_HEADERS})
     return Response(content=body, media_type="application/json",
-                    headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
+                    headers={"ETag": etag, **_PAPERS_HEADERS})
 
 
 _trending_store = LRUStore("trending", maxsize=8, ttl=3 * 3600, persist=False)
