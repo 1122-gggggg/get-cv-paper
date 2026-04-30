@@ -590,100 +590,7 @@ function makeLRU(key, max) {
     };
 }
 
-// ── 中文摘要系統（Gemma）────────────────────────────────────────
-const ZH_CACHE_KEY = 'zh_summary_v3';
-const zhLRU = makeLRU(ZH_CACHE_KEY, 2000);
-
-const translateQueue = [];
-let translateBusy = false;
-
-function getArxivIdFromUrl(url) {
-    const m = url?.match(/abs\/(\d{4}\.\d+)/);
-    return m ? m[1] : null;
-}
-
-async function fetchSummaryFromGroq(abstract, arxivId) {
-    const res = await fetch('/api/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            arxiv_id: arxivId || 'unknown',
-            abstract,
-            discipline: ACTIVE_DISCIPLINE?.id || 'cv',
-        }),
-    });
-    if (!res.ok) throw new Error('groq error ' + res.status);
-    const data = await res.json();
-    return data.summary;
-}
-
-async function fetchSummaryFallback(text) {
-    const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, target: 'zh-TW' }),
-    });
-    if (!res.ok) throw new Error('translate proxy error');
-    const data = await res.json();
-    return data.translated || '';
-}
-
-async function processTranslateQueue() {
-    if (translateBusy || translateQueue.length === 0) return;
-    translateBusy = true;
-    const { text, cacheKey, arxivId, el } = translateQueue.shift();
-
-    try {
-        const summary = await fetchSummaryFromGroq(text, arxivId);
-        zhLRU.set(cacheKey, summary);
-        scheduleSave(ZH_CACHE_KEY, () => ({ _lru: zhLRU.raw.order, data: zhLRU.raw.data }));
-        el.innerHTML = escapeHtml(summary).replace(/\n/g, '<br>');
-        el.closest('.zh-summary-block').classList.remove('loading');
-    } catch (e) {
-        try {
-            const short = text.length > 600 ? text.substring(0, 600) + '...' : text;
-            const translated = await fetchSummaryFallback(short);
-            zhLRU.set(cacheKey, translated);
-            scheduleSave(ZH_CACHE_KEY, () => ({ _lru: zhLRU.raw.order, data: zhLRU.raw.data }));
-            el.textContent = translated;
-            el.closest('.zh-summary-block').classList.remove('loading');
-        } catch (e2) {
-            el.textContent = '（摘要暫時無法取得）';
-            el.closest('.zh-summary-block').classList.remove('loading');
-        }
-    }
-
-    translateBusy = false;
-    setTimeout(processTranslateQueue, 100);
-}
-
-function queueTranslation(summary, cacheKey, textEl) {
-    const cached = zhLRU.get(cacheKey);
-    if (cached) {
-        textEl.textContent = cached;
-        textEl.closest('.zh-summary-block').classList.remove('loading');
-        return;
-    }
-    const arxivId = getArxivIdFromUrl(cacheKey);
-    translateQueue.push({ text: summary, cacheKey, arxivId, el: textEl });
-    processTranslateQueue();
-}
-
-// IntersectionObserver：卡片進入視野才翻譯
-const translateObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-        if (entry.isIntersecting) {
-            const card = entry.target;
-            const textEl = card.querySelector('.zh-summary-text');
-            if (textEl && !textEl.dataset.queued) {
-                textEl.dataset.queued = '1';
-                queueTranslation(card.dataset.summary, card.dataset.cacheKey, textEl);
-            }
-            translateObserver.unobserve(card);
-        }
-    });
-}, { rootMargin: '200px' });
-
+// ── 摘要：原文直接呈現，不再透過 AI 翻譯 ────────────────────
 const papersGrid = document.getElementById('papersGrid');
 const loader = document.getElementById('loader');
 const searchInput = document.getElementById('searchInput');
@@ -963,16 +870,6 @@ function _bindPapersGridDelegation() {
             return;
         }
 
-        const toggleBtn = e.target.closest('.summary-toggle-btn');
-        if (toggleBtn && toggleBtn.tagName !== 'SUMMARY' && card.contains(toggleBtn)) {
-            e.stopPropagation();
-            const summaryEl = card.querySelector('.paper-summary');
-            if (!summaryEl) return;
-            const isCollapsed = summaryEl.classList.contains('collapsed');
-            summaryEl.classList.toggle('collapsed', !isCollapsed);
-            toggleBtn.textContent = isCollapsed ? '收合摘要 ▴' : '展開原文摘要 ▾';
-            return;
-        }
     });
 }
 
@@ -991,8 +888,6 @@ function buildCard(paper, index) {
     if (!tpl) card.className = 'paper-card';
 
     card.style.animationDelay = `${(index % 20) * 0.03}s`;
-    card.dataset.summary = paper.summary;
-    card.dataset.cacheKey = paper.url;
     card.dataset.url = paper.url;
 
     const isStarred = favorites.has(paper.url);
@@ -1162,7 +1057,6 @@ function renderPapers(papers, customTitle) {
     pagePapers.forEach((paper, index) => {
         const card = buildCard(paper, index);
         frag.appendChild(card);
-        translateObserver.observe(card);
     });
     papersGrid.appendChild(frag);
 
