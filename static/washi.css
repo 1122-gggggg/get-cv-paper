@@ -1555,46 +1555,6 @@ body.theme-washi textarea:focus-visible {
 }
 
 /* ============================================================
-   Dark washi (sumi 墨 on aged paper)
-   ============================================================ */
-body.theme-washi.light-mode,
-body.theme-washi.light-mode .app-shell { /* light already default */ }
-
-body.theme-washi:not(.light-mode) {
-  --paper:        #1c1812;
-  --paper-shade:  #262017;
-  --paper-deep:   #332b1f;
-  --card-bg:      #221d15;
-  --card-border:  #3a3122;
-  --ink:          #f3ead3;
-  --ink-soft:     #d9ceae;
-  --ink-mute:     #9a8c6d;
-  --ink-pale:     #6b6247;
-  --ink-rule:     rgba(243,234,211,0.12);
-  --mustard-soft: #4a3c10;
-  --mustard-wash: rgba(230,180,34,0.15);
-  --persimmon-soft: #4a2a10;
-  --matcha-soft:  #2f3a1a;
-  --indigo-soft:  #1e2a42;
-  --plum-soft:    #3a1f2c;
-}
-body.theme-washi:not(.light-mode) .paper-authors { color: #c5a976; }
-body.theme-washi:not(.light-mode) .zh-summary-block,
-body.theme-washi:not(.light-mode) .zh-summary-block.zh-summary-lead {
-  background: #2e2617;
-  color: var(--ink-soft);
-}
-body.theme-washi:not(.light-mode) .signal-axis .sa-track { background: rgba(243,234,211,0.12); }
-body.theme-washi:not(.light-mode) .bridge-badge { border-color: #6a7ba0; color: #a9bbe0; }
-body.theme-washi:not(.light-mode) .bridge-badge .bridge-others { color: var(--ink-soft); }
-body.theme-washi:not(.light-mode) .hf-badge { background: #4a3c10; color: var(--mustard); }
-body.theme-washi:not(.light-mode) {
-  background-image:
-    radial-gradient(rgba(243,234,211,0.035) 1px, transparent 1.5px),
-    radial-gradient(rgba(243,234,211,0.025) 1px, transparent 1.5px);
-}
-
-/* ============================================================
    v3 polish — hanko, watermark, micro-interactions
    ============================================================ */
 
@@ -1741,21 +1701,6 @@ body.theme-washi .top-progress-bar {
   box-shadow: 0 0 8px var(--accent-glow);
 }
 
-/* Dark mode：hanko 顏色微調為 鎌倉朱紅 */
-body.theme-washi:not(.light-mode) .side-brand .brand-mark,
-body.theme-washi:not(.light-mode) .page-title-block .page-title::after,
-body.theme-washi:not(.light-mode) .no-results-icon::after {
-  background: #c75250;
-}
-body.theme-washi:not(.light-mode) .no-results-icon {
-  background: rgba(230,180,34,0.08);
-  border-color: var(--mustard);
-}
-body.theme-washi:not(.light-mode) .no-results::before {
-  color: var(--ink);
-  opacity: 0.05;
-}
-
 /* 行動裝置：卡片 hover lift 縮小避免 sticky hover */
 @media (hover: none) {
   body.theme-washi .paper-card:hover {
@@ -1839,18 +1784,6 @@ body.theme-washi .sk-block {
 @keyframes sk-shimmer {
   0%   { background-position: 220% 0; }
   100% { background-position: -120% 0; }
-}
-@media (prefers-color-scheme: dark) {
-  body.theme-washi .skeleton-card {
-    background: rgba(255, 255, 255, 0.04);
-    border-color: rgba(255, 255, 255, 0.08);
-  }
-  body.theme-washi .sk-line,
-  body.theme-washi .sk-block { background: rgba(255, 255, 255, 0.08); }
-  body.theme-washi .skeleton-card::after {
-    background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.08) 50%, transparent 70%);
-    background-size: 220% 100%;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   body.theme-washi .skeleton-card::after { animation: none; opacity: 0.5; }

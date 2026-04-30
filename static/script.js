@@ -2434,24 +2434,9 @@ function updateStats() {
 setTimeout(updateStats, 300);
 setInterval(updateStats, 2000);
 
-// ── 主題切換 ──────────────────────────────────────────────────
-const THEME_KEY = 'visionary_theme';
-const themeToggleBtn = document.getElementById('themeToggleBtn');
-function applyTheme(mode) {
-    if (mode === 'light') {
-        document.body.classList.add('light-mode');
-        if (themeToggleBtn) { themeToggleBtn.textContent = '☀️'; themeToggleBtn.title = '切換深色模式'; }
-    } else {
-        document.body.classList.remove('light-mode');
-        if (themeToggleBtn) { themeToggleBtn.textContent = '🌙'; themeToggleBtn.title = '切換淺色模式'; }
-    }
-}
-applyTheme(localStorage.getItem(THEME_KEY) || 'light');
-themeToggleBtn?.addEventListener('click', () => {
-    const next = document.body.classList.contains('light-mode') ? 'dark' : 'light';
-    localStorage.setItem(THEME_KEY, next);
-    applyTheme(next);
-});
+// ── 主題：固定淺色（移除黑夜模式）──
+document.body.classList.add('light-mode');
+try { localStorage.removeItem('visionary_theme'); } catch (_) {}
 
 // ── 回到頂部 ──────────────────────────────────────────────────
 const backToTopBtn = document.getElementById('backToTopBtn');
