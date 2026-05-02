@@ -6,7 +6,36 @@
     <meta name="theme-color" content="#0b0f1a">
     <title>Scholarly | 研究所論文追蹤</title>
     <meta name="description" content="每日自動追蹤 arXiv 最新論文，涵蓋多個研究領域（CV / NLP / ML / Robotics / …），附中文摘要與引用統計。">
+    <link rel="canonical" href="/">
+    <!-- Open Graph / Twitter card：分享連結時的縮圖與標題 -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Scholarly · 研究所論文追蹤">
+    <meta property="og:description" content="每日自動追蹤 arXiv / OpenReview / HF Daily 最新論文，跨 50+ 學科分類，附引用統計與 GitHub 程式碼。">
+    <meta property="og:image" content="/static/og-image.svg">
+    <meta property="og:locale" content="zh_TW">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Scholarly · 研究所論文追蹤">
+    <meta name="twitter:description" content="每日自動追蹤學術論文與引用統計。">
+    <meta name="twitter:image" content="/static/og-image.svg">
+    <!-- JSON-LD：讓 Google 識別為學術論文聚合站 -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "Scholarly",
+      "alternateName": "Scholarly Dashboard",
+      "url": "/",
+      "description": "Daily arXiv / OpenReview / HF Daily paper tracker with citation stats.",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "/?q={search_term_string}",
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
     <link rel="manifest" href="/static/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
     <!-- Google Fonts：preload + 非阻塞套用 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -45,7 +74,7 @@
 
     <div class="app-shell">
         <aside class="side">
-            <div class="side-brand">
+            <div class="side-brand" id="brandHome" role="button" tabindex="0" title="回到主頁（顯示全部論文）">
                 <span class="brand-mark" aria-hidden="true">📚</span>
                 <h1 class="logo" id="brandLogo">Scholarly<span>.</span></h1>
             </div>
@@ -104,7 +133,7 @@
             </div>
             <div class="page-title-block">
                 <span class="jp-label">今日 · today</span>
-                <h1 class="page-title">Signal 推薦 <span class="page-title-sub">signal feed</span></h1>
+                <h1 class="page-title">本日最新 <span class="page-title-sub">latest papers</span></h1>
             </div>
             <div class="controls">
                 <div class="search-box">
@@ -115,25 +144,15 @@
                 <div class="sort-wrapper" id="sortWrapper">
                     <button class="sort-trigger" id="sortTrigger">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-                        <span id="sortLabel">Signal 推薦</span>
+                        <span id="sortLabel">本日最新</span>
                         <svg class="sort-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     <div class="sort-submenu" id="sortSubmenu">
-                        <button class="sort-item active" data-value="signal">✨ Signal 推薦 <span>Signal</span></button>
-                        <button class="sort-item" data-value="latest">⚡ 本日最新 <span>Latest</span></button>
+                        <button class="sort-item active" data-value="latest">⚡ 本日最新 <span>Latest</span></button>
                         <button class="sort-item" data-value="hot_week">🔥 本週熱門 <span>Trending Week</span></button>
                         <button class="sort-item" data-value="hot_month">📈 本月熱門 <span>Trending Month</span></button>
                         <button class="sort-item" data-value="citations">📊 引用最多 <span>Most Cited</span></button>
                     </div>
-                </div>
-                <!-- 每頁筆數選擇器 -->
-                <div class="per-page-wrapper">
-                    <label class="per-page-label">每頁</label>
-                    <select id="perPageSelect" class="per-page-select">
-                        <option value="9">9 篇</option>
-                        <option value="18">18 篇</option>
-                        <option value="36">36 篇</option>
-                    </select>
                 </div>
             </div>
         </header>

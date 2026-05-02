@@ -1,239 +1,57 @@
+"""FastAPI app: arXiv dashboard backend.
+
+Composition only — no business logic. Cache lives in cache.py, upstream
+adapters in clients.py, auth + user data in userdata.py, discipline map
+in disciplines.py.
+"""
+from __future__ import annotations
+
 import asyncio
-import hashlib
 import json as _json
 import logging
 import os
 import re
 import time
-import urllib.parse
-import xml.etree.ElementTree as ET
-from collections import OrderedDict, deque
+from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-load_dotenv()
+from cache import CachedJSON, LRUStore, etag_response, make_etag
+from clients import (
+    ARXIV_UA,
+    fetch_arxiv_listing,
+    fetch_arxiv_search,
+    fetch_biorxiv_listing,
+    fetch_crossref_listing,
+    fetch_dblp_venues_many,
+    fetch_hf_daily,
+    fetch_openalex_listing,
+    fetch_openreview_listing,
+    fetch_pubmed_listing,
+    fetch_pwc_many,
+    fetch_s2_author_papers,
+    fetch_s2_author_search,
+    fetch_s2_batch,
+    fetch_s2_recommendations,
+)
+from dedup import merge_sources
+from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
+from userdata import router as userdata_router
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ARXIV_BASE = "http://export.arxiv.org/api/query"
-ARXIV_UA = "Mozilla/5.0 DesktopDashboard/1.0"
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", ".cache"))
 CACHE_DIR.mkdir(exist_ok=True)
-
-# 研究領域 → arXiv 類別 / 中文名稱（供 summarize 提示使用）
-DISCIPLINES: dict[str, dict[str, str]] = {
-    "cv":       {"cat": "cs.CV",    "name": "電腦視覺",         "role": "電腦視覺研究助理"},
-    "nlp":      {"cat": "cs.CL",    "name": "自然語言處理",     "role": "自然語言處理研究助理"},
-    "ml":       {"cat": "cs.LG",    "name": "機器學習",         "role": "機器學習研究助理"},
-    "ai":       {"cat": "cs.AI",    "name": "人工智慧",         "role": "人工智慧研究助理"},
-    "robotics": {"cat": "cs.RO",    "name": "機器人學",         "role": "機器人學研究助理"},
-    "graphics": {"cat": "cs.GR",    "name": "電腦繪圖",         "role": "電腦繪圖研究助理"},
-    "security": {"cat": "cs.CR",    "name": "資訊安全",         "role": "資訊安全研究助理"},
-    "systems":  {"cat": "cs.OS",    "name": "系統與架構",       "role": "系統研究助理"},
-    "db":       {"cat": "cs.DB",    "name": "資料庫",           "role": "資料庫研究助理"},
-    "hci":      {"cat": "cs.HC",    "name": "人機互動",         "role": "人機互動研究助理"},
-    "ir":       {"cat": "cs.IR",    "name": "資訊檢索與推薦",   "role": "資訊檢索研究助理"},
-    "speech":   {"cat": "eess.AS",  "name": "語音與音訊",       "role": "語音研究助理"},
-    # 跨領域擴充（PR#3）：大學／研究所非 CS 主修
-    "math":     {"cat": "math.OC",              "name": "數學",         "role": "數學研究助理"},
-    "stats":    {"cat": "stat.ML",              "name": "統計學",       "role": "統計學研究助理"},
-    "physics":  {"cat": "cond-mat.stat-mech",   "name": "物理",         "role": "物理研究助理"},
-    "astro":    {"cat": "astro-ph.GA",          "name": "天文物理",     "role": "天文物理研究助理"},
-    "quantum":  {"cat": "quant-ph",             "name": "量子物理",     "role": "量子物理研究助理"},
-    "chem":     {"cat": "physics.chem-ph",      "name": "化學",         "role": "化學研究助理"},
-    "bio":      {"cat": "q-bio.BM",             "name": "生物",         "role": "生物學研究助理"},
-    "neuro":    {"cat": "q-bio.NC",             "name": "神經科學",     "role": "神經科學研究助理"},
-    "econ":     {"cat": "econ.GN",              "name": "經濟",         "role": "經濟學研究助理"},
-    "finance":  {"cat": "q-fin.PR",             "name": "金融",         "role": "金融研究助理"},
-    "eess":     {"cat": "eess.SP",              "name": "電機與信號",   "role": "電機工程研究助理"},
-    # 人文與社會
-    "philosophy":  {"cat": "cs.CY",              "name": "哲學",         "role": "哲學研究助理"},
-    "linguistics": {"cat": "cs.CL",              "name": "語言學",       "role": "語言學研究助理"},
-    "psychology":  {"cat": "q-bio.NC",           "name": "心理學",       "role": "心理學研究助理"},
-    "sociology":   {"cat": "cs.CY",              "name": "社會學",       "role": "社會學研究助理"},
-    "political":   {"cat": "econ.GN",            "name": "政治學",       "role": "政治學研究助理"},
-    "law":         {"cat": "cs.CY",              "name": "法律",         "role": "法律研究助理"},
-    "education":   {"cat": "cs.CY",              "name": "教育",         "role": "教育研究助理"},
-    "history":     {"cat": "cs.DL",              "name": "歷史",         "role": "歷史研究助理"},
-    "literature":  {"cat": "cs.CL",              "name": "文學",         "role": "文學研究助理"},
-    "anthro":      {"cat": "cs.CY",              "name": "人類學",       "role": "人類學研究助理"},
-    # 自然與工程
-    "earth":       {"cat": "physics.geo-ph",     "name": "地球科學",     "role": "地球科學研究助理"},
-    "climate":     {"cat": "physics.ao-ph",      "name": "氣候與大氣",   "role": "氣候科學研究助理"},
-    "materials":   {"cat": "cond-mat.mtrl-sci",  "name": "材料科學",     "role": "材料科學研究助理"},
-    "mecheng":     {"cat": "physics.flu-dyn",    "name": "機械與流體",   "role": "機械工程研究助理"},
-    "civil":       {"cat": "eess.SY",            "name": "土木與結構",   "role": "土木工程研究助理"},
-    # 醫學與藝術
-    "medimg":      {"cat": "eess.IV",            "name": "醫療影像",     "role": "醫療影像研究助理"},
-    "pubhealth":   {"cat": "q-bio.PE",           "name": "公衛",         "role": "公衛研究助理"},
-    "biomed":      {"cat": "q-bio.TO",           "name": "生醫工程",     "role": "生醫工程研究助理"},
-    "music":       {"cat": "cs.SD",              "name": "音樂學",       "role": "音樂研究助理"},
-    "design":      {"cat": "cs.HC",              "name": "設計",         "role": "設計研究助理"},
-    # 工程延伸
-    "chemeng":     {"cat": "physics.chem-ph",    "name": "化學工程",     "role": "化工研究助理"},
-    "aero":        {"cat": "physics.flu-dyn",    "name": "航太工程",     "role": "航太工程研究助理"},
-    "nuclear":     {"cat": "physics.ins-det",    "name": "核能工程",     "role": "核能工程研究助理"},
-    "indus":       {"cat": "math.OC",            "name": "工業工程",     "role": "工業工程研究助理"},
-    "bioeng":      {"cat": "q-bio.TO",           "name": "生物工程",     "role": "生物工程研究助理"},
-    # 自然延伸
-    "envsci":      {"cat": "physics.geo-ph",     "name": "環境科學",     "role": "環境科學研究助理"},
-    "agri":        {"cat": "q-bio.PE",           "name": "農業科學",     "role": "農業科學研究助理"},
-    "ocean":       {"cat": "physics.ao-ph",      "name": "海洋科學",     "role": "海洋科學研究助理"},
-    # 醫療延伸
-    "pharma":      {"cat": "q-bio.BM",           "name": "藥學",         "role": "藥學研究助理"},
-    "nursing":     {"cat": "q-bio.QM",           "name": "護理學",       "role": "護理研究助理"},
-    "dentistry":   {"cat": "q-bio.QM",           "name": "牙醫學",       "role": "牙醫研究助理"},
-    "sports":      {"cat": "q-bio.QM",           "name": "運動科學",     "role": "運動科學研究助理"},
-    # 商業管理
-    "management":  {"cat": "econ.GN",            "name": "企業管理",     "role": "管理研究助理"},
-    "marketing":   {"cat": "econ.GN",            "name": "行銷",         "role": "行銷研究助理"},
-    "accounting":  {"cat": "econ.GN",            "name": "會計",         "role": "會計研究助理"},
-    # 社會延伸
-    "commun":      {"cat": "cs.CY",              "name": "傳播學",       "role": "傳播研究助理"},
-    "geography":   {"cat": "physics.geo-ph",     "name": "地理學",       "role": "地理學研究助理"},
-    "religion":    {"cat": "cs.CY",              "name": "宗教研究",     "role": "宗教研究助理"},
-    # 藝術延伸
-    "arthistory":  {"cat": "cs.DL",              "name": "藝術史",       "role": "藝術史研究助理"},
-    "film":        {"cat": "cs.MM",              "name": "電影與媒體",   "role": "電影研究助理"},
-    "theater":     {"cat": "cs.HC",              "name": "劇場表演",     "role": "劇場研究助理"},
-    "architecture":{"cat": "cs.CG",              "name": "建築學",       "role": "建築研究助理"},
-    # ── 補強：CS 系統與工程相關（多數大學主修）──
-    "softeng":     {"cat": "cs.SE",              "name": "軟體工程",     "role": "軟體工程研究助理"},
-    "networks":    {"cat": "cs.NI",              "name": "網路工程",     "role": "網路研究助理"},
-    "distsys":     {"cat": "cs.DC",              "name": "分散式系統",   "role": "分散式系統研究助理"},
-    "control":     {"cat": "eess.SY",            "name": "控制與系統工程","role": "控制工程研究助理"},
-    "infotheory":  {"cat": "cs.IT",              "name": "資訊理論",     "role": "資訊理論研究助理"},
-    "multimedia":  {"cat": "cs.MM",              "name": "多媒體",       "role": "多媒體研究助理"},
-    # ── 補強：CS 理論 ──
-    "proglang":    {"cat": "cs.PL",              "name": "程式語言",     "role": "程式語言研究助理"},
-    "complexity":  {"cat": "cs.CC",              "name": "計算複雜度",   "role": "計算理論研究助理"},
-    "logic":       {"cat": "cs.LO",              "name": "計算邏輯",     "role": "計算邏輯研究助理"},
-    "gametheory":  {"cat": "cs.GT",              "name": "賽局論",       "role": "賽局論研究助理"},
-    "datastruct":  {"cat": "cs.DS",              "name": "資料結構與演算法","role": "演算法研究助理"},
-    # ── 補強：資料 / 社群 ──
-    "datasci":     {"cat": "stat.ML",            "name": "資料科學",     "role": "資料科學研究助理"},
-    "socialnet":   {"cat": "cs.SI",              "name": "社群網路分析", "role": "社群網路研究助理"},
-    "numerical":   {"cat": "cs.NA",              "name": "數值分析",     "role": "數值分析研究助理"},
-    # ── 補強：數學細分 ──
-    "probability": {"cat": "math.PR",            "name": "機率論",       "role": "機率論研究助理"},
-    "combinatorics":{"cat": "math.CO",           "name": "組合數學",     "role": "組合數學研究助理"},
-    "numbertheory":{"cat": "math.NT",            "name": "數論",         "role": "數論研究助理"},
-    "algebra":     {"cat": "math.AG",            "name": "代數幾何",     "role": "代數幾何研究助理"},
-    "topology":    {"cat": "math.AT",            "name": "拓樸學",       "role": "拓樸學研究助理"},
-    "diffgeom":    {"cat": "math.DG",            "name": "微分幾何",     "role": "微分幾何研究助理"},
-    "analysis":    {"cat": "math.AP",            "name": "分析與偏微方程","role": "數學分析研究助理"},
-    # ── 補強：物理細分 ──
-    "particle":    {"cat": "hep-ph",             "name": "粒子物理",     "role": "粒子物理研究助理"},
-    "hepth":       {"cat": "hep-th",             "name": "高能物理理論", "role": "高能理論研究助理"},
-    "relativity":  {"cat": "gr-qc",              "name": "廣義相對論",   "role": "廣義相對論研究助理"},
-    "nucphys":     {"cat": "nucl-th",            "name": "核物理理論",   "role": "核物理研究助理"},
-    "plasma":      {"cat": "physics.plasm-ph",   "name": "電漿物理",     "role": "電漿物理研究助理"},
-    "optics":      {"cat": "physics.optics",     "name": "光學",         "role": "光學研究助理"},
-    "biophysics":  {"cat": "physics.bio-ph",     "name": "生物物理",     "role": "生物物理研究助理"},
-    # ── 補強：生命科學細分 ──
-    "genomics":    {"cat": "q-bio.GN",           "name": "基因體學",     "role": "基因體學研究助理"},
-    "molbio":      {"cat": "q-bio.MN",           "name": "分子生物",     "role": "分子生物研究助理"},
-    "cellbio":     {"cat": "q-bio.SC",           "name": "細胞生物",     "role": "細胞生物研究助理"},
-    "epidem":      {"cat": "q-bio.PE",           "name": "流行病學",     "role": "流行病學研究助理"},
-    "bioinfo":     {"cat": "q-bio.QM",           "name": "生物資訊",     "role": "生物資訊研究助理"},
-    "neuroai":     {"cat": "q-bio.NC",           "name": "認知與神經 AI","role": "認知科學研究助理"},
-    # ── 補強：金融細分 ──
-    "quantfin":    {"cat": "q-fin.MF",           "name": "計量金融",     "role": "計量金融研究助理"},
-    "finengineer": {"cat": "q-fin.CP",           "name": "金融工程",     "role": "金融工程研究助理"},
-    "riskmgmt":    {"cat": "q-fin.RM",           "name": "風險管理",     "role": "風險管理研究助理"},
-    "tradingstrat":{"cat": "q-fin.TR",           "name": "交易策略",     "role": "交易策略研究助理"},
-    "econometrics":{"cat": "econ.EM",            "name": "計量經濟",     "role": "計量經濟研究助理"},
-    "thecon":      {"cat": "econ.TH",            "name": "理論經濟",     "role": "理論經濟研究助理"},
-    # ── 補強：社會 / 公共領域 ──
-    "intlrelat":   {"cat": "econ.GN",            "name": "國際關係",     "role": "國際關係研究助理"},
-    "publicpolicy":{"cat": "cs.CY",              "name": "公共政策",     "role": "公共政策研究助理"},
-    "socialwork":  {"cat": "cs.CY",              "name": "社會工作",     "role": "社會工作研究助理"},
-    "urbanplan":   {"cat": "physics.geo-ph",     "name": "都市規劃",     "role": "都市規劃研究助理"},
-    # ── 補強：應用科學 / 醫療延伸 ──
-    "foodsci":     {"cat": "q-bio.QM",           "name": "食品科學",     "role": "食品科學研究助理"},
-    "veterinary":  {"cat": "q-bio.TO",           "name": "獸醫學",       "role": "獸醫研究助理"},
-    "therapy":     {"cat": "q-bio.NC",           "name": "復健治療",     "role": "復健治療研究助理"},
-    "audiology":   {"cat": "eess.AS",            "name": "聽力與語言治療","role": "聽語研究助理"},
-    "gerontology": {"cat": "q-bio.PE",           "name": "老人學",       "role": "老人學研究助理"},
-    # ── 補強：藝術 / 設計延伸 ──
-    "gamedesign":  {"cat": "cs.GR",              "name": "遊戲設計",     "role": "遊戲設計研究助理"},
-    "uxdesign":    {"cat": "cs.HC",              "name": "使用者經驗設計","role": "UX 研究助理"},
-    "industdesign":{"cat": "cs.HC",              "name": "工業設計",     "role": "工業設計研究助理"},
-}
-DEFAULT_DISCIPLINE = "cv"
-
-
-def _discipline(d: str | None) -> dict[str, str]:
-    return DISCIPLINES.get((d or "").lower(), DISCIPLINES[DEFAULT_DISCIPLINE])
-
-
-# ── Bounded LRU cache helper（支援 JSON 落地） ────────────────────
-class LRUStore:
-    def __init__(self, name: str, maxsize: int, ttl: float, persist: bool = True):
-        self.name = name
-        self.maxsize = maxsize
-        self.ttl = ttl
-        self.persist = persist
-        self.path = CACHE_DIR / f"{name}.json"
-        self._data: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
-        self._dirty = False
-        self._load()
-
-    def _load(self) -> None:
-        if not self.persist or not self.path.exists():
-            return
-        try:
-            raw = _json.loads(self.path.read_text("utf-8"))
-            if isinstance(raw, dict):
-                self._data = OrderedDict(raw)
-        except Exception as e:
-            logger.warning("cache %s load failed: %s", self.name, e)
-
-    def flush(self) -> None:
-        if not self.persist or not self._dirty:
-            return
-        try:
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(_json.dumps(self._data), encoding="utf-8")
-            tmp.replace(self.path)
-            self._dirty = False
-        except Exception as e:
-            logger.warning("cache %s flush failed: %s", self.name, e)
-
-    def get(self, key: str) -> Any | None:
-        entry = self._data.get(key)
-        if not entry:
-            return None
-        if self.ttl and time.time() - entry.get("at", 0) > self.ttl:
-            self._data.pop(key, None)
-            self._dirty = True
-            return None
-        self._data.move_to_end(key)
-        return entry.get("v")
-
-    def set(self, key: str, value: Any) -> None:
-        self._data[key] = {"at": time.time(), "v": value}
-        self._data.move_to_end(key)
-        while len(self._data) > self.maxsize:
-            self._data.popitem(last=False)
-        self._dirty = True
-
-
-_paper_store = LRUStore("papers", maxsize=16, ttl=3600, persist=False)
-_s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600)
-_pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600)
 
 
 # ── HTTP client 單例 ─────────────────────────────────────────────
@@ -243,30 +61,83 @@ _http_client: httpx.AsyncClient | None = None
 def _client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None:
-        _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
-            headers={"User-Agent": ARXIV_UA},
-            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
-            http2=False,
-            follow_redirects=True,
-        )
+        # http2: 多源 RTT 重用同 socket(httpx 透過 h2 套件提供)
+        # 連線池拉滿:warmup 4 disc + 用戶並行,峰值 30+ 連線
+        try:
+            _http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=10.0),
+                headers={"User-Agent": ARXIV_UA},
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=40),
+                http2=True,
+                follow_redirects=True,
+            )
+        except ImportError:
+            # h2 沒裝就降回 http/1.1
+            logger.warning("h2 not installed, falling back to HTTP/1.1")
+            _http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=10.0),
+                headers={"User-Agent": ARXIV_UA},
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=40),
+                http2=False,
+                follow_redirects=True,
+            )
     return _http_client
 
 
-async def _flush_task():
+# ── 快取 ─────────────────────────────────────────────────────────
+# Endpoint SWR:fresh ttl 內直接回;stale 內回舊資料 + 背景刷新;完全過期才等。
+# Server-side stale 6h,讓使用者永遠 < 50ms,刷新成本攤到背景。
+_papers_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=64)
+_trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
+
+# 個別 ID-level 快取(citations / pwc):跨 request 共享、JSON 持久化
+_s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600, cache_dir=CACHE_DIR)
+_pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600, cache_dir=CACHE_DIR)
+
+# Warmup:啟動立刻跑 + 每 5 分鐘背景刷新熱門 disciplines(命中率最高的 4 個 + 預設 7d/1000)
+_WARMUP_DISCIPLINES = ("cv", "ml", "ai", "nlp")
+_WARMUP_DAYS = 7
+_WARMUP_MAX = 1000
+_WARMUP_INTERVAL = 5 * 60
+
+
+async def _flush_task() -> None:
     while True:
         await asyncio.sleep(60)
         for s in (_s2_store, _pwc_store):
             s.flush()
 
 
+async def _warmup_loop() -> None:
+    """背景預熱:啟動後等 5 秒讓 server ready,然後每 _WARMUP_INTERVAL 跑一輪。
+
+    每輪對 _WARMUP_DISCIPLINES 各觸發一次 papers 預熱,寫進 _papers_cache。
+    使用者首次打開直接 < 50ms 命中。
+    """
+    await asyncio.sleep(5)
+    while True:
+        for disc_id in _WARMUP_DISCIPLINES:
+            try:
+                key, builder = _papers_build_spec(disc_id, _WARMUP_DAYS, _WARMUP_MAX)
+                await _papers_cache.warm(key, builder)
+            except Exception as e:
+                logger.warning("warmup %s failed: %s", disc_id, e)
+        try:
+            await _trending_cache.warm("hf_daily:7", _trending_build_spec(7))
+        except Exception as e:
+            logger.warning("warmup trending failed: %s", e)
+        await asyncio.sleep(_WARMUP_INTERVAL)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_flush_task())
+    flush = asyncio.create_task(_flush_task())
+    warm = asyncio.create_task(_warmup_loop())
     try:
         yield
     finally:
-        task.cancel()
+        flush.cancel()
+        warm.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
         if _http_client is not None:
@@ -274,7 +145,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# Brotli 比 gzip 省 ~15-25% bytes;沒裝就降回 gzip
+try:
+    from brotli_asgi import BrotliMiddleware
+    app.add_middleware(BrotliMiddleware, minimum_size=1000, quality=4)
+except ImportError:
+    logger.info("brotli-asgi not installed, using gzip")
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # ── Static long-cache + security headers ─────────────────────────
@@ -283,17 +160,13 @@ class HeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         path = request.url.path
         if path.startswith("/static/"):
-            # sw.js 不得長快取，否則新版 SW 卡住
             if path.endswith("/sw.js"):
                 response.headers["Cache-Control"] = "no-cache"
             elif path.endswith((".woff2", ".woff", ".ttf", ".png", ".jpg", ".webp")):
-                # 字型 / 圖檔極少變更，長快取
                 response.headers["Cache-Control"] = "public, max-age=2592000, immutable"
             elif path.endswith("/disciplines.js"):
-                # disciplines.js（~97KB 領域字典）極少更新，7 天 + revalidate
                 response.headers["Cache-Control"] = "public, max-age=604800, must-revalidate"
             elif path.endswith((".css", ".js", ".svg")):
-                # CSS / JS：短快取 + must-revalidate，瀏覽器以 ETag/Last-Modified 比對 304
                 response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
             else:
                 response.headers["Cache-Control"] = "public, max-age=86400"
@@ -301,20 +174,41 @@ class HeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+        # CSP: 允許 inline script (Google Sign-In), self origin, 第三方 logo/img;
+        # connect-src 包含所有上游 API 來源 (S2/PWC/OpenAlex/etc 不直連前端,所以只允許 self)
+        if not response.headers.get("Content-Security-Policy"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: https:; "
+                "connect-src 'self' https://accounts.google.com; "
+                "frame-src https://accounts.google.com; "
+                "font-src 'self' data:; "
+                "base-uri 'self'; form-action 'self'"
+            )
         return response
 
 
-# ── 簡易 IP token bucket（免外部依賴，防濫用）────────────────────
+# ── 簡易 IP token bucket(免外部依賴,防濫用)────────────────────
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """
-    每 IP per-minute token bucket，僅對寫入 user data (PUT /api/me/data) 收高成本，
-    其他代理端點 (summarize/translate/citations/pwc) 以及 GET 統一 cost=1，
-    避免上游失敗的重試把 GET /api/papers 也擋成 429。
-    """
+    """每 IP per-minute token bucket。寫入 user data 算高成本,GET 一律 cost=1。"""
+
     def __init__(self, app, burst: int = 600):
         super().__init__(app)
         self.burst = burst
         self._buckets: dict[str, deque] = {}
+        self._last_sweep = time.time()
+
+    def _sweep_idle(self, now: float) -> None:
+        """每 5 分鐘清掉 1 分鐘窗外完全沒活動的 IP,防止 DoS 撐爆 dict。"""
+        if now - self._last_sweep < 300:
+            return
+        self._last_sweep = now
+        window = 60.0
+        dead = [ip for ip, dq in self._buckets.items() if not dq or now - dq[-1] > window]
+        for ip in dead:
+            self._buckets.pop(ip, None)
 
     def _client_ip(self, request: Request) -> str:
         fwd = request.headers.get("x-forwarded-for")
@@ -329,6 +223,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         ip = self._client_ip(request)
         now = time.time()
+        self._sweep_idle(now)
         window = 60.0
         dq = self._buckets.setdefault(ip, deque())
         while dq and now - dq[0] > window:
@@ -353,225 +248,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(HeadersMiddleware)
 
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(userdata_router)
 
+
+# ── routes ───────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
     return {"ok": True, "t": int(time.time())}
-
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-# ── arXiv 論文 ────────────────────────────────────────────────────
-_ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
-_ARXIV_ID_RE = re.compile(r"\(arXiv:.*?\)")
-
-
-async def _http_get_bytes(url: str, timeout: float = 30.0) -> bytes:
-    r = await _client().get(url, timeout=timeout)
-    r.raise_for_status()
-    return r.content
-
-
-def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[str, Any]]:
-    root = ET.fromstring(xml_data)
-    papers: list[dict[str, Any]] = []
-    for entry in root.findall("atom:entry", _ARXIV_NS):
-        title_el = entry.find("atom:title", _ARXIV_NS)
-        id_el = entry.find("atom:id", _ARXIV_NS)
-        if title_el is None or title_el.text is None or id_el is None:
-            continue
-
-        title = _ARXIV_ID_RE.sub("", title_el.text.strip().replace("\n", " ")).strip()
-
-        summary_el = entry.find("atom:summary", _ARXIV_NS)
-        summary = summary_el.text.strip().replace("\n", " ") if summary_el is not None and summary_el.text else ""
-
-        pub_el = entry.find("atom:published", _ARXIV_NS)
-        pub_raw = pub_el.text if pub_el is not None else ""
-        try:
-            pub_date = datetime.strptime(pub_raw, "%Y-%m-%dT%H:%M:%SZ")
-            if cutoff is not None and pub_date < cutoff:
-                continue
-            published_str = pub_date.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, TypeError):
-            published_str = pub_raw
-
-        authors = [
-            a.find("atom:name", _ARXIV_NS).text
-            for a in entry.findall("atom:author", _ARXIV_NS)
-            if a.find("atom:name", _ARXIV_NS) is not None
-        ]
-
-        papers.append({
-            "title": title,
-            "summary": summary,
-            "url": id_el.text,
-            "published": published_str,
-            "authors": authors,
-        })
-    return papers
-
-
-_papers_etag: dict[str, str] = {}
-_papers_body: dict[str, bytes] = {}
-_papers_inflight: dict[str, asyncio.Future] = {}
-
-_PAPERS_HEADERS = {"Cache-Control": "public, max-age=60, must-revalidate"}
-
-
-def _make_etag(payload: bytes) -> str:
-    return 'W/"' + hashlib.md5(payload).hexdigest()[:16] + '"'
-
-
-async def _build_papers_payload(cat: str, days: int, max_results: int, cache_key: str) -> tuple[bytes, str]:
-    """打 arXiv → 解析 → 序列化一次，body bytes + ETag 快取在記憶體，warm hit 不再重做。"""
-    url = (
-        f"{ARXIV_BASE}?search_query=cat:{cat}"
-        f"&sortBy=submittedDate&sortOrder=descending&max_results={max_results}"
-    )
-    try:
-        xml_data = await _http_get_bytes(url, timeout=30.0)
-    except Exception as e:
-        logger.error("arXiv API failed: %s", e)
-        raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
-
-    cutoff = datetime.now() - timedelta(days=days)
-    papers = _parse_arxiv_entries(xml_data, cutoff)
-    _paper_store.set(cache_key, papers)
-    body = _json.dumps({"papers": papers}, ensure_ascii=False).encode("utf-8")
-    etag = _make_etag(body)
-    _papers_body[cache_key] = body
-    _papers_etag[cache_key] = etag
-    return body, etag
-
-
-@app.get("/api/papers")
-async def get_papers(request: Request, max_results: int = 1000, days: int = 7, discipline: str = DEFAULT_DISCIPLINE):
-    if days >= 30 and max_results < 5000:
-        max_results = 5000
-
-    disc = _discipline(discipline)
-    cache_key = f"{disc['cat']}:{days}:{max_results}"
-
-    # warm hit：body bytes 已經序列化好，省 JSON dump
-    body = _papers_body.get(cache_key)
-    etag = _papers_etag.get(cache_key)
-    if body is not None and etag is not None and _paper_store.get(cache_key) is not None:
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers={"ETag": etag, **_PAPERS_HEADERS})
-        return Response(content=body, media_type="application/json",
-                        headers={"ETag": etag, **_PAPERS_HEADERS})
-
-    # single-flight：併發同 key 共享一次 arXiv 拉取
-    inflight = _papers_inflight.get(cache_key)
-    if inflight is not None:
-        body, etag = await inflight
-    else:
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-        _papers_inflight[cache_key] = fut
-        try:
-            body, etag = await _build_papers_payload(disc["cat"], days, max_results, cache_key)
-            fut.set_result((body, etag))
-        except BaseException as e:
-            fut.set_exception(e)
-            raise
-        finally:
-            _papers_inflight.pop(cache_key, None)
-
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag, **_PAPERS_HEADERS})
-    return Response(content=body, media_type="application/json",
-                    headers={"ETag": etag, **_PAPERS_HEADERS})
-
-
-_trending_store = LRUStore("trending", maxsize=8, ttl=3 * 3600, persist=False)
-_trending_etag: dict[str, str] = {}
-_pwc_etag: dict[str, str] = {}
-
-
-async def _fetch_hf_daily(days: int = 7) -> list[dict[str, Any]]:
-    """HuggingFace 每日精選論文（社群 upvote 過濾）"""
-    try:
-        r = await _client().get("https://huggingface.co/api/daily_papers", timeout=15.0)
-        if r.status_code != 200:
-            return []
-        raw = r.json()
-    except Exception as e:
-        logger.warning("HF daily fetch failed: %s", e)
-        return []
-
-    cutoff = datetime.now() - timedelta(days=days)
-    papers: list[dict[str, Any]] = []
-    for item in raw:
-        paper = item.get("paper") or {}
-        arxiv_id = paper.get("id") or ""
-        if not arxiv_id:
-            continue
-        pub_raw = item.get("publishedAt") or paper.get("publishedAt") or ""
-        try:
-            pub_date = datetime.fromisoformat(pub_raw.replace("Z", "+00:00")).replace(tzinfo=None)
-            if pub_date < cutoff:
-                continue
-            published_str = pub_date.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, TypeError):
-            published_str = pub_raw[:16].replace("T", " ")
-        authors = [a.get("name", "") for a in (paper.get("authors") or []) if a.get("name")]
-        papers.append({
-            "title": (paper.get("title") or "").strip(),
-            "summary": (paper.get("summary") or "").strip(),
-            "url": f"http://arxiv.org/abs/{arxiv_id}",
-            "published": published_str,
-            "authors": authors,
-            "source": "hf_daily",
-            "hf_upvotes": item.get("upvotes") or paper.get("upvotes") or 0,
-        })
-    return papers
-
-
-@app.get("/api/trending")
-async def get_trending(request: Request, source: str = "hf_daily", days: int = 7):
-    cache_key = f"{source}:{days}"
-    cached = _trending_store.get(cache_key)
-    if cached is not None:
-        etag = _trending_etag.get(cache_key)
-        if etag and request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
-        if etag:
-            body = _json.dumps({"papers": cached, "source": source}, ensure_ascii=False).encode("utf-8")
-            return Response(content=body, media_type="application/json",
-                            headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
-        return {"papers": cached, "source": source}
-    if source == "hf_daily":
-        papers = await _fetch_hf_daily(days)
-    else:
-        raise HTTPException(status_code=400, detail=f"unknown source: {source}")
-    _trending_store.set(cache_key, papers)
-    body = _json.dumps({"papers": papers, "source": source}, ensure_ascii=False).encode("utf-8")
-    etag = _make_etag(body)
-    _trending_etag[cache_key] = etag
-    return Response(content=body, media_type="application/json",
-                    headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
-
-
-@app.get("/api/search")
-async def search_papers(q: str, max_results: int = 50):
-    if not q.strip():
-        return {"papers": []}
-
-    encoded_q = urllib.parse.quote(q.strip())
-    url = (
-        f"{ARXIV_BASE}?search_query=all:{encoded_q}"
-        f"&sortBy=relevance&sortOrder=descending&max_results={max_results}"
-    )
-    try:
-        xml_data = await _http_get_bytes(url, timeout=20.0)
-    except Exception as e:
-        logger.error("arXiv search failed: %s", e)
-        raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
-
-    return {"papers": _parse_arxiv_entries(xml_data, cutoff=None)}
 
 
 @app.get("/")
@@ -581,26 +266,158 @@ def read_root():
 
 @app.get("/sw.js")
 def sw_root():
-    # 讓 Service Worker 以根路徑作用域註冊
-    return FileResponse("static/sw.js", media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+    # Service Worker 以根路徑作用域註冊
+    return FileResponse(
+        "static/sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
-# ── Semantic Scholar citation proxy ───────────────────────────────
-_S2_URL = (
-    "https://api.semanticscholar.org/graph/v1/paper/batch"
-    "?fields=citationCount,influentialCitationCount,referenceCount,venue,publicationVenue"
-)
+def _papers_build_spec(discipline_id: str, days: int, max_results: int):
+    """回傳 (cache_key, builder coroutine factory) — 給 endpoint 與 warmup 共用。"""
+    if days >= 30 and max_results < 5000:
+        max_results = 5000
+    disc = discipline(discipline_id)
+    arxiv_native = bool(disc.get("arxiv_native", True))
+    openalex_concept = disc.get("openalex_concept")
+    crossref_subject = disc.get("crossref_subject")
+    pubmed_mesh = disc.get("pubmed_mesh")
+    use_biorxiv = bool(disc.get("biorxiv"))
+    use_medrxiv = bool(disc.get("medrxiv"))
+    cache_key = (
+        f"{disc.get('cat','')}:{openalex_concept or ''}:{crossref_subject or ''}:"
+        f"{pubmed_mesh or ''}:{int(use_biorxiv)}:{int(use_medrxiv)}:"
+        f"{int(arxiv_native)}:{days}:{max_results}"
+    )
+
+    arxiv_max = max_results if arxiv_native else min(max_results, 200)
+    openalex_max = 0 if arxiv_native and not openalex_concept else min(max_results, 300)
+    crossref_max = 0 if arxiv_native and not crossref_subject else min(max_results, 200)
+    biorxiv_max = min(max_results, 150) if use_biorxiv else 0
+    medrxiv_max = min(max_results, 150) if use_medrxiv else 0
+    pubmed_max = min(max_results, 200) if pubmed_mesh else 0
+
+    async def build():
+        c = _client()
+
+        async def _safe(name: str, coro):
+            try:
+                return await coro
+            except Exception as e:
+                logger.warning("%s listing failed for %s: %s", name, discipline_id, e)
+                return []
+
+        tasks = [_safe("arxiv", fetch_arxiv_listing(c, disc["cat"], days, arxiv_max))]
+        if openalex_max > 0:
+            tasks.append(_safe("openalex", fetch_openalex_listing(
+                c, concept_id=openalex_concept, days=days, max_results=openalex_max,
+                search_query=None if openalex_concept else disc.get("name"),
+            )))
+        if crossref_max > 0:
+            tasks.append(_safe("crossref", fetch_crossref_listing(
+                c, subject=crossref_subject, days=days, max_results=crossref_max,
+                search_query=None if crossref_subject else disc.get("name"),
+            )))
+        if biorxiv_max > 0:
+            tasks.append(_safe("biorxiv", fetch_biorxiv_listing(c, "biorxiv", days, biorxiv_max)))
+        if medrxiv_max > 0:
+            tasks.append(_safe("medrxiv", fetch_biorxiv_listing(c, "medrxiv", days, medrxiv_max)))
+        if pubmed_max > 0:
+            tasks.append(_safe("pubmed", fetch_pubmed_listing(c, pubmed_mesh, days, pubmed_max)))
+
+        sources = await asyncio.gather(*tasks)
+        merged = merge_sources(*sources)
+        # stale-on-error: 全部源都掛(merged 空)時 raise,讓 SWR 保留舊資料,
+        # 而不是把 cache 寫成空白覆蓋掉好的歷史
+        if not merged and any(len(s) == 0 for s in sources) and all(len(s) == 0 for s in sources):
+            raise RuntimeError(f"all sources empty for {discipline_id}")
+        if len(merged) > 500:
+            merged = merged[:500]
+        return {"papers": merged, "arxiv_native": arxiv_native}
+
+    return cache_key, build
 
 
-class CitationsRequest(BaseModel):
-    arxiv_ids: list[str]
+def _trending_build_spec(days: int):
+    async def build():
+        return {"papers": await fetch_hf_daily(_client(), days), "source": "hf_daily"}
+    return build
 
 
-@app.post("/api/citations")
-async def get_citations(req: CitationsRequest):
-    result: dict[str, dict[str, Any]] = {}
+@app.get("/api/papers")
+async def get_papers(
+    request: Request,
+    max_results: int = 1000,
+    days: int = 7,
+    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+):
+    cache_key, builder = _papers_build_spec(discipline_id, days, max_results)
+    body, etag = await _papers_cache.get_or_build(cache_key, builder)
+    return etag_response(request, body, etag)
+
+
+@app.get("/api/trending")
+async def get_trending(request: Request, source: str = "hf_daily", days: int = 7):
+    if source != "hf_daily":
+        raise HTTPException(status_code=400, detail=f"unknown source: {source}")
+    cache_key = f"{source}:{days}"
+    body, etag = await _trending_cache.get_or_build(cache_key, _trending_build_spec(days))
+    return etag_response(request, body, etag)
+
+
+@app.get("/api/search")
+async def search_papers(q: str, max_results: int = 50):
+    if not q.strip():
+        return {"papers": []}
+    return {"papers": await fetch_arxiv_search(_client(), q, max_results)}
+
+
+@app.get("/api/disciplines")
+def list_disciplines():
+    return {
+        "disciplines": [{"id": k, **v} for k, v in DISCIPLINES.items()],
+        "default": DEFAULT_DISCIPLINE,
+    }
+
+
+# ── Semantic Scholar citation proxy ──────────────────────────────
+# GET 版:支援 service worker / browser HTTP cache (POST 不能)。
+# arxiv_ids 用 comma-separated query param,上限 200 個避免 URL 過長 + S2 濫用。
+_CITATIONS_MAX = 200
+
+
+@app.get("/api/citations")
+async def get_citations(
+    request: Request,
+    arxiv_ids: str = Query("", description="comma-separated arXiv IDs"),
+    titles: str = Query("", description="JSON {arxiv_id: title} 用於 DBLP fallback"),
+):
+    ids_raw = [a.strip() for a in arxiv_ids.split(",") if a.strip()]
+    if not ids_raw:
+        return {"results": {}}
+    if len(ids_raw) > _CITATIONS_MAX:
+        raise HTTPException(status_code=400, detail=f"too many ids (max {_CITATIONS_MAX})")
+    # 去重保序
+    seen: set[str] = set()
+    ids: list[str] = []
+    for a in ids_raw:
+        if a not in seen:
+            seen.add(a)
+            ids.append(a)
+
+    titles_map: dict[str, str] = {}
+    if titles:
+        try:
+            parsed = _json.loads(titles)
+            if isinstance(parsed, dict):
+                titles_map = {str(k): str(v) for k, v in parsed.items()}
+        except Exception:
+            pass
+
+    result: dict[str, dict] = {}
     missing: list[str] = []
-    for aid in req.arxiv_ids:
+    for aid in ids:
         cached = _s2_store.get(aid)
         if cached is not None:
             result[aid] = cached
@@ -608,195 +425,233 @@ async def get_citations(req: CitationsRequest):
             missing.append(aid)
 
     if missing:
-        for i in range(0, len(missing), 500):
-            chunk = missing[i:i + 500]
+        fresh = await fetch_s2_batch(_client(), missing)
+        for aid, entry in fresh.items():
+            _s2_store.set(aid, entry)
+            result[aid] = entry
+
+    # DBLP venue fallback: S2 沒給 venue 的論文,用 title 反查 DBLP (CS 會議補強)
+    if titles_map:
+        need_venue: dict[str, str] = {}
+        for aid, entry in result.items():
+            if not entry.get("venue") and titles_map.get(aid):
+                need_venue[titles_map[aid]] = aid
+        if need_venue:
             try:
-                r = await _client().post(
-                    _S2_URL,
-                    json={"ids": [f"ArXiv:{a}" for a in chunk]},
-                    timeout=15.0,
-                )
-                data = r.json() if r.status_code == 200 else []
+                venues = await fetch_dblp_venues_many(_client(), list(need_venue.keys()))
+                for title, venue in venues.items():
+                    aid = need_venue.get(title)
+                    if aid and venue:
+                        result[aid] = {**result[aid], "venue": venue}
+                        _s2_store.set(aid, result[aid])
             except Exception as e:
-                logger.warning("S2 batch failed: %s", e)
-                break
-            for aid, item in zip(chunk, data):
-                if not isinstance(item, dict):
-                    continue
-                entry = {
-                    "count": item.get("citationCount") or 0,
-                    "influential": item.get("influentialCitationCount") or 0,
-                    "refs": item.get("referenceCount") or 0,
-                    "venue": (item.get("publicationVenue") or {}).get("name") or item.get("venue") or "",
-                }
-                _s2_store.set(aid, entry)
-                result[aid] = entry
+                logger.warning("DBLP venue fallback failed: %s", e)
 
-    return {"results": result}
+    body = _json.dumps({"results": result}, ensure_ascii=False).encode("utf-8")
+    etag = make_etag(body)
+    return etag_response(request, body, etag)
 
 
-# ── Papers with Code proxy ────────────────────────────────────────
-async def _fetch_pwc_one(arxiv_id: str) -> dict[str, Any]:
-    entry: dict[str, Any] = {"github_url": None, "stars": 0}
-    try:
-        r = await _client().get(
-            f"https://paperswithcode.com/api/v1/papers/?arxiv_id={arxiv_id}",
-            timeout=10.0,
-        )
-        if r.status_code != 200:
-            return entry
-        data = r.json()
-    except Exception:
-        return entry
-
-    result = (data.get("results") or [None])[0]
-    if not result:
-        return entry
-    entry["github_url"] = result.get("github_url")
-    rid = result.get("id")
-    if rid:
-        try:
-            r2 = await _client().get(
-                f"https://paperswithcode.com/api/v1/paper/{rid}/repositories/",
-                timeout=10.0,
-            )
-            repo_data = r2.json() if r2.status_code == 200 else {}
-        except Exception:
-            repo_data = {}
-        results = (repo_data or {}).get("results") or []
-        top = next((r for r in results if r.get("is_official")), results[0] if results else None)
-        if top:
-            entry["stars"] = top.get("stars") or 0
-            entry["github_url"] = top.get("url") or entry["github_url"]
-    return entry
-
-
+# ── Papers with Code proxy ───────────────────────────────────────
 @app.get("/api/pwc")
 async def get_pwc(request: Request, arxiv_ids: str):
     ids = [a.strip() for a in arxiv_ids.split(",") if a.strip()]
-
     missing = [a for a in ids if _pwc_store.get(a) is None]
-
     if missing:
-        sem = asyncio.Semaphore(5)
+        fresh = await fetch_pwc_many(_client(), missing, concurrency=5)
+        for aid, entry in fresh.items():
+            _pwc_store.set(aid, entry)
 
-        async def _bounded(aid: str):
-            async with sem:
-                _pwc_store.set(aid, await _fetch_pwc_one(aid))
-
-        await asyncio.gather(*[_bounded(a) for a in missing])
-
-    out = {}
+    out: dict[str, dict] = {}
     for a in ids:
         v = _pwc_store.get(a)
         if v:
             out[a] = {"github_url": v.get("github_url"), "stars": v.get("stars", 0)}
 
     body = _json.dumps({"results": out}, ensure_ascii=False).encode("utf-8")
-    etag = _make_etag(body)
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
-    return Response(content=body, media_type="application/json",
-                    headers={"ETag": etag, "Cache-Control": "public, max-age=60, must-revalidate"})
+    etag = make_etag(body)
+    return etag_response(request, body, etag)
 
 
-@app.get("/api/disciplines")
-def list_disciplines():
-    return {"disciplines": [{"id": k, **v} for k, v in DISCIPLINES.items()], "default": DEFAULT_DISCIPLINE}
-
-
-# ── Google 登入 + 雲端同步 ──────────────────────────────────────
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-_db_pool = None
-
-
-async def _get_pool():
-    global _db_pool
-    if _db_pool is None:
-        if not DATABASE_URL:
-            raise HTTPException(status_code=503, detail="DATABASE_URL not set")
-        import asyncpg
-        _db_pool = await asyncpg.create_pool(
-            DATABASE_URL, min_size=1, max_size=5, ssl="require",
-            statement_cache_size=0,
-        )
-        async with _db_pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_data (
-                    google_sub TEXT PRIMARY KEY,
-                    email TEXT,
-                    name TEXT,
-                    data JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-            """)
-    return _db_pool
-
-
-def _verify_id_token(token: str) -> dict:
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=503, detail="GOOGLE_CLIENT_ID not set")
-    try:
-        from google.oauth2 import id_token as gid_token
-        from google.auth.transport import requests as g_requests
-        info = gid_token.verify_oauth2_token(token, g_requests.Request(), GOOGLE_CLIENT_ID)
-        return info
-    except Exception as e:
-        logger.warning("ID token verify failed: %s", e)
-        raise HTTPException(status_code=401, detail="invalid token")
-
-
-async def _require_user(authorization: str | None = Header(default=None)) -> dict:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
-    return _verify_id_token(authorization.split(None, 1)[1].strip())
-
-
-@app.get("/api/me/data")
-async def get_my_data(user: dict = Depends(_require_user)):
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT data FROM user_data WHERE google_sub = $1", user["sub"])
+# ── Cache + RL observability ─────────────────────────────────────
+@app.get("/api/metrics")
+def get_metrics():
+    """供 dashboard / 自我觀測用,不對外公開敏感資料。"""
     return {
-        "user": {
-            "email": user.get("email"),
-            "name": user.get("name"),
-            "picture": user.get("picture"),
-        },
-        "data": (row["data"] if row else {}) or {},
+        "papers_cache": _papers_cache.stats(),
+        "trending_cache": _trending_cache.stats(),
+        "s2_store": {"entries": len(_s2_store._data)},
+        "pwc_store": {"entries": len(_pwc_store._data)},
     }
 
 
-class UserDataPut(BaseModel):
-    data: dict = Field(default_factory=dict)
+# ── OpenReview (ICLR / NeurIPS / ICML 投稿 + 評審) ────────────────
+_OPENREVIEW_VENUES = {"iclr", "neurips", "icml", "colm"}
+_openreview_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=32)
 
 
-MAX_USER_DATA_BYTES = 512 * 1024  # 512KB per user（Supabase 免費層足夠）
-
-
-@app.put("/api/me/data")
-async def put_my_data(body: UserDataPut, user: dict = Depends(_require_user)):
-    payload = _json.dumps(body.data)
-    if len(payload.encode("utf-8")) > MAX_USER_DATA_BYTES:
-        raise HTTPException(status_code=413, detail="user data too large")
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO user_data (google_sub, email, name, data, updated_at)
-            VALUES ($1, $2, $3, $4::jsonb, now())
-            ON CONFLICT (google_sub) DO UPDATE
-              SET email = EXCLUDED.email,
-                  name = EXCLUDED.name,
-                  data = EXCLUDED.data,
-                  updated_at = now()
-            """,
-            user["sub"], user.get("email"), user.get("name"), payload,
+@app.get("/api/openreview")
+async def get_openreview(
+    request: Request,
+    venue: str = Query("iclr"),
+    year: int | None = None,
+    days: int = 30,
+    max_results: int = 200,
+):
+    venue = venue.lower()
+    if venue not in _OPENREVIEW_VENUES:
+        raise HTTPException(
+            status_code=400, detail=f"unknown venue: {venue}; expected one of {_OPENREVIEW_VENUES}"
         )
-    return {"ok": True}
+    cache_key = f"{venue}:{year or 'auto'}:{days}:{max_results}"
+
+    async def build():
+        return {
+            "papers": await fetch_openreview_listing(
+                _client(), venue, year=year, days=days, max_results=max_results,
+            ),
+            "venue": venue,
+            "year": year,
+        }
+
+    body, etag = await _openreview_cache.get_or_build(cache_key, build)
+    return etag_response(request, body, etag)
 
 
-@app.get("/api/me/config")
-def get_auth_config():
-    return {"google_client_id": GOOGLE_CLIENT_ID}
+# ── 相似論文推薦 (Semantic Scholar) ─────────────────────────────
+_recs_cache = CachedJSON(ttl=2 * 3600, stale_ttl=24 * 3600, max_keys=128)
+
+
+@app.get("/api/recommendations")
+async def get_recommendations(
+    request: Request,
+    arxiv_id: str = Query(..., min_length=4),
+    limit: int = 10,
+):
+    arxiv_id = arxiv_id.strip()
+    if not arxiv_id:
+        raise HTTPException(status_code=400, detail="missing arxiv_id")
+    limit = max(1, min(limit, 50))
+    cache_key = f"{arxiv_id}:{limit}"
+
+    async def build():
+        return {
+            "seed": arxiv_id,
+            "papers": await fetch_s2_recommendations(_client(), arxiv_id, limit=limit),
+        }
+
+    body, etag = await _recs_cache.get_or_build(cache_key, build)
+    return etag_response(request, body, etag)
+
+
+# ── 作者搜尋 / 作者論文 (S2) ────────────────────────────────────
+_author_search_cache = CachedJSON(ttl=24 * 3600, stale_ttl=7 * 24 * 3600, max_keys=256)
+_author_papers_cache = CachedJSON(ttl=2 * 3600, stale_ttl=24 * 3600, max_keys=128)
+
+
+@app.get("/api/author/search")
+async def author_search(request: Request, q: str = Query(..., min_length=2), limit: int = 5):
+    name = q.strip()
+    if not name:
+        return {"authors": []}
+    limit = max(1, min(limit, 20))
+    cache_key = f"{name.lower()}:{limit}"
+
+    async def build():
+        return {"authors": await fetch_s2_author_search(_client(), name, limit=limit)}
+
+    body, etag = await _author_search_cache.get_or_build(cache_key, build)
+    return etag_response(request, body, etag)
+
+
+@app.get("/api/author/{author_id}/papers")
+async def author_papers(request: Request, author_id: str, limit: int = 50):
+    author_id = author_id.strip()
+    if not author_id or not author_id.isdigit():
+        raise HTTPException(status_code=400, detail="invalid author_id")
+    limit = max(1, min(limit, 100))
+    cache_key = f"{author_id}:{limit}"
+
+    async def build():
+        return {
+            "author_id": author_id,
+            "papers": await fetch_s2_author_papers(_client(), author_id, limit=limit),
+        }
+
+    body, etag = await _author_papers_cache.get_or_build(cache_key, build)
+    return etag_response(request, body, etag)
+
+
+# ── BibTeX export (取代被刪掉的 import/export) ────────────────────
+_BIBTEX_KEY_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _bibtex_key(authors: list[str], year: str, title: str) -> str:
+    last = ""
+    if authors:
+        parts = authors[0].split()
+        if parts:
+            last = parts[-1].lower()
+    last = _BIBTEX_KEY_RE.sub("", last) or "anon"
+    yr = (year[:4] if year else "")
+    first_word = ""
+    for w in title.split():
+        cleaned = _BIBTEX_KEY_RE.sub("", w).lower()
+        if cleaned and cleaned not in {"a", "an", "the", "on", "of", "in", "for"}:
+            first_word = cleaned
+            break
+    return f"{last}{yr}{first_word}"[:50] or "ref"
+
+
+def _bibtex_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("{", "").replace("}", "").strip()
+
+
+@app.get("/api/bibtex")
+async def export_bibtex(arxiv_ids: str = Query(...)):
+    ids_raw = [a.strip() for a in arxiv_ids.split(",") if a.strip()][:50]
+    if not ids_raw:
+        raise HTTPException(status_code=400, detail="missing arxiv_ids")
+    # 用 S2 取 metadata (含 venue / year);沒命中就只給 arXiv 樣板
+    fresh: dict[str, dict] = {}
+    missing = [a for a in ids_raw if _s2_store.get(a) is None]
+    if missing:
+        fresh = await fetch_s2_batch(_client(), missing)
+        for aid, entry in fresh.items():
+            _s2_store.set(aid, entry)
+
+    out: list[str] = []
+    for aid in ids_raw:
+        meta = _s2_store.get(aid) or {}
+        venue = meta.get("venue") or ""
+        # arXiv ID 形如 2401.12345; year 可從 ID 前綴推 (年/月)
+        year = ""
+        m = re.match(r"(\d{2})(\d{2})\.", aid)
+        if m:
+            year = "20" + m.group(1)
+        title = meta.get("title") or aid
+        authors = meta.get("authors") or []
+        if isinstance(authors, str):
+            authors = [authors]
+        key = _bibtex_key(authors, year, title)
+        author_str = " and ".join(_bibtex_escape(a) for a in authors) if authors else ""
+        entry_lines = [f"@article{{{key},"]
+        entry_lines.append(f"  title = {{{_bibtex_escape(title)}}},")
+        if author_str:
+            entry_lines.append(f"  author = {{{author_str}}},")
+        if year:
+            entry_lines.append(f"  year = {{{year}}},")
+        if venue:
+            entry_lines.append(f"  journal = {{{_bibtex_escape(venue)}}},")
+        entry_lines.append(f"  eprint = {{{aid}}},")
+        entry_lines.append("  archivePrefix = {arXiv},")
+        entry_lines.append(f"  url = {{https://arxiv.org/abs/{aid}}}")
+        entry_lines.append("}")
+        out.append("\n".join(entry_lines))
+
+    body = "\n\n".join(out) + "\n"
+    return Response(
+        content=body,
+        media_type="application/x-bibtex; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="papers.bib"'},
+    )

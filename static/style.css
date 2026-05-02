@@ -125,11 +125,6 @@ body.light-mode .paper-link { color: #6d28d9; }
 body.light-mode .paper-link:hover { color: #5b21b6; }
 body.light-mode .paper-card .star-btn { color: rgba(0,0,0,0.2); }
 
-/* 摘要區塊 */
-body.light-mode .ai-contrib-block {
-    background: rgba(16, 185, 129, 0.07);
-    color: #065f46;
-}
 /* 引用 badge */
 body.light-mode .citation-badge {
     background: rgba(52, 211, 153, 0.1);
@@ -490,6 +485,16 @@ header {
     flex-shrink: 0;
 }
 
+/* sort-wrapper 預設只在 count-header 顯示；首次渲染前停留在 controls 中暫時隱藏 */
+.controls > .sort-wrapper { display: none; }
+.count-header > .sort-wrapper { margin-left: auto; }
+
+/* 在 count-header 中視覺更輕盈一點 */
+.count-header > .sort-wrapper .sort-trigger {
+    padding: 0.45rem 0.95rem;
+    font-size: 0.82rem;
+}
+
 .sort-trigger {
     display: flex;
     align-items: center;
@@ -767,46 +772,6 @@ header {
     line-height: 1.7;
 }
 
-/* ── AI 貢獻摘要區塊 ── */
-.ai-contrib-block {
-    background: rgba(16, 185, 129, 0.07);
-    border-left: 3px solid rgba(16, 185, 129, 0.5);
-    border-radius: 0 0.65rem 0.65rem 0;
-    padding: 0.7rem 1rem;
-    margin-bottom: 0.75rem;
-    font-size: 0.87rem;
-    line-height: 1.75;
-    color: #6ee7b7;
-}
-
-.ai-contrib-block .ai-contrib-label {
-    font-size: 0.72rem;
-    color: #10b981;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    margin-bottom: 0.3rem;
-    display: block;
-    text-transform: uppercase;
-}
-
-.ai-contrib-block.loading {
-    color: #64748b;
-    font-style: italic;
-}
-
-.ai-contrib-block.loading .ai-contrib-text::after {
-    content: '';
-    display: inline-block;
-    width: 24px;
-    height: 5px;
-    background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
-    border-radius: 999px;
-    animation: shimmer-bar 1.2s ease-in-out infinite;
-    opacity: 0.6;
-    vertical-align: middle;
-    margin-left: 4px;
-}
-
 /* ── Citation Badge ── */
 .citation-badge {
     font-size: 0.8rem;
@@ -870,6 +835,21 @@ header {
     border-radius: 999px;
     font-weight: 600;
     cursor: default;
+}
+.similar-fav-badge {
+    font-size: 0.78rem;
+    color: #a855f7;
+    background: rgba(168, 85, 247, 0.1);
+    border: 1px solid rgba(168, 85, 247, 0.28);
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 500;
+    cursor: default;
+}
+body.light-mode .similar-fav-badge {
+    background: rgba(126, 34, 206, 0.08);
+    color: #6b21a8;
+    border-color: rgba(126, 34, 206, 0.22);
 }
 body.light-mode .speed-badge {
     background: rgba(225, 29, 72, 0.08);
@@ -2362,7 +2342,12 @@ body.light-mode {
 .side-brand {
     display: flex; align-items: center; gap: 10px;
     padding: 0 20px;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.15s ease;
 }
+.side-brand:hover { opacity: 0.85; }
+.side-brand:focus-visible { outline: 2px solid rgba(99,102,241,0.5); outline-offset: 4px; border-radius: 6px; }
 .side-brand .brand-mark {
     width: 34px; height: 34px; border-radius: 9px;
     background: var(--accent-gradient);

@@ -1,8 +1,9 @@
 let allPapers = [];      // 7 天
 let monthPapers = [];    // 30 天（懶加載）
 let currentCategory = 'all';
-let currentSortValue = localStorage.getItem('visionary_sort_v2') || 'signal';
-let PAPERS_PER_PAGE = parseInt(localStorage.getItem('visionary_per_page') || '9', 10);
+let currentSortValue = localStorage.getItem('visionary_sort_v2') || 'latest';
+if (currentSortValue === 'signal') currentSortValue = 'latest';
+const PAPERS_PER_PAGE = 9;
 let currentPage = 1;
 let currentFilteredPapers = [];
 let lastCustomTitle = null;
@@ -548,6 +549,7 @@ function toggleFavorite(url, starEl) {
         showToast('已加入收藏夾');
     }
     saveFavorites();
+    _favAuthorSet = null;  // invalidate similar-fav cache
     // 若目前在收藏夾視圖，移除後立即重新渲染
     if (currentCategory === 'favorites') filterPapers();
 }
@@ -627,8 +629,78 @@ function stopLoaderMessages() {
     loaderMsgInterval = null;
 }
 
-const PAPERS_SWR_KEY = 'visionary_papers_swr_v1';
-const PAPERS_SWR_MAX_AGE = 30 * 60 * 1000; // 30 分鐘內 SWR 命中
+const PAPERS_SWR_MAX_AGE = 24 * 60 * 60 * 1000; // 24h：本機只做秒開，新鮮度由後端 SWR 保證
+
+// ── IndexedDB papers cache（取代 localStorage：容量大、async、跨 tab）─────
+const _IDB_DB = 'visionary';
+const _IDB_STORE = 'papers';
+let _idbPromise = null;
+function _openIDB() {
+    if (_idbPromise) return _idbPromise;
+    _idbPromise = new Promise((resolve) => {
+        if (!('indexedDB' in self)) { resolve(null); return; }
+        const req = indexedDB.open(_IDB_DB, 1);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(_IDB_STORE)) {
+                db.createObjectStore(_IDB_STORE);
+            }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror   = () => resolve(null);
+    });
+    return _idbPromise;
+}
+async function idbGet(key) {
+    const db = await _openIDB();
+    if (!db) return null;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(_IDB_STORE, 'readonly');
+            const r = tx.objectStore(_IDB_STORE).get(key);
+            r.onsuccess = () => resolve(r.result || null);
+            r.onerror   = () => resolve(null);
+        } catch (_) { resolve(null); }
+    });
+}
+async function idbSet(key, value) {
+    const db = await _openIDB();
+    if (!db) return;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(_IDB_STORE, 'readwrite');
+            tx.objectStore(_IDB_STORE).put(value, key);
+            tx.oncomplete = () => resolve();
+            tx.onerror    = () => resolve();
+        } catch (_) { resolve(); }
+    });
+}
+async function _readPapersIDB(disc) {
+    try {
+        const v = await idbGet(`papers:${disc}`);
+        if (!v?.papers) return null;
+        if (Date.now() - (v.t || 0) > PAPERS_SWR_MAX_AGE) return null;
+        return v.papers;
+    } catch (_) { return null; }
+}
+async function _writePapersIDB(disc, papers) {
+    try { await idbSet(`papers:${disc}`, { t: Date.now(), papers }); } catch (_) {}
+}
+
+// SW 背景刷新完成後通知前端 → 本函式重抓並渲染（同 disc 去重）
+let _papersInflight = null;
+
+async function _fetchAndApply(disc) {
+    const url = `/api/papers?max_results=50&discipline=${encodeURIComponent(disc)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch data');
+    const data = await res.json();
+    if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return; // 切過 disc 後丟掉舊回應
+    allPapers = indexPapers(data.papers);
+    await filterPapers();
+    scheduleBadgeUpdate();
+    _writePapersIDB(disc, data.papers);
+}
 
 async function fetchPapers() {
     papersGrid.classList.add('hidden');
@@ -637,43 +709,47 @@ async function fetchPapers() {
     startLoaderMessages();
 
     const disc = ACTIVE_DISCIPLINE?.id || 'cv';
-    const swrKey = `${PAPERS_SWR_KEY}:${disc}`;
 
-    // SWR：先用快取秒開（bypass loader 直接渲染）
+    // L1：IndexedDB（本機 24h）— 立即渲染，永遠 < 100ms
     let usedCache = false;
     try {
-        const cached = localStorage.getItem(swrKey);
-        if (cached) {
-            const parsed = JSON.parse(cached);
-            if (parsed?.papers && (Date.now() - (parsed.t || 0) < PAPERS_SWR_MAX_AGE)) {
-                allPapers = indexPapers(parsed.papers);
-                usedCache = true;
-                await filterPapers();
-                scheduleBadgeUpdate();
-            }
+        const cachedPapers = await _readPapersIDB(disc);
+        if (cachedPapers?.length) {
+            allPapers = indexPapers(cachedPapers);
+            usedCache = true;
+            await filterPapers();
+            scheduleBadgeUpdate();
         }
-    } catch (e) { /* 快取壞了沒關係，照常 fetch */ }
+    } catch (e) { /* IDB 壞了沒關係 */ }
 
+    // L2：fetch（SW 對 /api/papers 走 SWR，會立刻回 cache + 背景刷新後 postMessage）
     try {
-        const res = await fetch(`/api/papers?max_results=50&discipline=${encodeURIComponent(disc)}`);
-        if (!res.ok) throw new Error('Failed to fetch data');
-        const data = await res.json();
-        try {
-            localStorage.setItem(swrKey, JSON.stringify({ t: Date.now(), papers: data.papers }));
-        } catch (e) { /* localStorage 滿了也不致命 */ }
-        allPapers = indexPapers(data.papers);
-        await filterPapers();
-        scheduleBadgeUpdate();
+        await _fetchAndApply(disc);
     } catch (e) {
         if (!usedCache) {
             console.error(e);
             alert('獲取論文失敗，請稍後再試。 Error: ' + e.message);
             loader.classList.add('hidden');
         }
-        // 已用快取就吞掉錯誤，下次重整再試
     } finally {
         stopLoaderMessages();
     }
+}
+
+function _onSWApiUpdated(payload) {
+    if (payload?.path !== '/api/papers') return;
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    if (_papersInflight) return;
+    _papersInflight = (async () => {
+        try { await _fetchAndApply(disc); }
+        catch (_) {}
+        finally { _papersInflight = null; }
+    })();
+}
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data?.type === 'api-updated') _onSWApiUpdated(e.data);
+    });
 }
 
 // 首屏渲染後在 idle 階段補引用數 + 在原地更新 badge（避免重 render 整個網格）
@@ -698,6 +774,29 @@ function scheduleBadgeUpdate() {
     }
 }
 
+// 收藏夾作者 lastname 集合 (lazy + invalidate on favorite change)
+let _favAuthorSet = null;
+let _favAuthorSetVersion = -1;
+function _lastName(name) {
+    if (!name) return '';
+    const parts = name.trim().split(/\s+/);
+    return (parts[parts.length - 1] || '').toLowerCase();
+}
+function _getFavAuthorSet() {
+    if (_favAuthorSetVersion === favorites.size && _favAuthorSet) return _favAuthorSet;
+    const s = new Set();
+    const pool = _favoritesPool();
+    for (const p of pool) {
+        for (const a of (p.authors || [])) {
+            const ln = _lastName(a);
+            if (ln && ln.length >= 3) s.add(ln);
+        }
+    }
+    _favAuthorSet = s;
+    _favAuthorSetVersion = favorites.size;
+    return s;
+}
+
 // 共用 badge 渲染：buildCard 與 idle 補強都呼叫這個，避免重複規則漂移
 function populateBadgeSlot(badgeSlot, paper) {
     if (!badgeSlot) return;
@@ -706,14 +805,24 @@ function populateBadgeSlot(badgeSlot, paper) {
     const inflCount = getInfluentialCitations(paper.url);
     const refCount = getRefCount(paper.url);
     const speed = getCitationSpeed(paper);
-    const h5 = getVenueH5(paper);
     const items = [];
     if (citCount >= 0)         items.push(['citation-badge', `📈 ${citCount} 引用`, null]);
     if (inflCount > 0)         items.push(['influential-badge', `💡 ${inflCount} 高影響`, '高影響引用：被後續研究大量採用']);
     if (refCount > 100)        items.push(['survey-badge', '📚 綜述', `引用文獻數 ${refCount}，可能為綜述論文`]);
     if (speed >= 2)            items.push(['speed-badge', `🚀 ${speed >= 10 ? speed.toFixed(0) : speed.toFixed(1)}/月`, '引用速度：每月新增的引用數']);
-    if (h5 >= 100)             items.push(['h5-badge', `h5·${h5}`, 'Google Scholar h5-index：期刊/會議近 5 年影響力指標']);
     if (paper.hf_upvotes >= 5) items.push(['hf-badge', `🤗 ${paper.hf_upvotes}`, 'HuggingFace Daily Papers 社群 upvote 數']);
+    // similar-to-favorite: 跟已收藏論文共享至少 1 位作者 lastname,且本身未收藏
+    if (favorites.size > 0 && !favorites.has(paper.url)) {
+        const favSet = _getFavAuthorSet();
+        if (favSet.size > 0) {
+            for (const a of (paper.authors || [])) {
+                if (favSet.has(_lastName(a))) {
+                    items.push(['similar-fav-badge', '🔗 已收藏作者', '與你收藏的某篇論文有共同作者']);
+                    break;
+                }
+            }
+        }
+    }
     for (const [cls, txt, title] of items) {
         const s = document.createElement('span');
         s.className = cls;
@@ -959,6 +1068,15 @@ function buildCard(paper, index) {
     titleLink.href = paper.url;
     titleLink.textContent = paper.title;
 
+    // 來源 tooltip (hover 卡片時顯示來自哪些上游)
+    const _srcArr = Array.isArray(paper.source) ? paper.source : (paper.source ? [paper.source] : ['arxiv']);
+    const _srcLabel = {
+        arxiv: 'arXiv', hf_daily: 'HuggingFace Daily', openalex: 'OpenAlex',
+        crossref: 'Crossref', pubmed: 'PubMed', biorxiv: 'bioRxiv',
+        medrxiv: 'medRxiv', dblp: 'DBLP'
+    };
+    card.title = `來源:${_srcArr.map(s => _srcLabel[s] || s).join(' · ')}`;
+
     // Authors
     const authorsEl = card.querySelector('.paper-authors');
     paper.authors.forEach((a, i) => {
@@ -1072,7 +1190,11 @@ function renderPapers(papers, customTitle) {
     const meta = document.createElement('span');
     meta.className = 'count-meta';
     meta.textContent = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
-    countHeader.append(theme, meta);
+    countHeader.append(theme);
+    // 把排序下拉選單移到主題標題右邊(使用者通常先選主題、再選時間/熱度)
+    const _sortWrap = document.getElementById('sortWrapper');
+    if (_sortWrap) countHeader.appendChild(_sortWrap);
+    countHeader.append(meta);
     papersGrid.appendChild(countHeader);
 
     const start = (currentPage - 1) * PAPERS_PER_PAGE;
@@ -1181,15 +1303,13 @@ function getVenueH5(paper) {
     return 0;
 }
 
-// ── 6 軸訊號分數（Signal）──────────────────────────────────────
+// ── 4 軸訊號分數（Signal）──────────────────────────────────────
 // 每個軸歸一化到 0..1，composite 為加權平均後 × 100
 const SIGNAL_WEIGHTS = {
-    novelty: 0.12,  // 原創新穎度：投稿越新權重
-    cite:    0.22,  // 總引用
-    hf:      0.18,  // 社群投票
-    venue:   0.18,  // 頂會/期刊 h5
-    code:    0.12,  // 有開源 + star 數
-    recency: 0.18,  // 引用速度（每月）
+    cite:    0.34,  // 總引用
+    hf:      0.26,  // 社群投票
+    code:    0.22,  // 有開源 + star 數
+    recency: 0.18,  // 引用速度（每月新增）
 };
 function _norm01(x) { return Math.max(0, Math.min(1, x)); }
 function _logScale(v, cap) {
@@ -1198,20 +1318,16 @@ function _logScale(v, cap) {
     return _norm01(Math.log1p(v) / Math.log1p(cap));
 }
 
-const SIGNAL_AXIS_ORDER = ['novelty', 'cite', 'hf', 'venue', 'code', 'recency'];
+const SIGNAL_AXIS_ORDER = ['cite', 'hf', 'code', 'recency'];
 const SIGNAL_AXIS_LABEL = {
-    novelty: '新',     // Novelty
     cite:    '引',     // Citations
     hf:      '🤗',    // HF upvotes
-    venue:   '會',     // Venue h5
     code:    '碼',     // Code / stars
     recency: '速',     // Citation speed
 };
 const SIGNAL_AXIS_TITLE = {
-    novelty: '新穎度（發表時間越新越高）',
     cite:    '引用數（對數標準化）',
     hf:      'HuggingFace 社群 upvote',
-    venue:   '頂會/期刊 h5 分數',
     code:    '開源釋出 + GitHub star',
     recency: '引用速度（每月新增）',
 };
@@ -1259,18 +1375,11 @@ function renderSignalBlock(card, paper) {
 }
 
 function computeSignal(paper) {
-    const days = daysSincePublication(paper) || 14;
-    // 越新越高（< 2 天 ≈ 1，7 天 ≈ 0.7，30 天 ≈ 0.3，> 180 天 → 0）
-    const novelty = _norm01(Math.exp(-days / 30));
-
     const cit = Math.max(0, getCitationCount(paper.url));
     const cite = _logScale(cit, 500);
 
     const hfUp = Math.max(0, paper.hf_upvotes || 0);
     const hf = _logScale(hfUp, 200);
-
-    const h5 = getVenueH5(paper);
-    const venue = _norm01(h5 / 400);
 
     const pwc = getPwcData(paper.url) || {};
     const hasCode = !!pwc.github_url || /https?:\/\/github\.com\//i.test(paper.summary || '');
@@ -1280,10 +1389,17 @@ function computeSignal(paper) {
     const speed = getCitationSpeed(paper);           // cits/月
     const recency = _logScale(speed, 50);
 
-    const axes = { novelty, cite, hf, venue, code, recency };
+    const axes = { cite, hf, code, recency };
     let total = 0;
     for (const k in SIGNAL_WEIGHTS) total += axes[k] * SIGNAL_WEIGHTS[k];
-    return { axes, score: Math.round(total * 100) };
+
+    // h5 venue: 降權成「加成分」(命中率低，不入主軸,只有命中時 +5/+8)
+    const h5 = getVenueH5(paper);
+    let bonus = 0;
+    if (h5 >= 200) bonus = 8;
+    else if (h5 >= 100) bonus = 5;
+
+    return { axes, score: Math.min(100, Math.round(total * 100) + bonus) };
 }
 
 async function fetchCitationCounts(papers) {
@@ -1291,7 +1407,12 @@ async function fetchCitationCounts(papers) {
     if (progressBar) { progressBar.style.width = '0%'; progressBar.classList.add('active'); }
 
     const now = Date.now();
-    const ids = [...new Set(papers.map(p => getArxivId(p.url)).filter(Boolean))];
+    const idTitleMap = {};
+    for (const p of papers) {
+        const id = getArxivId(p.url);
+        if (id && p.title) idTitleMap[id] = p.title;
+    }
+    const ids = [...new Set(Object.keys(idTitleMap))];
     const needed = ids.filter(id => {
         const c = s2Cache[id];
         return !c || (now - (c.at || 0)) > S2_TTL;
@@ -1304,22 +1425,31 @@ async function fetchCitationCounts(papers) {
     };
     if (!needed.length) { finish(); return; }
 
-    // Server proxies Semantic Scholar with shared cache
+    // 只在需要 DBLP venue fallback 時帶 titles (server 會自己判斷)
+    const titles = {};
+    for (const id of needed) if (idTitleMap[id]) titles[id] = idTitleMap[id];
+
+    // GET 分批: server 端上限 200/次,前端切 chunk;每個 URL 都可被 SW / browser cache
+    const CHUNK = 150;
     try {
-        const res = await fetch('/api/citations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ arxiv_ids: needed }),
-        });
-        if (res.ok) {
+        for (let i = 0; i < needed.length; i += CHUNK) {
+            const chunk = needed.slice(i, i + CHUNK);
+            const chunkTitles = {};
+            for (const id of chunk) if (titles[id]) chunkTitles[id] = titles[id];
+            const params = new URLSearchParams({
+                arxiv_ids: chunk.join(','),
+                titles: JSON.stringify(chunkTitles),
+            });
+            const res = await fetch(`/api/citations?${params.toString()}`);
+            if (!res.ok) continue;
             const data = await res.json();
             const t = Date.now();
             for (const [id, entry] of Object.entries(data.results || {})) {
                 s2Cache[id] = { ...entry, at: t };
             }
-            purgeS2();
-            scheduleSave(S2_CACHE_KEY, () => s2Cache);
         }
+        purgeS2();
+        scheduleSave(S2_CACHE_KEY, () => s2Cache);
     } catch (e) { /* ignore */ }
     finish();
 }
@@ -1495,9 +1625,6 @@ async function filterPapers() {
         if (sortValue === 'citations' || sortValue === 'hot_week' || sortValue === 'hot_month') {
             await fetchCitationCounts(papers);
             papers.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
-        } else if (sortValue === 'signal') {
-            await fetchCitationCounts(papers);
-            papers.sort((a, b) => computeSignal(b).score - computeSignal(a).score);
         } else {
             papers.sort((a, b) => (b.published || '').localeCompare(a.published || ''));
         }
@@ -1569,14 +1696,9 @@ async function filterPapers() {
         await fetchCitationCounts(filtered);
         filtered.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
         titleSuffix = '（依引用數排序）';
-    } else if (sortValue === 'signal') {
-        await fetchCitationCounts(filtered);
-        filtered.sort((a, b) => computeSignal(b).score - computeSignal(a).score);
-        titleSuffix = '（綜合 Signal 分數）';
     }
 
-    const titlePrefix = sortValue === 'signal' ? '本週 Signal 推薦' :
-                        sortValue === 'citations' ? '引用最多' : '熱門論文';
+    const titlePrefix = sortValue === 'citations' ? '引用最多' : '熱門論文';
     renderPapers(filtered, titleSuffix ? `${titlePrefix} ${titleSuffix}` : null);
 }
 
@@ -1889,6 +2011,11 @@ function _selectCategory(filter, activeEl) {
     if (activeEl) activeEl.classList.add('active');
     currentCategory = filter;
     localStorage.setItem(LAST_CATEGORY_KEY, filter);
+    // 按下 All 一律回到「都沒有篩選」的狀態:清空搜尋框
+    if (filter === 'all') {
+        const si = document.getElementById('searchInput');
+        if (si && si.value) si.value = '';
+    }
     syncTopConfActiveState();
     filterPapers();
 }
@@ -1970,6 +2097,27 @@ function addTopicBtn(topic, save = true) {
 
 // Initial Load
 document.addEventListener('DOMContentLoaded', () => {
+    // 0) 點左上角品牌 ICON 回到主頁(切回 All + 清空搜尋)
+    const _brandHome = document.getElementById('brandHome');
+    if (_brandHome) {
+        const _goHome = () => {
+            const allBtn = document.querySelector('.category-btn[data-filter="all"]');
+            if (typeof _selectCategory === 'function' && allBtn) {
+                _selectCategory('all', allBtn);
+            } else {
+                const si = document.getElementById('searchInput');
+                if (si) si.value = '';
+                currentCategory = 'all';
+                if (typeof filterPapers === 'function') filterPapers();
+            }
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        _brandHome.addEventListener('click', _goHome);
+        _brandHome.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _goHome(); }
+        });
+    }
+
     // 1) 先綁定切換領域按鈕（無論有沒有選領域都要能開啟）
     document.getElementById('switchDisciplineBtn')?.addEventListener('click', () => {
         openDisciplinePicker({ closable: true });
@@ -2077,7 +2225,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let sortTimer = null;
     if (sortSubmenu) document.body.appendChild(sortSubmenu);
 
-    const SORT_LABELS = { signal: 'Signal 推薦', latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門', citations: '引用最多' };
+    const SORT_LABELS = { latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門', citations: '引用最多' };
 
     // 初始化：反映 localStorage 儲存的 sort 選項
     (function _initSortFromStorage() {
@@ -2314,17 +2462,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }, { passive: true });
 
-    // ── 每頁筆數 ──────────────────────────────────────────────────
-    const perPageSelect = document.getElementById('perPageSelect');
-    if (perPageSelect) {
-        perPageSelect.value = String(PAPERS_PER_PAGE);
-        perPageSelect.addEventListener('change', () => {
-            PAPERS_PER_PAGE = parseInt(perPageSelect.value, 10);
-            localStorage.setItem('visionary_per_page', String(PAPERS_PER_PAGE));
-            currentPage = 1;
-            renderPapers(currentFilteredPapers, lastCustomTitle);
-        });
-    }
 });
 
 // ── 閱讀統計面板（快取 DOM refs，僅在資料變動時更新）────────────
