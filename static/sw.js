@@ -3,7 +3,7 @@
 //   靜態資源 → stale-while-revalidate
 //   /api/papers, /api/trending → SWR + 背景刷新後 postMessage 通知前端
 //   其他 /api/* → 不快取
-const VERSION = 'v4';
+const VERSION = 'v5';
 const STATIC_CACHE = `visionary-static-${VERSION}`;
 const API_CACHE    = `visionary-api-${VERSION}`;
 const STATIC_ASSETS = [

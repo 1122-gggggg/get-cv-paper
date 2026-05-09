@@ -487,7 +487,54 @@ header {
 
 /* sort-wrapper 預設只在 count-header 顯示；首次渲染前停留在 controls 中暫時隱藏 */
 .controls > .sort-wrapper { display: none; }
-.count-header > .sort-wrapper { margin-left: auto; }
+.count-header > .time-range-wrapper { margin-left: auto; }
+.count-header > .sort-wrapper { margin-left: 0; }
+
+.time-range-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    padding: 3px;
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    background: var(--surface-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.time-range-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 999px;
+    padding: 0.42rem 0.76rem;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.82rem;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.18s ease;
+}
+
+.time-range-btn span {
+    font-size: 0.66rem;
+    opacity: 0.52;
+}
+
+.time-range-btn:hover {
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.time-range-btn.active {
+    color: #a5b4fc;
+    background: rgba(79, 70, 229, 0.2);
+    font-weight: 650;
+}
 
 /* 在 count-header 中視覺更輕盈一點 */
 .count-header > .sort-wrapper .sort-trigger {

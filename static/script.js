@@ -1,12 +1,46 @@
 let allPapers = [];      // 7 天
 let monthPapers = [];    // 30 天（懶加載）
 let currentCategory = 'all';
-let currentSortValue = localStorage.getItem('visionary_sort_v2') || 'latest';
-if (currentSortValue === 'signal') currentSortValue = 'latest';
+const LEGACY_SORT_VALUE = localStorage.getItem('visionary_sort_v2') || '';
+const SORT_MIGRATION = {
+    latest: 'latest',
+    hot_week: 'popularity',
+    hot_month: 'popularity',
+    citations: 'citations',
+    signal: 'value',
+};
+const RANGE_MIGRATION = {
+    latest: 'day',
+    hot_week: 'week',
+    hot_month: 'month',
+    citations: 'week',
+    signal: 'week',
+};
+const SORT_VALUES = new Set(['latest', 'popularity', 'citations', 'value', 'velocity', 'hf']);
+const TIME_RANGE_VALUES = new Set(['day', 'week', 'month']);
+let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'latest';
+let currentTimeRange = localStorage.getItem('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
+if (!SORT_VALUES.has(currentSortValue)) currentSortValue = 'latest';
+if (!TIME_RANGE_VALUES.has(currentTimeRange)) currentTimeRange = 'week';
 const PAPERS_PER_PAGE = 9;
 let currentPage = 1;
 let currentFilteredPapers = [];
 let lastCustomTitle = null;
+
+const TIME_RANGE_META = {
+    day:   { label: '本日', short: '今日', en: 'Today', days: 1 },
+    week:  { label: '本週', short: '本週', en: 'Week', days: 7 },
+    month: { label: '本月', short: '本月', en: 'Month', days: 30 },
+};
+
+const SORT_META = {
+    latest:     { label: '最新', title: '最新論文' },
+    popularity: { label: '熱門度', title: '熱門論文' },
+    citations:  { label: '引用度', title: '引用最多' },
+    value:      { label: '價值分數', title: '高價值論文' },
+    velocity:   { label: '引用速度', title: '快速升溫' },
+    hf:         { label: 'HF 熱度', title: '社群熱門' },
+};
 
 // ── 安全：HTML escape（防 XSS，arXiv 摘要可能含 <、> 等字元）─────
 function escapeHtml(s) {
@@ -38,6 +72,92 @@ function indexPapers(papers) {
         p._indexed = true;
     }
     return papers;
+}
+
+function getTimeRangeMeta(range = currentTimeRange) {
+    return TIME_RANGE_META[range] || TIME_RANGE_META.week;
+}
+
+function getSortMeta(value = currentSortValue) {
+    return SORT_META[value] || SORT_META.latest;
+}
+
+function paperTimestamp(paper) {
+    const ts = Date.parse(paper?.published || '');
+    return Number.isFinite(ts) ? ts : 0;
+}
+
+function startOfTodayMs() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function rangeStartMs(range = currentTimeRange) {
+    if (range === 'day') return startOfTodayMs();
+    const days = getTimeRangeMeta(range).days;
+    return Date.now() - days * 24 * 60 * 60 * 1000;
+}
+
+function isPaperInCurrentTimeRange(paper, range = currentTimeRange) {
+    const ts = paperTimestamp(paper);
+    if (!ts) return true;
+    return ts >= rangeStartMs(range);
+}
+
+function applyTimeRange(pool, range = currentTimeRange) {
+    return (pool || []).filter(p => isPaperInCurrentTimeRange(p, range));
+}
+
+function compareNewest(a, b) {
+    return paperTimestamp(b) - paperTimestamp(a);
+}
+
+function getPopularityScore(paper) {
+    const citations = Math.max(0, getCitationCount(paper.url));
+    const influential = Math.max(0, getInfluentialCitations(paper.url));
+    const hfUpvotes = Math.max(0, paper.hf_upvotes || 0);
+    const velocity = Math.max(0, getCitationSpeed(paper));
+    const localViews = getPaperClicks(paper.url);
+    return (
+        _logScale(hfUpvotes, 200) * 36 +
+        _logScale(velocity, 50) * 24 +
+        _logScale(citations, 500) * 22 +
+        _logScale(influential, 80) * 12 +
+        _logScale(localViews, 12) * 6
+    );
+}
+
+function getValueScore(paper) {
+    return computeSignal(paper).score || 0;
+}
+
+async function prepareMetricData(papers, sortValue = currentSortValue) {
+    if (!papers?.length) return;
+    if (['popularity', 'citations', 'value', 'velocity'].includes(sortValue)) {
+        await fetchCitationCounts(papers);
+    }
+    if (sortValue === 'value') {
+        await fetchPwcData(papers);
+    }
+}
+
+function sortPapersByMetric(papers, sortValue = currentSortValue) {
+    const sorted = [...papers];
+    const tie = (a, b) => compareNewest(a, b);
+    if (sortValue === 'popularity') {
+        sorted.sort((a, b) => (getPopularityScore(b) - getPopularityScore(a)) || tie(a, b));
+    } else if (sortValue === 'citations') {
+        sorted.sort((a, b) => (Math.max(0, getCitationCount(b.url)) - Math.max(0, getCitationCount(a.url))) || tie(a, b));
+    } else if (sortValue === 'value') {
+        sorted.sort((a, b) => (getValueScore(b) - getValueScore(a)) || tie(a, b));
+    } else if (sortValue === 'velocity') {
+        sorted.sort((a, b) => (getCitationSpeed(b) - getCitationSpeed(a)) || tie(a, b));
+    } else if (sortValue === 'hf') {
+        sorted.sort((a, b) => ((b.hf_upvotes || 0) - (a.hf_upvotes || 0)) || tie(a, b));
+    } else {
+        sorted.sort(tie);
+    }
+    return sorted;
 }
 
 // ── SVG 圖示（改用 sprite <use>，HTML 體積銳減）─────────────────
@@ -1198,21 +1318,22 @@ function renderPapers(papers, customTitle) {
 
     // 標題
     let themeTitle;
+    const rangeLabel = getTimeRangeMeta().label;
     if (customTitle) {
         themeTitle = customTitle;
     } else if (currentCategory === "all") {
-        themeTitle = "本週所有最新論文";
+        themeTitle = `${rangeLabel}所有最新論文`;
     } else if (currentCategory === "top_conf") {
-        themeTitle = `本週入選 ${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊的論文`;
+        themeTitle = `${rangeLabel}入選 ${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊的論文`;
     } else if (CONF_FILTERS.has(currentCategory)) {
         const confName = document.querySelector(`.category-btn[data-filter="${currentCategory}"]`)?.innerText || currentCategory;
-        themeTitle = `本週提及 ${confName} 的論文`;
+        themeTitle = `${rangeLabel}提及 ${confName} 的論文`;
     } else if (currentCategory === "favorites") {
         themeTitle = "⭐ 我的收藏論文";
     } else {
         const activeLabel = document.querySelector('.category-btn.active .label-span')?.textContent.trim()
             || document.querySelector('.category-btn.active')?.textContent.trim() || currentCategory;
-        themeTitle = `本週關於「${activeLabel}」的論文`;
+        themeTitle = `${rangeLabel}關於「${activeLabel}」的論文`;
     }
 
     const countHeader = document.createElement('div');
@@ -1225,6 +1346,8 @@ function renderPapers(papers, customTitle) {
     meta.textContent = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
     countHeader.append(theme);
     // 把排序下拉選單移到主題標題右邊(使用者通常先選主題、再選時間/熱度)
+    const _timeRangeWrap = document.getElementById('timeRangeWrapper');
+    if (_timeRangeWrap) countHeader.appendChild(_timeRangeWrap);
     const _sortWrap = document.getElementById('sortWrapper');
     if (_sortWrap) countHeader.appendChild(_sortWrap);
     countHeader.append(meta);
@@ -1589,6 +1712,29 @@ function applyFilter(pool, query) {
     });
 }
 
+function currentCategoryLabel() {
+    if (currentCategory === 'all') return '所有論文';
+    if (currentCategory === 'favorites') return '收藏論文';
+    if (currentCategory === 'top_conf') return `${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊`;
+    if (currentCategory === 'hf_daily') return 'HuggingFace 每日精選';
+    if (CONF_FILTERS.has(currentCategory)) {
+        return document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim()
+            || CONF_FILTERS.get(currentCategory)?.toUpperCase()
+            || currentCategory;
+    }
+    return document.querySelector('.category-btn.active .label-span')?.textContent.trim()
+        || document.querySelector('.category-btn.active')?.textContent.trim()
+        || currentCategory;
+}
+
+function buildMetricTitle() {
+    const range = getTimeRangeMeta().label;
+    const sort = getSortMeta();
+    const subject = currentCategoryLabel();
+    if (currentSortValue === 'latest') return null;
+    return `${range}${sort.title} · ${subject}`;
+}
+
 async function ensureMonthPapers() {
     if (monthPapers.length > 0) return;
     loader.classList.remove('hidden');
@@ -1604,6 +1750,14 @@ async function ensureMonthPapers() {
         loader.classList.add('hidden');
         papersGrid.classList.remove('hidden');
     }
+}
+
+async function papersForCurrentTimeRange() {
+    if (currentTimeRange === 'month') {
+        await ensureMonthPapers();
+        return monthPapers;
+    }
+    return allPapers;
 }
 
 let _hfDailyCache = null;        // 原始（全領域）結果
@@ -1680,13 +1834,12 @@ async function filterPapers() {
                 return tLc.includes(query) || sLc.includes(query) || aLc.includes(query);
             });
         }
-        if (sortValue === 'citations' || sortValue === 'hot_week' || sortValue === 'hot_month') {
-            await fetchCitationCounts(papers);
-            papers.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
-        } else {
-            papers.sort((a, b) => (b.published || '').localeCompare(a.published || ''));
-        }
-        renderPapers(papers, `⭐ 我的收藏（${papers.length} 篇）`);
+        papers = applyTimeRange(papers);
+        await prepareMetricData(papers, sortValue);
+        papers = sortPapersByMetric(papers, sortValue);
+        const range = getTimeRangeMeta().label;
+        const sortLabel = getSortMeta().label;
+        renderPapers(papers, `⭐ 我的收藏（${range} · ${sortLabel} · ${papers.length} 篇）`);
         return;
     }
 
@@ -1698,14 +1851,19 @@ async function filterPapers() {
         try {
             let papers = await ensureHfDaily();
             if (query) papers = applyFilter(papers, query);
-            // 依社群 upvote 排序
-            papers = [...papers].sort((a, b) => (b.hf_upvotes || 0) - (a.hf_upvotes || 0));
+            papers = applyTimeRange(papers);
+            await prepareMetricData(papers, sortValue);
+            papers = sortValue === 'latest'
+                ? sortPapersByMetric(papers, 'hf')
+                : sortPapersByMetric(papers, sortValue);
             const disciplineTag = ACTIVE_DISCIPLINE ? `${ACTIVE_DISCIPLINE.icon} ${ACTIVE_DISCIPLINE.name}` : '';
             const allTotal = _hfDailyCache?.length || 0;
             const filteredTotal = papers.length;
+            const rangeLabel = getTimeRangeMeta().label;
+            const sortLabel = sortValue === 'latest' ? '依社群 upvote' : `依${getSortMeta().label}`;
             const suffix = disciplineTag && filteredTotal !== allTotal
-                ? `（${disciplineTag} 相關 · 依社群 upvote）`
-                : '（依社群 upvote 排序）';
+                ? `（${rangeLabel} · ${disciplineTag} 相關 · ${sortLabel}）`
+                : `（${rangeLabel} · ${sortLabel}）`;
             renderPapers(papers, `🤗 HuggingFace 每日精選${suffix}`);
         } catch (e) {
             loader.classList.add('hidden');
@@ -1726,7 +1884,10 @@ async function filterPapers() {
             const res = await fetch(`/api/search?q=${encodeURIComponent(searchQ)}&max_results=100`);
             if (!res.ok) throw new Error('Search failed');
             const data = await res.json();
-            renderPapers(indexPapers(data.papers), `${confName} 相關論文（全網搜尋）`);
+            let papers = applyTimeRange(indexPapers(data.papers));
+            await prepareMetricData(papers, sortValue);
+            papers = sortPapersByMetric(papers, sortValue);
+            renderPapers(papers, `${confName} 相關論文（${getTimeRangeMeta().label} · 依${getSortMeta().label}）`);
         } catch (e) {
             loader.classList.add('hidden');
             alert('搜尋失敗：' + e.message);
@@ -1734,43 +1895,28 @@ async function filterPapers() {
         return;
     }
 
-    let pool = allPapers;
-    let titleSuffix = '';
-
-    if (sortValue === 'hot_month') {
-        await ensureMonthPapers();
-        pool = monthPapers;
-        titleSuffix = '（本月，依引用排序）';
-    } else if (sortValue === 'hot_week') {
-        titleSuffix = '（本週，依引用排序）';
-    }
-
+    const pool = await papersForCurrentTimeRange();
     let filtered = applyFilter(pool, query);
+    filtered = applyTimeRange(filtered);
 
-    if (sortValue === 'hot_week' || sortValue === 'hot_month') {
-        await fetchCitationCounts(filtered);
-        filtered.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
-    } else if (sortValue === 'citations') {
-        await fetchCitationCounts(filtered);
-        filtered.sort((a, b) => getCitationCount(b.url) - getCitationCount(a.url));
-        titleSuffix = '（依引用數排序）';
-    }
-
-    const titlePrefix = sortValue === 'citations' ? '引用最多' : '熱門論文';
-    renderPapers(filtered, titleSuffix ? `${titlePrefix} ${titleSuffix}` : null);
+    await prepareMetricData(filtered, sortValue);
+    filtered = sortPapersByMetric(filtered, sortValue);
+    renderPapers(filtered, buildMetricTitle());
 }
 
-function filterByTag(tag) {
+async function filterByTag(tag) {
     if (!tag) return;
     const urls = new Set(Object.keys(paperTags).filter(u => (paperTags[u] || []).includes(tag)));
-    const matched = allPapers.filter(p => urls.has(p.url));
+    let matched = applyTimeRange(allPapers).filter(p => urls.has(p.url));
     // 若 allPapers 沒收錄（可能是搜尋結果裡的論文），就組一個最小 stub
     if (matched.length === 0 && urls.size > 0) {
         for (const u of urls) {
             matched.push({ url: u, title: u.split('/abs/')[1] || u, summary: '', authors: [], published: '' });
         }
     }
-    renderPapers(indexPapers(matched), `標籤 #${tag}`);
+    matched = indexPapers(matched);
+    await prepareMetricData(matched, currentSortValue);
+    renderPapers(sortPapersByMetric(matched, currentSortValue), `標籤 #${tag}（${getTimeRangeMeta().label}）`);
 }
 
 let _searchAbort = null;
@@ -1789,7 +1935,10 @@ async function searchAllPapers(query) {
         if (!res.ok) throw new Error('Search failed');
         const data = await res.json();
         if (signal.aborted) return;
-        renderPapers(indexPapers(data.papers), `全網搜尋「${query}」`);
+        let papers = applyTimeRange(indexPapers(data.papers || []));
+        await prepareMetricData(papers, currentSortValue);
+        papers = sortPapersByMetric(papers, currentSortValue);
+        renderPapers(papers, `全網搜尋「${query}」（${getTimeRangeMeta().label} · 依${getSortMeta().label}）`);
     } catch (e) {
         if (e.name === 'AbortError') return;
         loader.classList.add('hidden');
@@ -2277,18 +2426,49 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ── 排序下拉選單 hover 定位 ──
+    const timeRangeWrapper = document.getElementById('timeRangeWrapper');
     const sortWrapper = document.getElementById('sortWrapper');
     const sortSubmenu = document.getElementById('sortSubmenu');
     const sortLabel   = document.getElementById('sortLabel');
     let sortTimer = null;
     if (sortSubmenu) document.body.appendChild(sortSubmenu);
 
-    const SORT_LABELS = { latest: '本日最新', hot_week: '本週熱門', hot_month: '本月熱門', citations: '引用最多' };
+    function updateTimeRangeUI() {
+        const meta = getTimeRangeMeta();
+        timeRangeWrapper?.querySelectorAll('.time-range-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.range === currentTimeRange);
+        });
+        const jp = document.querySelector('.jp-label');
+        if (jp) jp.textContent = `${meta.short} · ${meta.en.toLowerCase()}`;
+        const pageTitle = document.querySelector('.page-title');
+        if (pageTitle) {
+            pageTitle.textContent = '';
+            pageTitle.append(`${meta.label}最新 `);
+            const sub = document.createElement('span');
+            sub.className = 'page-title-sub';
+            sub.textContent = `${meta.en.toLowerCase()} papers`;
+            pageTitle.appendChild(sub);
+        }
+    }
+
+    if (timeRangeWrapper) {
+        timeRangeWrapper.querySelectorAll('.time-range-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const next = btn.dataset.range;
+                if (!TIME_RANGE_VALUES.has(next) || next === currentTimeRange) return;
+                currentTimeRange = next;
+                try { localStorage.setItem('visionary_time_range_v1', next); } catch (e) {}
+                updateTimeRangeUI();
+                await filterPapers();
+            });
+        });
+        updateTimeRangeUI();
+    }
 
     // 初始化：反映 localStorage 儲存的 sort 選項
     (function _initSortFromStorage() {
         if (!sortSubmenu || !sortLabel) return;
-        sortLabel.textContent = SORT_LABELS[currentSortValue] || '本日最新';
+        sortLabel.textContent = getSortMeta(currentSortValue).label;
         sortSubmenu.querySelectorAll('.sort-item').forEach(i => {
             i.classList.toggle('active', i.dataset.value === currentSortValue);
         });
@@ -2315,9 +2495,10 @@ document.addEventListener('DOMContentLoaded', () => {
         sortSubmenu.querySelectorAll('.sort-item').forEach(item => {
             item.addEventListener('click', () => {
                 const val = item.dataset.value;
+                if (!SORT_VALUES.has(val)) return;
                 currentSortValue = val;
-                try { localStorage.setItem('visionary_sort_v2', val); } catch (e) {}
-                sortLabel.textContent = SORT_LABELS[val] || val;
+                try { localStorage.setItem('visionary_sort_v3', val); } catch (e) {}
+                sortLabel.textContent = getSortMeta(val).label;
                 sortSubmenu.querySelectorAll('.sort-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
                 closeSortSubmenu();
@@ -2542,7 +2723,8 @@ function updateStats() {
     _statsEls.read.textContent  = `📖 已讀 ${readSet.size}`;
     _statsEls.fav.textContent   = `⭐ 收藏 ${favorites.size}`;
     _statsEls.notes.textContent = `📝 筆記 ${Object.keys(notesMap).length}`;
-    _statsEls.total.textContent = `📚 本週 ${allPapers.length} 篇`;
+    const totalCount = Array.isArray(currentFilteredPapers) ? currentFilteredPapers.length : allPapers.length;
+    _statsEls.total.textContent = `📚 ${getTimeRangeMeta().label} ${totalCount} 篇`;
 }
 
 setTimeout(updateStats, 300);

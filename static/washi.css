@@ -606,6 +606,46 @@ body.theme-washi .pin-search-btn:hover {
   background: var(--mustard-wash);
 }
 
+/* Time range segmented control */
+body.theme-washi .time-range-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--r-md);
+  box-shadow: none;
+}
+body.theme-washi .time-range-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--ink-mute);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+body.theme-washi .time-range-btn span {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  opacity: 0.58;
+}
+body.theme-washi .time-range-btn:hover {
+  color: var(--ink);
+  background: var(--paper-shade);
+}
+body.theme-washi .time-range-btn.active {
+  color: var(--mustard-deep);
+  background: var(--mustard-soft);
+  font-weight: 700;
+}
+
 /* Sort dropdown */
 body.theme-washi .sort-trigger {
   display: inline-flex;

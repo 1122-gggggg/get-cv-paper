@@ -142,17 +142,24 @@
                     <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                     <button id="pinSearchBtn" class="pin-search-btn" title="釘選此搜尋為主題標籤">📌</button>
                 </div>
+                <div class="time-range-wrapper" id="timeRangeWrapper" aria-label="時間範圍">
+                    <button class="time-range-btn" data-range="day">本日<span>Today</span></button>
+                    <button class="time-range-btn" data-range="week">本週<span>Week</span></button>
+                    <button class="time-range-btn" data-range="month">本月<span>Month</span></button>
+                </div>
                 <div class="sort-wrapper" id="sortWrapper">
                     <button class="sort-trigger" id="sortTrigger">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-                        <span id="sortLabel">本日最新</span>
+                        <span id="sortLabel">最新</span>
                         <svg class="sort-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     <div class="sort-submenu" id="sortSubmenu">
-                        <button class="sort-item active" data-value="latest">⚡ 本日最新 <span>Latest</span></button>
-                        <button class="sort-item" data-value="hot_week">🔥 本週熱門 <span>Trending Week</span></button>
-                        <button class="sort-item" data-value="hot_month">📈 本月熱門 <span>Trending Month</span></button>
-                        <button class="sort-item" data-value="citations">📊 引用最多 <span>Most Cited</span></button>
+                        <button class="sort-item active" data-value="latest">⚡ 最新 <span>Newest</span></button>
+                        <button class="sort-item" data-value="popularity">🔥 熱門度 <span>Hotness</span></button>
+                        <button class="sort-item" data-value="citations">📊 引用度 <span>Citations</span></button>
+                        <button class="sort-item" data-value="value">💎 價值分數 <span>Value</span></button>
+                        <button class="sort-item" data-value="velocity">🚀 引用速度 <span>Velocity</span></button>
+                        <button class="sort-item" data-value="hf">🤗 HF 熱度 <span>Upvotes</span></button>
                     </div>
                 </div>
             </div>
