@@ -865,6 +865,32 @@ body.theme-washi .signal-block .signal-score b {
   color: var(--mustard-deep);
   letter-spacing: 0;
 }
+body.theme-washi .value-tier {
+  font-family: var(--font-soft);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--paper-shade);
+  border: 1px solid var(--card-border);
+  color: var(--ink-mute);
+}
+body.theme-washi .value-tier[data-tier="high"],
+body.theme-washi .value-tier[data-tier="hot"] {
+  background: var(--persimmon-soft);
+  border-color: var(--persimmon);
+  color: var(--vermillion);
+}
+body.theme-washi .value-tier[data-tier="solid"] {
+  background: var(--matcha-soft);
+  border-color: var(--matcha);
+  color: #557019;
+}
+body.theme-washi .value-tier[data-tier="emerging"] {
+  background: var(--indigo-soft);
+  border-color: var(--indigo);
+  color: var(--indigo);
+}
 body.theme-washi .signal-axes {
   display: inline-flex;
   gap: 8px;
@@ -899,6 +925,21 @@ body.theme-washi .signal-axis .sa-fill {
   background: var(--mustard);
   border-radius: 2px;
   transition: width 0.4s ease;
+}
+body.theme-washi .value-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  width: 100%;
+}
+body.theme-washi .value-reason {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  color: var(--ink-mute);
+  background: var(--paper-shade);
+  border: 1px solid var(--card-border);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
 }
 
 /* Title / authors */
@@ -1103,6 +1144,15 @@ body.theme-washi .h5-badge {
 }
 body.theme-washi .influential-badge { color: var(--plum); background: var(--plum-soft); border-color: var(--plum); }
 body.theme-washi .speed-badge { color: var(--vermillion); background: var(--persimmon-soft); border-color: var(--persimmon); }
+body.theme-washi .view-badge {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  color: var(--indigo);
+  background: var(--indigo-soft);
+  border: 1px solid var(--indigo);
+  font-family: var(--font-mono);
+}
 
 body.theme-washi .github-link-btn,
 body.theme-washi .github-slot a {

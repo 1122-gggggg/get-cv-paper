@@ -14,6 +14,7 @@ COPY . .
 
 RUN mkdir -p /data && chown -R 1000:1000 /data
 ENV CACHE_DIR=/data
+USER 1000:1000
 
 EXPOSE 8000
 

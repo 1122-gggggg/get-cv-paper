@@ -39,14 +39,15 @@
     <!-- Google Fonts：preload + 非阻塞套用 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap"></noscript>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap"></noscript>
     <link rel="stylesheet" href="/static/style.css" fetchpriority="high">
     <link rel="stylesheet" href="/static/washi.css" fetchpriority="high">
     <!-- 預先發 /api/papers 預設 cv 領域，與 CSS/JS 平行下載，省 1 RTT -->
-    <link rel="preload" as="fetch" href="/api/papers?max_results=50&amp;discipline=cv" fetchpriority="high">
+    <link rel="preload" as="fetch" href="/api/papers?max_results=50&amp;discipline=cv" fetchpriority="high" crossorigin="anonymous">
     <script src="/static/disciplines.js" defer></script>
     <script src="/static/auth.js" defer></script>
+    <script src="/static/value-metrics.js" defer></script>
     <script src="/static/script.js" defer></script>
 </head>
 <body class="theme-washi light-mode">
@@ -192,9 +193,10 @@
                         <p class="paper-authors"></p>
                         <div class="signal-block" hidden>
                             <div class="signal-head">
-                                <span class="signal-score">✨ Signal <b class="signal-score-num">–</b></span>
+                                <span class="signal-score">價值 <b class="signal-score-num">–</b><span class="value-tier"></span></span>
                                 <div class="signal-axes" aria-hidden="true"></div>
                             </div>
+                            <div class="value-reasons"></div>
                         </div>
                         <p class="paper-summary"></p>
                         <div class="paper-tags">

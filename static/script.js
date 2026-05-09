@@ -508,6 +508,24 @@ function allKnownTags() {
     return [...s].sort();
 }
 
+const PAPER_CLICKS_KEY = 'visionary_paper_clicks_v1';
+let paperClicks = {};
+try { paperClicks = JSON.parse(localStorage.getItem(PAPER_CLICKS_KEY) || '{}'); } catch (e) { paperClicks = {}; }
+
+function getPaperClicks(url) {
+    return Math.max(0, Number(paperClicks[url] || 0));
+}
+
+function savePaperClicks() {
+    localStorage.setItem(PAPER_CLICKS_KEY, JSON.stringify(paperClicks));
+}
+
+function recordPaperClick(url) {
+    if (!url) return;
+    paperClicks[url] = getPaperClicks(url) + 1;
+    savePaperClicks();
+}
+
 function renderCardTags(card, url) {
     const chips = card.querySelector('.tag-chips');
     if (!chips) return;
@@ -575,7 +593,10 @@ function makeLRU(key, max) {
             return map.data[k];
         },
         set(k, v) {
-            if (k in map.data) map.order.splice(map.order.indexOf(k), 1);
+            if (k in map.data) {
+                const idx = map.order.indexOf(k);
+                if (idx >= 0) map.order.splice(idx, 1);
+            }
             map.data[k] = v;
             map.order.push(k);
             while (map.order.length > max) {
@@ -762,8 +783,9 @@ function scheduleBadgeUpdate() {
         const target = currentFilteredPapers.filter(p => urlSet.has(p.url));
         if (!target.length) return;
         await fetchCitationCounts(target);
+        const byUrl = new Map(currentFilteredPapers.map(p => [p.url, p]));
         for (const card of visibleCards) {
-            const p = currentFilteredPapers.find(x => x.url === card.dataset.url);
+            const p = byUrl.get(card.dataset.url);
             if (p) updateCardBadgesInPlace(card, p);
         }
     };
@@ -805,12 +827,14 @@ function populateBadgeSlot(badgeSlot, paper) {
     const inflCount = getInfluentialCitations(paper.url);
     const refCount = getRefCount(paper.url);
     const speed = getCitationSpeed(paper);
+    const localViews = getPaperClicks(paper.url);
     const items = [];
     if (citCount >= 0)         items.push(['citation-badge', `📈 ${citCount} 引用`, null]);
     if (inflCount > 0)         items.push(['influential-badge', `💡 ${inflCount} 高影響`, '高影響引用：被後續研究大量採用']);
     if (refCount > 100)        items.push(['survey-badge', '📚 綜述', `引用文獻數 ${refCount}，可能為綜述論文`]);
     if (speed >= 2)            items.push(['speed-badge', `🚀 ${speed >= 10 ? speed.toFixed(0) : speed.toFixed(1)}/月`, '引用速度：每月新增的引用數']);
     if (paper.hf_upvotes >= 5) items.push(['hf-badge', `🤗 ${paper.hf_upvotes}`, 'HuggingFace Daily Papers 社群 upvote 數']);
+    if (localViews > 0)        items.push(['view-badge', `👁 ${localViews} 點閱`, '本機點閱次數（此瀏覽器/登入同步資料）']);
     // similar-to-favorite: 跟已收藏論文共享至少 1 位作者 lastname,且本身未收藏
     if (favorites.size > 0 && !favorites.has(paper.url)) {
         const favSet = _getFavAuthorSet();
@@ -842,6 +866,7 @@ function updateCardBadgesInPlace(card, paper) {
         existingVenue.textContent = venue.label;
     }
     populateBadgeSlot(card.querySelector('.badge-slot'), paper);
+    renderSignalBlock(card, paper);
 }
 
 function goToPage(page) {
@@ -928,6 +953,14 @@ function _bindPapersGridDelegation() {
         if (!card) return;
         const url = card.dataset.url;
         if (!url) return;
+
+        const paperNavLink = e.target.closest('.paper-title-link, .paper-link');
+        if (paperNavLink && card.contains(paperNavLink)) {
+            recordPaperClick(url);
+            const paper = currentFilteredPapers.find(p => p.url === url);
+            if (paper) updateCardBadgesInPlace(card, paper);
+            return;
+        }
 
         const starBtn = e.target.closest('.star-btn');
         if (starBtn && card.contains(starBtn)) {
@@ -1303,14 +1336,8 @@ function getVenueH5(paper) {
     return 0;
 }
 
-// ── 4 軸訊號分數（Signal）──────────────────────────────────────
-// 每個軸歸一化到 0..1，composite 為加權平均後 × 100
-const SIGNAL_WEIGHTS = {
-    cite:    0.34,  // 總引用
-    hf:      0.26,  // 社群投票
-    code:    0.22,  // 有開源 + star 數
-    recency: 0.18,  // 引用速度（每月新增）
-};
+// ── 論文價值分數（Value）──────────────────────────────────────
+// 每個軸歸一化到 0..1，由 static/value-metrics.js 做加權。
 function _norm01(x) { return Math.max(0, Math.min(1, x)); }
 function _logScale(v, cap) {
     // log(1+v) / log(1+cap) → 對數平滑，v>=cap 視為 1
@@ -1318,18 +1345,24 @@ function _logScale(v, cap) {
     return _norm01(Math.log1p(v) / Math.log1p(cap));
 }
 
-const SIGNAL_AXIS_ORDER = ['cite', 'hf', 'code', 'recency'];
+const SIGNAL_AXIS_ORDER = ['citation', 'influence', 'attention', 'code', 'velocity', 'venue', 'local'];
 const SIGNAL_AXIS_LABEL = {
-    cite:    '引',     // Citations
-    hf:      '🤗',    // HF upvotes
-    code:    '碼',     // Code / stars
-    recency: '速',     // Citation speed
+    citation:  '引',
+    influence: '影',
+    attention: '熱',
+    code:      '碼',
+    velocity:  '速',
+    venue:     '會',
+    local:     '閱',
 };
 const SIGNAL_AXIS_TITLE = {
-    cite:    '引用數（對數標準化）',
-    hf:      'HuggingFace 社群 upvote',
-    code:    '開源釋出 + GitHub star',
-    recency: '引用速度（每月新增）',
+    citation:  '引用數（Semantic Scholar）',
+    influence: '高影響引用',
+    attention: '社群熱度（HuggingFace upvote）',
+    code:      '開源釋出 + GitHub star',
+    velocity:  '引用速度（每月新增）',
+    venue:     'Venue h5 近似權重',
+    local:     '本機點閱次數',
 };
 
 function renderBridgeBadge(card, paper) {
@@ -1356,11 +1389,17 @@ function renderBridgeBadge(card, paper) {
 function renderSignalBlock(card, paper) {
     const block = card.querySelector('.signal-block');
     if (!block) return;
-    const { score, axes } = computeSignal(paper);
-    if (score <= 0) { block.remove(); return; }
+    const { score, axes, label, tier, reasons } = computeSignal(paper);
     block.hidden = false;
     block.querySelector('.signal-score-num').textContent = score;
+    const tierEl = block.querySelector('.value-tier');
+    if (tierEl) {
+        tierEl.textContent = label || '觀望';
+        tierEl.dataset.tier = tier || 'watch';
+    }
     const axesEl = block.querySelector('.signal-axes');
+    if (!axesEl) return;
+    axesEl.textContent = '';
     const frag = document.createDocumentFragment();
     for (const k of SIGNAL_AXIS_ORDER) {
         const pct = Math.round((axes[k] || 0) * 100);
@@ -1372,34 +1411,41 @@ function renderSignalBlock(card, paper) {
         frag.appendChild(bar);
     }
     axesEl.appendChild(frag);
+
+    const reasonsEl = block.querySelector('.value-reasons');
+    if (reasonsEl) {
+        reasonsEl.textContent = '';
+        const list = reasons?.length ? reasons : ['等待引用與熱度資料'];
+        for (const reason of list.slice(0, 4)) {
+            const chip = document.createElement('span');
+            chip.className = 'value-reason';
+            chip.textContent = reason;
+            reasonsEl.appendChild(chip);
+        }
+    }
 }
 
 function computeSignal(paper) {
     const cit = Math.max(0, getCitationCount(paper.url));
-    const cite = _logScale(cit, 500);
-
-    const hfUp = Math.max(0, paper.hf_upvotes || 0);
-    const hf = _logScale(hfUp, 200);
-
+    const influential = Math.max(0, getInfluentialCitations(paper.url));
     const pwc = getPwcData(paper.url) || {};
     const hasCode = !!pwc.github_url || /https?:\/\/github\.com\//i.test(paper.summary || '');
     const stars = pwc.stars || 0;
-    const code = hasCode ? _norm01(0.35 + 0.65 * _logScale(stars, 5000)) : 0;
-
-    const speed = getCitationSpeed(paper);           // cits/月
-    const recency = _logScale(speed, 50);
-
-    const axes = { cite, hf, code, recency };
-    let total = 0;
-    for (const k in SIGNAL_WEIGHTS) total += axes[k] * SIGNAL_WEIGHTS[k];
-
-    // h5 venue: 降權成「加成分」(命中率低，不入主軸,只有命中時 +5/+8)
-    const h5 = getVenueH5(paper);
-    let bonus = 0;
-    if (h5 >= 200) bonus = 8;
-    else if (h5 >= 100) bonus = 5;
-
-    return { axes, score: Math.min(100, Math.round(total * 100) + bonus) };
+    const metricInput = {
+        citations: cit,
+        influential,
+        refs: Math.max(0, getRefCount(paper.url)),
+        hfUpvotes: Math.max(0, paper.hf_upvotes || 0),
+        hasCode,
+        stars,
+        citationSpeed: getCitationSpeed(paper),
+        venueH5: getVenueH5(paper),
+        localViews: getPaperClicks(paper.url),
+    };
+    if (window.ValueMetrics?.computeValueMetrics) {
+        return window.ValueMetrics.computeValueMetrics(metricInput);
+    }
+    return { score: 0, tier: 'watch', label: '觀望', axes: {}, reasons: [] };
 }
 
 async function fetchCitationCounts(papers) {
@@ -1429,13 +1475,13 @@ async function fetchCitationCounts(papers) {
     const titles = {};
     for (const id of needed) if (idTitleMap[id]) titles[id] = idTitleMap[id];
 
-    // GET 分批: server 端上限 200/次,前端切 chunk;每個 URL 都可被 SW / browser cache
-    const CHUNK = 150;
+    // GET 分批: 留足 URL 長度餘裕，titles 只帶短字串給 DBLP fallback
+    const CHUNK = 60;
     try {
         for (let i = 0; i < needed.length; i += CHUNK) {
             const chunk = needed.slice(i, i + CHUNK);
             const chunkTitles = {};
-            for (const id of chunk) if (titles[id]) chunkTitles[id] = titles[id];
+            for (const id of chunk) if (titles[id]) chunkTitles[id] = titles[id].slice(0, 180);
             const params = new URLSearchParams({
                 arxiv_ids: chunk.join(','),
                 titles: JSON.stringify(chunkTitles),
@@ -1482,18 +1528,25 @@ async function fetchPwcData(papers) {
     if (!needed.length) return false;
 
     try {
-        const res = await fetch(`/api/pwc?arxiv_ids=${encodeURIComponent(needed.join(','))}`);
-        if (!res.ok) return false;
-        const data = await res.json();
-        const t = Date.now();
-        for (const id of needed) {
-            const entry = data.results?.[id];
-            if (entry) {
-                pwcCache[id] = { github_url: entry.github_url || null, stars: entry.stars || 0, at: t };
-            } else {
-                pwcCache[id] = { at: t };  // 標記已探測避免重複呼叫
+        const CHUNK = 80;
+        let touched = false;
+        for (let i = 0; i < needed.length; i += CHUNK) {
+            const chunk = needed.slice(i, i + CHUNK);
+            const res = await fetch(`/api/pwc?arxiv_ids=${encodeURIComponent(chunk.join(','))}`);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const t = Date.now();
+            for (const id of chunk) {
+                const entry = data.results?.[id];
+                if (entry) {
+                    pwcCache[id] = { github_url: entry.github_url || null, stars: entry.stars || 0, at: t };
+                } else {
+                    pwcCache[id] = { at: t };  // 標記已探測避免重複呼叫
+                }
+                touched = true;
             }
         }
+        if (!touched) return false;
         purgePwc();
         scheduleSave(PWC_CACHE_KEY, () => pwcCache);
         return true;
@@ -1507,6 +1560,11 @@ function applyFilter(pool, query) {
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
+    const catTerms = cat
+        ? [cat, ...(TOPIC_SYNONYMS[cat] || [])]
+            .map(t => String(t).toLowerCase().trim())
+            .filter(Boolean)
+        : [];
 
     return pool.filter(paper => {
         const tLc = paper._titleLc   ?? paper.title.toLowerCase();
@@ -1524,7 +1582,7 @@ function applyFilter(pool, query) {
         } else if (confKey) {
             matchesCategory = tLc.includes(confKey) || sLc.includes(confKey);
         } else if (cat) {
-            matchesCategory = tLc.includes(cat) || sLc.includes(cat);
+            matchesCategory = catTerms.some(term => tLc.includes(term) || sLc.includes(term));
         }
 
         return matchesQuery && matchesCategory;
@@ -1731,7 +1789,7 @@ async function searchAllPapers(query) {
         if (!res.ok) throw new Error('Search failed');
         const data = await res.json();
         if (signal.aborted) return;
-        renderPapers(indexPapers(data.papers), `全網搜尋「${escapeHtml(query)}」`);
+        renderPapers(indexPapers(data.papers), `全網搜尋「${query}」`);
     } catch (e) {
         if (e.name === 'AbortError') return;
         loader.classList.add('hidden');

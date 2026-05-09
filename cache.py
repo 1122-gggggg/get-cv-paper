@@ -20,6 +20,17 @@ from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
 
+_JSON_DUMPS_KW = {"ensure_ascii": False, "separators": (",", ":")}
+
+
+def _consume_future_exception(fut: asyncio.Future) -> None:
+    if fut.cancelled():
+        return
+    try:
+        fut.exception()
+    except Exception:
+        pass
+
 
 class LRUStore:
     """Per-key LRU with TTL and optional JSON persistence on disk."""
@@ -56,7 +67,7 @@ class LRUStore:
             return
         try:
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(_json.dumps(self._data), encoding="utf-8")
+            tmp.write_text(_json.dumps(self._data, **_JSON_DUMPS_KW), encoding="utf-8")
             tmp.replace(self.path)
             self._dirty = False
         except Exception as e:
@@ -166,10 +177,11 @@ class CachedJSON:
 
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
+        fut.add_done_callback(_consume_future_exception)
         self._inflight[key] = fut
         try:
             payload = await builder()
-            body = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            body = _json.dumps(payload, **_JSON_DUMPS_KW).encode("utf-8")
             etag = make_etag(body)
             self._store(key, body, etag)
             self.metrics["build_ok"] += 1

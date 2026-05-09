@@ -5,6 +5,7 @@ DB pool is lazy and the schema migration runs once on first acquire.
 """
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import os
@@ -70,7 +71,8 @@ def _verify_id_token(token: str) -> dict:
 async def require_user(authorization: str | None = Header(default=None)) -> dict:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
-    return _verify_id_token(authorization.split(None, 1)[1].strip())
+    token = authorization.split(None, 1)[1].strip()
+    return await asyncio.to_thread(_verify_id_token, token)
 
 
 class UserDataPut(BaseModel):

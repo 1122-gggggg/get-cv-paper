@@ -100,6 +100,44 @@ _WARMUP_DAYS = 7
 _WARMUP_MAX = 1000
 _WARMUP_INTERVAL = 5 * 60
 
+_PAPERS_MAX_RESULTS = 5000
+_PAPERS_DAYS_MAX = 30
+_TRENDING_DAYS_MAX = 30
+_SEARCH_MAX_RESULTS = 100
+_CITATIONS_MAX = 200
+_PWC_IDS_MAX = 100
+_OPENREVIEW_DAYS_MAX = 365
+_OPENREVIEW_MAX_RESULTS = 1000
+_BIBTEX_IDS_MAX = 50
+
+
+def _bounded_int(
+    value: int | str | None,
+    *,
+    default: int,
+    min_value: int,
+    max_value: int,
+) -> int:
+    try:
+        n = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        n = default
+    return max(min_value, min(max_value, n))
+
+
+def _unique_csv(raw: str, *, max_items: int, field_name: str = "ids") -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+        if len(out) > max_items:
+            raise HTTPException(status_code=400, detail=f"too many {field_name} (max {max_items})")
+    return out
+
 
 async def _flush_task() -> None:
     while True:
@@ -276,6 +314,13 @@ def sw_root():
 
 def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     """回傳 (cache_key, builder coroutine factory) — 給 endpoint 與 warmup 共用。"""
+    days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
+    max_results = _bounded_int(
+        max_results,
+        default=1000,
+        min_value=1,
+        max_value=_PAPERS_MAX_RESULTS,
+    )
     if days >= 30 and max_results < 5000:
         max_results = 5000
     disc = discipline(discipline_id)
@@ -352,6 +397,13 @@ async def get_papers(
     days: int = 7,
     discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
 ):
+    days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
+    max_results = _bounded_int(
+        max_results,
+        default=1000,
+        min_value=1,
+        max_value=_PAPERS_MAX_RESULTS,
+    )
     cache_key, builder = _papers_build_spec(discipline_id, days, max_results)
     body, etag = await _papers_cache.get_or_build(cache_key, builder)
     return etag_response(request, body, etag)
@@ -361,6 +413,7 @@ async def get_papers(
 async def get_trending(request: Request, source: str = "hf_daily", days: int = 7):
     if source != "hf_daily":
         raise HTTPException(status_code=400, detail=f"unknown source: {source}")
+    days = _bounded_int(days, default=7, min_value=1, max_value=_TRENDING_DAYS_MAX)
     cache_key = f"{source}:{days}"
     body, etag = await _trending_cache.get_or_build(cache_key, _trending_build_spec(days))
     return etag_response(request, body, etag)
@@ -368,9 +421,16 @@ async def get_trending(request: Request, source: str = "hf_daily", days: int = 7
 
 @app.get("/api/search")
 async def search_papers(q: str, max_results: int = 50):
-    if not q.strip():
+    query = q.strip()
+    if not query:
         return {"papers": []}
-    return {"papers": await fetch_arxiv_search(_client(), q, max_results)}
+    max_results = _bounded_int(
+        max_results,
+        default=50,
+        min_value=1,
+        max_value=_SEARCH_MAX_RESULTS,
+    )
+    return {"papers": await fetch_arxiv_search(_client(), query, max_results)}
 
 
 @app.get("/api/disciplines")
@@ -383,35 +443,26 @@ def list_disciplines():
 
 # ── Semantic Scholar citation proxy ──────────────────────────────
 # GET 版:支援 service worker / browser HTTP cache (POST 不能)。
-# arxiv_ids 用 comma-separated query param,上限 200 個避免 URL 過長 + S2 濫用。
-_CITATIONS_MAX = 200
-
-
 @app.get("/api/citations")
 async def get_citations(
     request: Request,
     arxiv_ids: str = Query("", description="comma-separated arXiv IDs"),
     titles: str = Query("", description="JSON {arxiv_id: title} 用於 DBLP fallback"),
 ):
-    ids_raw = [a.strip() for a in arxiv_ids.split(",") if a.strip()]
-    if not ids_raw:
+    ids = _unique_csv(arxiv_ids, max_items=_CITATIONS_MAX, field_name="ids")
+    if not ids:
         return {"results": {}}
-    if len(ids_raw) > _CITATIONS_MAX:
-        raise HTTPException(status_code=400, detail=f"too many ids (max {_CITATIONS_MAX})")
-    # 去重保序
-    seen: set[str] = set()
-    ids: list[str] = []
-    for a in ids_raw:
-        if a not in seen:
-            seen.add(a)
-            ids.append(a)
 
     titles_map: dict[str, str] = {}
     if titles:
         try:
             parsed = _json.loads(titles)
             if isinstance(parsed, dict):
-                titles_map = {str(k): str(v) for k, v in parsed.items()}
+                titles_map = {
+                    str(k): str(v)[:240]
+                    for k, v in parsed.items()
+                    if str(k) in ids
+                }
         except Exception:
             pass
 
@@ -455,7 +506,7 @@ async def get_citations(
 # ── Papers with Code proxy ───────────────────────────────────────
 @app.get("/api/pwc")
 async def get_pwc(request: Request, arxiv_ids: str):
-    ids = [a.strip() for a in arxiv_ids.split(",") if a.strip()]
+    ids = _unique_csv(arxiv_ids, max_items=_PWC_IDS_MAX, field_name="ids")
     missing = [a for a in ids if _pwc_store.get(a) is None]
     if missing:
         fresh = await fetch_pwc_many(_client(), missing, concurrency=5)
@@ -503,6 +554,20 @@ async def get_openreview(
         raise HTTPException(
             status_code=400, detail=f"unknown venue: {venue}; expected one of {_OPENREVIEW_VENUES}"
         )
+    days = _bounded_int(days, default=30, min_value=1, max_value=_OPENREVIEW_DAYS_MAX)
+    max_results = _bounded_int(
+        max_results,
+        default=200,
+        min_value=1,
+        max_value=_OPENREVIEW_MAX_RESULTS,
+    )
+    if year is not None:
+        year = _bounded_int(
+            year,
+            default=time.gmtime().tm_year,
+            min_value=2013,
+            max_value=time.gmtime().tm_year + 1,
+        )
     cache_key = f"{venue}:{year or 'auto'}:{days}:{max_results}"
 
     async def build():
@@ -531,7 +596,7 @@ async def get_recommendations(
     arxiv_id = arxiv_id.strip()
     if not arxiv_id:
         raise HTTPException(status_code=400, detail="missing arxiv_id")
-    limit = max(1, min(limit, 50))
+    limit = _bounded_int(limit, default=10, min_value=1, max_value=50)
     cache_key = f"{arxiv_id}:{limit}"
 
     async def build():
@@ -554,7 +619,7 @@ async def author_search(request: Request, q: str = Query(..., min_length=2), lim
     name = q.strip()
     if not name:
         return {"authors": []}
-    limit = max(1, min(limit, 20))
+    limit = _bounded_int(limit, default=5, min_value=1, max_value=20)
     cache_key = f"{name.lower()}:{limit}"
 
     async def build():
@@ -569,7 +634,7 @@ async def author_papers(request: Request, author_id: str, limit: int = 50):
     author_id = author_id.strip()
     if not author_id or not author_id.isdigit():
         raise HTTPException(status_code=400, detail="invalid author_id")
-    limit = max(1, min(limit, 100))
+    limit = _bounded_int(limit, default=50, min_value=1, max_value=100)
     cache_key = f"{author_id}:{limit}"
 
     async def build():
@@ -609,7 +674,7 @@ def _bibtex_escape(s: str) -> str:
 
 @app.get("/api/bibtex")
 async def export_bibtex(arxiv_ids: str = Query(...)):
-    ids_raw = [a.strip() for a in arxiv_ids.split(",") if a.strip()][:50]
+    ids_raw = _unique_csv(arxiv_ids, max_items=_BIBTEX_IDS_MAX, field_name="ids")
     if not ids_raw:
         raise HTTPException(status_code=400, detail="missing arxiv_ids")
     # 用 S2 取 metadata (含 venue / year);沒命中就只給 arXiv 樣板

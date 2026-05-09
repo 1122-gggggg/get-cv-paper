@@ -13,6 +13,7 @@ const SYNC_PREFIXES = [
     'visionary_deleted_builtins',
     'visionary_renamed_builtins',
     'visionary_paper_tags_v1',
+    'visionary_paper_clicks_v1',
     'visionary_discipline',
     'visionary_last_category',
 ];
