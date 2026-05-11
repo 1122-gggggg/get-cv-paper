@@ -54,7 +54,18 @@ async function apiSWR(req, url) {
             try {
                 await cache.put(req, resp.clone());
                 broadcast({ type: 'api-updated', path: url.pathname, search: url.search });
-            } catch (_) { /* quota etc */ }
+            } catch (err) {
+                // QuotaExceededError → 清掉最舊的一半項目再試一次
+                if (err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message || ''))) {
+                    try {
+                        const keys = await cache.keys();
+                        const drop = Math.max(1, Math.floor(keys.length / 2));
+                        await Promise.all(keys.slice(0, drop).map(k => cache.delete(k)));
+                        await cache.put(req, resp.clone());
+                        broadcast({ type: 'api-updated', path: url.pathname, search: url.search });
+                    } catch (_) { /* give up */ }
+                }
+            }
         }
         return resp;
     }).catch(() => null);

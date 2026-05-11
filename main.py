@@ -141,9 +141,15 @@ def _unique_csv(raw: str, *, max_items: int, field_name: str = "ids") -> list[st
 
 async def _flush_task() -> None:
     while True:
-        await asyncio.sleep(60)
-        for s in (_s2_store, _pwc_store):
-            s.flush()
+        try:
+            await asyncio.sleep(60)
+            for s in (_s2_store, _pwc_store):
+                s.flush()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("flush task error: %s", e)
+            await asyncio.sleep(60)
 
 
 async def _warmup_loop() -> None:
@@ -154,17 +160,24 @@ async def _warmup_loop() -> None:
     """
     await asyncio.sleep(5)
     while True:
-        for disc_id in _WARMUP_DISCIPLINES:
-            try:
-                key, builder = _papers_build_spec(disc_id, _WARMUP_DAYS, _WARMUP_MAX)
-                await _papers_cache.warm(key, builder)
-            except Exception as e:
-                logger.warning("warmup %s failed: %s", disc_id, e)
         try:
-            await _trending_cache.warm("hf_daily:7", _trending_build_spec(7))
+            for disc_id in _WARMUP_DISCIPLINES:
+                try:
+                    key, builder = _papers_build_spec(disc_id, _WARMUP_DAYS, _WARMUP_MAX)
+                    await _papers_cache.warm(key, builder)
+                except Exception as e:
+                    logger.warning("warmup %s failed: %s", disc_id, e)
+            try:
+                await _trending_cache.warm("hf_daily:7", _trending_build_spec(7))
+            except Exception as e:
+                logger.warning("warmup trending failed: %s", e)
+            await asyncio.sleep(_WARMUP_INTERVAL)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.warning("warmup trending failed: %s", e)
-        await asyncio.sleep(_WARMUP_INTERVAL)
+            # 任何漏網 exception 都不要讓整個 task 死掉,讓 SWR 繼續運作
+            logger.warning("warmup loop error: %s", e)
+            await asyncio.sleep(_WARMUP_INTERVAL)
 
 
 @asynccontextmanager
@@ -212,17 +225,17 @@ class HeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-        # CSP: 允許 inline script (Google Sign-In), self origin, 第三方 logo/img;
-        # connect-src 包含所有上游 API 來源 (S2/PWC/OpenAlex/etc 不直連前端,所以只允許 self)
+        # CSP: 唯一 inline script 是 index.html 的 JSON-LD,以 sha256 hash 放行;
+        # style-src 保留 unsafe-inline (CSS-in-JS 與 :focus outline 樣式有 inline 需求)
         if not response.headers.get("Content-Security-Policy"):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com; "
-                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'sha256-rp6QQ0ouE7tj2BbEMIflchpTVG+LQoePo1NY8ph7K0w=' https://accounts.google.com https://apis.google.com; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "img-src 'self' data: https:; "
                 "connect-src 'self' https://accounts.google.com; "
                 "frame-src https://accounts.google.com; "
-                "font-src 'self' data:; "
+                "font-src 'self' data: https://fonts.gstatic.com; "
                 "base-uri 'self'; form-action 'self'"
             )
         return response
@@ -310,6 +323,32 @@ def sw_root():
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /api/\n"
+        "Sitemap: /sitemap.xml\n"
+    )
+    return Response(content=body, media_type="text/plain")
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    # 列出每個 discipline 的根頁面 (CSR with query),讓爬蟲至少知道存在
+    urls = ['<url><loc>/</loc><changefreq>hourly</changefreq><priority>1.0</priority></url>']
+    for did in DISCIPLINES.keys():
+        urls.append(f'<url><loc>/?discipline={did}</loc><changefreq>daily</changefreq><priority>0.7</priority></url>')
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "\n".join(urls) +
+        "\n</urlset>\n"
+    )
+    return Response(content=body, media_type="application/xml")
 
 
 def _papers_build_spec(discipline_id: str, days: int, max_results: int):
@@ -525,9 +564,14 @@ async def get_pwc(request: Request, arxiv_ids: str):
 
 
 # ── Cache + RL observability ─────────────────────────────────────
+_METRICS_KEY = os.environ.get("METRICS_KEY", "")
+
+
 @app.get("/api/metrics")
-def get_metrics():
-    """供 dashboard / 自我觀測用,不對外公開敏感資料。"""
+def get_metrics(key: str = ""):
+    """供 dashboard / 自我觀測用。設定 METRICS_KEY 環境變數後需帶 ?key=..."""
+    if _METRICS_KEY and key != _METRICS_KEY:
+        raise HTTPException(status_code=403, detail="forbidden")
     return {
         "papers_cache": _papers_cache.stats(),
         "trending_cache": _trending_cache.stats(),
@@ -668,8 +712,26 @@ def _bibtex_key(authors: list[str], year: str, title: str) -> str:
     return f"{last}{yr}{first_word}"[:50] or "ref"
 
 
+# LaTeX 特殊字元: & % $ # _ { } ~ ^ \  → 編譯會壞,逐字 escape
+_BIBTEX_ESCAPE_MAP = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+
 def _bibtex_escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("{", "").replace("}", "").strip()
+    out = []
+    for ch in s:
+        out.append(_BIBTEX_ESCAPE_MAP.get(ch, ch))
+    return "".join(out).strip()
 
 
 @app.get("/api/bibtex")

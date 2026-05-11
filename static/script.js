@@ -2602,9 +2602,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.addEventListener('keydown', (e) => {
-        // 若正在輸入文字，不攔截
         const tag = document.activeElement.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        const inEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+        // Escape:輸入框中按 Esc 先離開焦點(讓使用者能用 J/K)
+        if (e.key === 'Escape' && inEditable) {
+            document.activeElement.blur();
+            return;
+        }
+        if (inEditable) return;
 
         const cards = getVisibleCards();
 
@@ -2728,7 +2733,19 @@ function updateStats() {
 }
 
 setTimeout(updateStats, 300);
-setInterval(updateStats, 2000);
+let _statsTimer = null;
+function _startStatsTimer() {
+    if (_statsTimer) return;
+    _statsTimer = setInterval(updateStats, 2000);
+}
+function _stopStatsTimer() {
+    if (_statsTimer) { clearInterval(_statsTimer); _statsTimer = null; }
+}
+if (!document.hidden) _startStatsTimer();
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) _stopStatsTimer();
+    else { updateStats(); _startStatsTimer(); }
+});
 
 // ── 主題：固定淺色（移除黑夜模式）──
 document.body.classList.add('light-mode');
