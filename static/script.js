@@ -1,5 +1,6 @@
 let allPapers = [];      // 7 天
 let monthPapers = [];    // 30 天（懶加載）
+let quarterPapers = [];  // 90 天（懶加載,用於近三月熱門）
 let currentCategory = 'all';
 const LEGACY_SORT_VALUE = localStorage.getItem('visionary_sort_v2') || '';
 const SORT_MIGRATION = {
@@ -16,8 +17,8 @@ const RANGE_MIGRATION = {
     citations: 'week',
     signal: 'week',
 };
-const SORT_VALUES = new Set(['latest', 'popularity', 'citations', 'value', 'velocity', 'hf']);
-const TIME_RANGE_VALUES = new Set(['day', 'week', 'month']);
+const SORT_VALUES = new Set(['latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m']);
+const TIME_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter']);
 let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'latest';
 let currentTimeRange = localStorage.getItem('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
 if (!SORT_VALUES.has(currentSortValue)) currentSortValue = 'latest';
@@ -28,9 +29,10 @@ let currentFilteredPapers = [];
 let lastCustomTitle = null;
 
 const TIME_RANGE_META = {
-    day:   { label: '本日', short: '今日', en: 'Today', days: 1 },
-    week:  { label: '本週', short: '本週', en: 'Week', days: 7 },
-    month: { label: '本月', short: '本月', en: 'Month', days: 30 },
+    day:     { label: '本日', short: '今日', en: 'Today', days: 1 },
+    week:    { label: '本週', short: '本週', en: 'Week', days: 7 },
+    month:   { label: '本月', short: '本月', en: 'Month', days: 30 },
+    quarter: { label: '近三月', short: '三月', en: '3M', days: 90 },
 };
 
 const SORT_META = {
@@ -40,6 +42,7 @@ const SORT_META = {
     value:      { label: '價值分數', title: '高價值論文' },
     velocity:   { label: '引用速度', title: '快速升溫' },
     hf:         { label: 'HF 熱度', title: '社群熱門' },
+    hot3m:      { label: '近三月熱門', title: '近三月熱門排名' },
 };
 
 // ── 安全：HTML escape（防 XSS，arXiv 摘要可能含 <、> 等字元）─────
@@ -146,7 +149,8 @@ function sortPapersByMetric(papers, sortValue = currentSortValue) {
     const tie = (a, b) => compareNewest(a, b);
     if (sortValue === 'popularity') {
         sorted.sort((a, b) => (getPopularityScore(b) - getPopularityScore(a)) || tie(a, b));
-    } else if (sortValue === 'citations') {
+    } else if (sortValue === 'citations' || sortValue === 'hot3m') {
+        // hot3m = 90 天 pool 已在 papersForCurrentTimeRange 限縮,這裡只負責按引用排序
         sorted.sort((a, b) => (Math.max(0, getCitationCount(b.url)) - Math.max(0, getCitationCount(a.url))) || tie(a, b));
     } else if (sortValue === 'value') {
         sorted.sort((a, b) => (getValueScore(b) - getValueScore(a)) || tie(a, b));
@@ -1752,7 +1756,28 @@ async function ensureMonthPapers() {
     }
 }
 
+async function ensureQuarterPapers() {
+    if (quarterPapers.length > 0) return;
+    loader.classList.remove('hidden');
+    papersGrid.classList.add('hidden');
+    try {
+        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+        const res = await fetch(`/api/papers?days=90&discipline=${encodeURIComponent(disc)}`);
+        if (!res.ok) throw new Error();
+        quarterPapers = indexPapers((await res.json()).papers);
+    } catch (e) {
+        quarterPapers = monthPapers.length ? monthPapers : allPapers;
+    } finally {
+        loader.classList.add('hidden');
+        papersGrid.classList.remove('hidden');
+    }
+}
+
 async function papersForCurrentTimeRange() {
+    if (currentTimeRange === 'quarter') {
+        await ensureQuarterPapers();
+        return quarterPapers;
+    }
     if (currentTimeRange === 'month') {
         await ensureMonthPapers();
         return monthPapers;
@@ -2498,6 +2523,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!SORT_VALUES.has(val)) return;
                 currentSortValue = val;
                 try { localStorage.setItem('visionary_sort_v3', val); } catch (e) {}
+                // 近三月熱門:語意上就是 90 天窗 + 引用排序,自動切到 quarter
+                if (val === 'hot3m' && currentTimeRange !== 'quarter') {
+                    currentTimeRange = 'quarter';
+                    try { localStorage.setItem('visionary_time_range_v1', 'quarter'); } catch (e) {}
+                    updateTimeRangeUI();
+                }
                 sortLabel.textContent = getSortMeta(val).label;
                 sortSubmenu.querySelectorAll('.sort-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
