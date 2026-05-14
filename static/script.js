@@ -847,6 +847,19 @@ async function _fetchAndApply(disc) {
     _writePapersIDB(disc, data.papers);
 }
 
+function _readSSRPapers(disc) {
+    try {
+        const el = document.getElementById('ssr-papers');
+        if (!el || el.dataset.disc !== disc) return null;
+        const raw = el.dataset.json;
+        if (!raw) return null;
+        const arr = JSON.parse(raw);
+        // 用完就移除節點,避免後續切 discipline 時誤用
+        el.remove();
+        return Array.isArray(arr) && arr.length ? arr : null;
+    } catch (_) { return null; }
+}
+
 async function fetchPapers() {
     papersGrid.classList.add('hidden');
     noResults.classList.add('hidden');
@@ -855,11 +868,20 @@ async function fetchPapers() {
 
     const disc = ACTIVE_DISCIPLINE?.id || 'cv';
 
-    // L1：IndexedDB（本機 24h）— 立即渲染，永遠 < 100ms
+    // L0:SSR(server 注入首 12 篇)— 第一次造訪、無 IDB cache 時瞬間有畫面
     let usedCache = false;
+    const ssrPapers = _readSSRPapers(disc);
+    if (ssrPapers) {
+        allPapers = indexPapers(ssrPapers);
+        usedCache = true;
+        await filterPapers();
+        scheduleBadgeUpdate();
+    }
+
+    // L1:IndexedDB(本機 24h)— 若 SSR 命中已渲染,IDB 結果只在更新時覆蓋
     try {
         const cachedPapers = await _readPapersIDB(disc);
-        if (cachedPapers?.length) {
+        if (cachedPapers?.length && cachedPapers.length > (ssrPapers?.length || 0)) {
             allPapers = indexPapers(cachedPapers);
             usedCache = true;
             await filterPapers();
@@ -2793,11 +2815,6 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
     });
 }
 
-
-// ── 保活 ping（避開 Render 免費層 15 分鐘休眠）──────────────
-if (location.protocol === 'https:') {
-    setInterval(() => { fetch('/api/health', { cache: 'no-store' }).catch(() => {}); }, 10 * 60 * 1000);
-}
 
 // ── 鍵盤快捷鍵說明按鈕 ────────────────────────────────────────
 document.getElementById('kbdHintBtn')?.addEventListener('click', () => {

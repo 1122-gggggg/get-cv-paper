@@ -7,6 +7,7 @@ in disciplines.py.
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import json as _json
 import logging
 import os
@@ -20,7 +21,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -94,10 +95,12 @@ _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
 _s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600, cache_dir=CACHE_DIR)
 _pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600, cache_dir=CACHE_DIR)
 
-# Warmup:啟動立刻跑 + 每 5 分鐘背景刷新熱門 disciplines(命中率最高的 4 個 + 預設 7d/1000)
+# Warmup:啟動立刻跑 + 每 5 分鐘背景刷新熱門 disciplines。
+# 注意:max 必須與 script.js 實際請求對齊(/api/papers?max_results=50),否則 cache key 不同,
+# 首位使用者仍要付冷啟動成本。
 _WARMUP_DISCIPLINES = ("cv", "ml", "ai", "nlp")
 _WARMUP_DAYS = 7
-_WARMUP_MAX = 1000
+_WARMUP_MAX = 50
 _WARMUP_INTERVAL = 5 * 60
 
 _PAPERS_MAX_RESULTS = 5000
@@ -180,8 +183,16 @@ async def _warmup_loop() -> None:
             await asyncio.sleep(_WARMUP_INTERVAL)
 
 
+_INDEX_HTML: str = ""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _INDEX_HTML
+    try:
+        _INDEX_HTML = Path("static/index.html").read_text(encoding="utf-8")
+    except Exception as e:
+        logger.warning("index.html load failed: %s", e)
     flush = asyncio.create_task(_flush_task())
     warm = asyncio.create_task(_warmup_loop())
     try:
@@ -310,9 +321,44 @@ def health():
     return {"ok": True, "t": int(time.time())}
 
 
+def _ssr_compact(p: dict) -> dict:
+    return {
+        "url": p.get("url"),
+        "title": (p.get("title") or "")[:260],
+        "summary": (p.get("summary") or "")[:280],
+        "authors": p.get("authors") or [],
+        "published": p.get("published"),
+        "venue": p.get("venue"),
+        "github_url": p.get("github_url"),
+    }
+
+
 @app.get("/")
-def read_root():
-    return FileResponse("static/index.html")
+async def read_root():
+    html_doc = _INDEX_HTML
+    if not html_doc:
+        return FileResponse("static/index.html")
+    try:
+        key, _builder = _papers_build_spec(DEFAULT_DISCIPLINE, _WARMUP_DAYS, _WARMUP_MAX)
+        ent = _papers_cache._get_entry(key)
+        if ent is not None:
+            _at, body, _etag = ent
+            data = _json.loads(body)
+            papers = (data.get("papers") or [])[:12]
+            if papers:
+                compact = [_ssr_compact(p) for p in papers]
+                safe = _html.escape(_json.dumps(compact, ensure_ascii=False), quote=True)
+                island = (
+                    f'<div id="ssr-papers" hidden '
+                    f'data-disc="{DEFAULT_DISCIPLINE}" data-json="{safe}"></div>'
+                )
+                html_doc = html_doc.replace("</body>", island + "</body>", 1)
+    except Exception as e:
+        logger.warning("SSR injection failed: %s", e)
+    return HTMLResponse(
+        content=html_doc,
+        headers={"Cache-Control": "public, max-age=60, must-revalidate"},
+    )
 
 
 @app.get("/sw.js")
