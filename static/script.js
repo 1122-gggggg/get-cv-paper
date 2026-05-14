@@ -1325,10 +1325,17 @@ function renderPapers(papers, customTitle) {
     lastCustomTitle = customTitle ?? null;
     papersGrid.innerHTML = '';
 
+    const countHeader = document.getElementById('countHeader');
+    const themeEl = countHeader?.querySelector('.count-theme');
+    const metaEl = countHeader?.querySelector('.count-meta');
+
     if (papers.length === 0) {
         noResults.classList.remove('hidden');
         papersGrid.classList.add('hidden');
         loader.classList.add('hidden');
+        // 空結果時仍保留排序/時間範圍 UI,使用者可調整條件再試
+        if (themeEl) themeEl.textContent = '';
+        if (metaEl) metaEl.textContent = '';
         const q = searchInput.value.trim() || currentCategory;
         renderTopicSuggestions(q);
         return;
@@ -1362,22 +1369,8 @@ function renderPapers(papers, customTitle) {
         themeTitle = `${rangeLabel}關於「${activeLabel}」的論文`;
     }
 
-    const countHeader = document.createElement('div');
-    countHeader.className = 'count-header';
-    const theme = document.createElement('span');
-    theme.className = 'count-theme';
-    theme.textContent = themeTitle;
-    const meta = document.createElement('span');
-    meta.className = 'count-meta';
-    meta.textContent = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
-    countHeader.append(theme);
-    // 把排序下拉選單移到主題標題右邊(使用者通常先選主題、再選時間/熱度)
-    const _timeRangeWrap = document.getElementById('timeRangeWrapper');
-    if (_timeRangeWrap) countHeader.appendChild(_timeRangeWrap);
-    const _sortWrap = document.getElementById('sortWrapper');
-    if (_sortWrap) countHeader.appendChild(_sortWrap);
-    countHeader.append(meta);
-    papersGrid.appendChild(countHeader);
+    if (themeEl) themeEl.textContent = themeTitle;
+    if (metaEl) metaEl.textContent = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
 
     const start = (currentPage - 1) * PAPERS_PER_PAGE;
     const pagePapers = papers.slice(start, start + PAPERS_PER_PAGE);

@@ -143,6 +143,13 @@
                     <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                     <button id="pinSearchBtn" class="pin-search-btn" title="釘選此搜尋為主題標籤">📌</button>
                 </div>
+            </div>
+        </header>
+
+        <main>
+            <!-- 排序/時間範圍常駐列(主題列下、結果上)。renderPapers 只更新 theme/meta,不重建這個 wrapper,避免 wrappers 被一起銷毀 -->
+            <div id="countHeader" class="count-header">
+                <span class="count-theme"></span>
                 <div class="time-range-wrapper" id="timeRangeWrapper" aria-label="時間範圍">
                     <button class="time-range-btn" data-range="day">本日<span>Today</span></button>
                     <button class="time-range-btn" data-range="week">本週<span>Week</span></button>
@@ -165,10 +172,8 @@
                         <button class="sort-item" data-value="hot3m">🔥 近三月熱門 <span>Hot 3M</span></button>
                     </div>
                 </div>
+                <span class="count-meta"></span>
             </div>
-        </header>
-
-        <main>
             <div id="loader" class="loader-container">
                 <div class="spinner"></div>
                 <p id="loaderText">正在自動為您抓取最新論文...</p>

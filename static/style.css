@@ -485,8 +485,7 @@ header {
     flex-shrink: 0;
 }
 
-/* sort-wrapper 預設只在 count-header 顯示；首次渲染前停留在 controls 中暫時隱藏 */
-.controls > .sort-wrapper { display: none; }
+/* count-header 是常駐元素(index.html 內);time-range 推到右邊、sort 緊接其後 */
 .count-header > .time-range-wrapper { margin-left: auto; }
 .count-header > .sort-wrapper { margin-left: 0; }
 
