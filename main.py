@@ -41,6 +41,8 @@ from clients import (
     fetch_s2_author_search,
     fetch_s2_batch,
     fetch_s2_recommendations,
+    fetch_s2_search,
+    s2_fos_for_cat,
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
@@ -101,6 +103,7 @@ _WARMUP_DISCIPLINES = ("cv", "ml", "ai", "nlp")
 _WARMUP_DAYS = 7
 _WARMUP_MAX = 50
 _WARMUP_INTERVAL = 5 * 60
+_WARMUP_CONCURRENCY = 2  # arXiv 嚴格限流;同時 ≤2 路請求避免 429
 
 _PAPERS_MAX_RESULTS = 5000
 _PAPERS_DAYS_MAX = 90
@@ -158,17 +161,23 @@ async def _warmup_loop() -> None:
     """背景預熱:啟動後等 5 秒讓 server ready,然後每 _WARMUP_INTERVAL 跑一輪。
 
     每輪對 _WARMUP_DISCIPLINES 各觸發一次 papers 預熱,寫進 _papers_cache。
-    使用者首次打開直接 < 50ms 命中。
+    使用者首次打開直接 < 50ms 命中。Semaphore 控制 ≤ _WARMUP_CONCURRENCY 並發,
+    避免一次性對 arXiv 砸 4 個請求被 429。
     """
     await asyncio.sleep(5)
+    sem = asyncio.Semaphore(_WARMUP_CONCURRENCY)
+
+    async def _warm_one(disc_id: str) -> None:
+        async with sem:
+            try:
+                key, builder = _papers_build_spec(disc_id, _WARMUP_DAYS, _WARMUP_MAX)
+                await _papers_cache.warm(key, builder)
+            except Exception as e:
+                logger.warning("warmup %s failed: %s", disc_id, e)
+
     while True:
         try:
-            for disc_id in _WARMUP_DISCIPLINES:
-                try:
-                    key, builder = _papers_build_spec(disc_id, _WARMUP_DAYS, _WARMUP_MAX)
-                    await _papers_cache.warm(key, builder)
-                except Exception as e:
-                    logger.warning("warmup %s failed: %s", disc_id, e)
+            await asyncio.gather(*[_warm_one(d) for d in _WARMUP_DISCIPLINES])
             try:
                 await _trending_cache.warm("hf_daily:7", _trending_build_spec(7))
             except Exception as e:
@@ -425,6 +434,8 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     biorxiv_max = min(max_results, 150) if use_biorxiv else 0
     medrxiv_max = min(max_results, 150) if use_medrxiv else 0
     pubmed_max = min(max_results, 200) if pubmed_mesh else 0
+    # S2 search 作為 arXiv 限流時的補強:只對 arxiv_native 領域開啟
+    s2_max = min(max_results, 100) if arxiv_native else 0
 
     async def build():
         c = _client()
@@ -437,6 +448,12 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
                 return []
 
         tasks = [_safe("arxiv", fetch_arxiv_listing(c, disc["cat"], days, arxiv_max))]
+        if s2_max > 0:
+            s2_query = disc.get("name") or disc.get("cat") or ""
+            tasks.append(_safe("s2", fetch_s2_search(
+                c, query=s2_query, fos=s2_fos_for_cat(disc.get("cat", "")),
+                days=days, max_results=s2_max,
+            )))
         if openalex_max > 0:
             tasks.append(_safe("openalex", fetch_openalex_listing(
                 c, concept_id=openalex_concept, days=days, max_results=openalex_max,

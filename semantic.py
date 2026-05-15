@@ -9,7 +9,12 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sqlite3
+import struct
+import threading
+import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,27 +27,132 @@ _HF_LEGACY = "https://api-inference.huggingface.co/models"
 _HF_ROUTER = "https://router.huggingface.co/hf-inference/models"
 _BATCH_SIZE = 16
 _HTTP_TIMEOUT = 45.0
+_DB_MAX_ROWS = 20000
+
+
+def _resolve_db_path() -> Path | None:
+    candidates = [
+        os.environ.get("EMBED_CACHE_PATH"),
+        (os.environ.get("CACHE_DIR") or "") + "/embed.sqlite" if os.environ.get("CACHE_DIR") else None,
+        ".cache/embed.sqlite",
+    ]
+    for c in candidates:
+        if not c:
+            continue
+        try:
+            p = Path(c)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "ab"):
+                pass
+            return p
+        except Exception:
+            continue
+    return None
 
 
 class _EmbedCache:
     def __init__(self, maxsize: int = 5000) -> None:
-        self._d: "OrderedDict[str, list[float]]" = OrderedDict()
+        self._mem: "OrderedDict[str, list[float]]" = OrderedDict()
         self._max = maxsize
+        self._lock = threading.Lock()
+        self._db_path = _resolve_db_path()
+        self._conn: sqlite3.Connection | None = None
+        if self._db_path is not None:
+            try:
+                self._conn = sqlite3.connect(
+                    str(self._db_path), check_same_thread=False, isolation_level=None
+                )
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute(
+                    "CREATE TABLE IF NOT EXISTS embeddings ("
+                    " key TEXT NOT NULL,"
+                    " model TEXT NOT NULL,"
+                    " vec BLOB NOT NULL,"
+                    " at REAL NOT NULL,"
+                    " PRIMARY KEY (key, model))"
+                )
+                logger.info("semantic: embed cache DB at %s", self._db_path)
+            except Exception as e:
+                logger.warning("semantic: SQLite init failed (%s), L1-only", e)
+                self._conn = None
+
+    @staticmethod
+    def _encode(vec: list[float]) -> bytes:
+        return struct.pack(f"<{len(vec)}f", *vec)
+
+    @staticmethod
+    def _decode(blob: bytes) -> list[float]:
+        n = len(blob) // 4
+        return list(struct.unpack(f"<{n}f", blob))
 
     def get(self, key: str) -> list[float] | None:
-        v = self._d.get(key)
+        v = self._mem.get(key)
         if v is not None:
-            self._d.move_to_end(key)
-        return v
+            self._mem.move_to_end(key)
+            return v
+        if self._conn is None:
+            return None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT vec FROM embeddings WHERE key=? AND model=?",
+                    (key, HF_EMBED_MODEL),
+                ).fetchone()
+            if row is None:
+                return None
+            vec = self._decode(row[0])
+            self._mem[key] = vec
+            self._mem.move_to_end(key)
+            while len(self._mem) > self._max:
+                self._mem.popitem(last=False)
+            return vec
+        except Exception as e:
+            logger.debug("semantic: SQLite get failed: %s", e)
+            return None
 
     def put(self, key: str, vec: list[float]) -> None:
-        self._d[key] = vec
-        self._d.move_to_end(key)
-        while len(self._d) > self._max:
-            self._d.popitem(last=False)
+        self._mem[key] = vec
+        self._mem.move_to_end(key)
+        while len(self._mem) > self._max:
+            self._mem.popitem(last=False)
+        if self._conn is None:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO embeddings(key, model, vec, at) VALUES(?,?,?,?)",
+                    (key, HF_EMBED_MODEL, self._encode(vec), time.time()),
+                )
+        except Exception as e:
+            logger.debug("semantic: SQLite put failed: %s", e)
+
+    def prune(self) -> None:
+        if self._conn is None:
+            return
+        try:
+            with self._lock:
+                cnt = self._conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+                if cnt > _DB_MAX_ROWS:
+                    self._conn.execute(
+                        "DELETE FROM embeddings WHERE rowid IN ("
+                        " SELECT rowid FROM embeddings ORDER BY at ASC LIMIT ?)",
+                        (cnt - _DB_MAX_ROWS,),
+                    )
+        except Exception:
+            pass
 
     def __len__(self) -> int:
-        return len(self._d)
+        return len(self._mem)
+
+    def disk_size(self) -> int:
+        if self._conn is None:
+            return 0
+        try:
+            with self._lock:
+                return int(self._conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
+        except Exception:
+            return 0
 
 
 _cache = _EmbedCache()
@@ -197,4 +307,4 @@ async def semantic_rank(
 
 
 def cache_stats() -> dict[str, int]:
-    return {"size": len(_cache), "max": _cache._max}
+    return {"size": len(_cache), "max": _cache._max, "disk": _cache.disk_size()}

@@ -164,17 +164,6 @@ function sortPapersByMetric(papers, sortValue = currentSortValue) {
     return sorted;
 }
 
-// ── SVG 圖示（改用 sprite <use>，HTML 體積銳減）─────────────────
-function svgUse(id, size = 12) {
-    return `<svg width="${size}" height="${size}"><use href="#${id}"/></svg>`;
-}
-const ICONS = {
-    unread:     svgUse('icon-circle') + ' 未讀',
-    read:       svgUse('icon-check')  + ' 已讀',
-    noteEmpty:  svgUse('icon-note')   + ' 筆記',
-    noteFilled: svgUse('icon-note-filled') + ' 筆記',
-};
-
 // ── 研究領域（由 disciplines.js 提供）────────────────────────────
 let ACTIVE_DISCIPLINE = null;   // 當前 discipline 物件（window.DISCIPLINES[x]）
 // 頂會關鍵字與 patterns 於 applyDiscipline() 時依 discipline 動態填入
@@ -242,7 +231,7 @@ function applyDiscipline(disciplineId) {
     return true;
 }
 
-// 在 DOM 裡動態產生 conf-submenu 與主題按鈕（取代原本寫死在 HTML 的 <button>）
+// 在 DOM 裡動態產生 conf-submenu 與兩層折疊式主題群組
 function renderDisciplineFilters() {
     const d = ACTIVE_DISCIPLINE;
     if (!d) return;
@@ -260,20 +249,74 @@ function renderDisciplineFilters() {
     }
 
     const filtersDiv = document.querySelector('.category-filters');
-    if (filtersDiv) {
-        filtersDiv.querySelectorAll('.category-btn[data-discipline-topic="true"]').forEach(el => el.remove());
-        for (const topic of d.topics) {
+    if (!filtersDiv) return;
+
+    filtersDiv.querySelectorAll('.topic-group-wrapper, .category-btn[data-discipline-topic="true"]').forEach(el => el.remove());
+
+    const groups = (typeof window.getTopicGroups === 'function') ? window.getTopicGroups(d) : [];
+    if (groups.length === 0) return;
+
+    const expandedKey = _scopedKey('visionary_topic_groups_open', d.id);
+    let openSet;
+    try {
+        openSet = new Set(JSON.parse(localStorage.getItem(expandedKey) || '[]'));
+    } catch (e) { openSet = new Set(); }
+    if (openSet.size === 0 && groups.length > 0) {
+        openSet.add(groups[0].name);
+    }
+
+    const persistOpen = () => {
+        try { localStorage.setItem(expandedKey, JSON.stringify([...openSet])); } catch (e) {}
+    };
+
+    for (const g of groups) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'topic-group-wrapper';
+
+        const header = document.createElement('button');
+        header.type = 'button';
+        header.className = 'category-btn topic-group-btn';
+        header.dataset.groupName = g.name;
+        const headLabel = document.createElement('span');
+        headLabel.className = 'label-span topic-group-label';
+        headLabel.innerHTML = `${g.icon ? `<span class="topic-group-icon">${g.icon}</span>` : ''}${escapeHtml(g.name)}${g.nameEn ? ` <em class="topic-group-en">${escapeHtml(g.nameEn)}</em>` : ''}`;
+        header.appendChild(headLabel);
+        const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        chevron.setAttribute('class', 'chevron-icon');
+        chevron.setAttribute('width', '12');
+        chevron.setAttribute('height', '12');
+        chevron.setAttribute('viewBox', '0 0 24 24');
+        chevron.setAttribute('fill', 'none');
+        chevron.setAttribute('stroke', 'currentColor');
+        chevron.setAttribute('stroke-width', '2.5');
+        chevron.innerHTML = '<polyline points="6 9 12 15 18 9"/>';
+        header.appendChild(chevron);
+
+        const submenu = document.createElement('div');
+        submenu.className = 'topic-submenu';
+        for (const topic of g.topics) {
             const btn = document.createElement('button');
-            btn.className = 'category-btn';
+            btn.type = 'button';
+            btn.className = 'topic-item';
             btn.dataset.filter = topic.toLowerCase();
             btn.dataset.disciplineTopic = 'true';
             btn.title = topic;
-            const label = document.createElement('span');
-            label.className = 'label-span';
-            label.textContent = topic;
-            btn.appendChild(label);
-            filtersDiv.appendChild(btn);
+            btn.textContent = topic;
+            submenu.appendChild(btn);
         }
+
+        if (openSet.has(g.name)) wrapper.classList.add('open');
+
+        header.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = wrapper.classList.toggle('open');
+            if (isOpen) openSet.add(g.name); else openSet.delete(g.name);
+            persistOpen();
+        });
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(submenu);
+        filtersDiv.appendChild(wrapper);
     }
 }
 
@@ -692,47 +735,6 @@ function toggleFavorite(url, starEl) {
     _favAuthorSet = null;  // invalidate similar-fav cache
     // 若目前在收藏夾視圖，移除後立即重新渲染
     if (currentCategory === 'favorites') filterPapers();
-}
-
-// ── LRU 快取（有上限，避免 localStorage 爆量）──────────────────
-function makeLRU(key, max) {
-    let map;
-    try {
-        const raw = JSON.parse(localStorage.getItem(key) || '{}');
-        // 舊格式（直接 {id: value}）→ 升級成 {_lru:[ids], data:{...}}
-        if (raw && raw._lru && raw.data) {
-            map = { order: raw._lru, data: raw.data };
-        } else {
-            map = { order: Object.keys(raw), data: raw };
-        }
-    } catch (e) { map = { order: [], data: {} }; }
-
-    return {
-        get(k) {
-            if (!(k in map.data)) return undefined;
-            const i = map.order.indexOf(k);
-            if (i >= 0) { map.order.splice(i, 1); map.order.push(k); }
-            return map.data[k];
-        },
-        set(k, v) {
-            if (k in map.data) {
-                const idx = map.order.indexOf(k);
-                if (idx >= 0) map.order.splice(idx, 1);
-            }
-            map.data[k] = v;
-            map.order.push(k);
-            while (map.order.length > max) {
-                const old = map.order.shift();
-                delete map.data[old];
-            }
-        },
-        save() {
-            try {
-                localStorage.setItem(key, JSON.stringify({ _lru: map.order, data: map.data }));
-            } catch (e) {}
-        },
-        raw: map,
-    };
 }
 
 // ── 摘要：原文直接呈現，不再透過 AI 翻譯 ────────────────────
@@ -2058,7 +2060,8 @@ function suggestTopics(query, limit = 3) {
     if (!q) return [];
 
     const btnMap = new Map();
-    document.querySelectorAll('.category-btn').forEach(b => {
+    document.querySelectorAll('.category-btn, .topic-item').forEach(b => {
+        if (b.classList.contains('topic-group-btn')) return;
         const f = b.dataset.filter;
         if (!f || f === 'all' || f === 'favorites' || f === 'top_conf') return;
         const label = (b.querySelector('.label-span')?.textContent || b.textContent || f).trim();
@@ -2096,8 +2099,14 @@ function renderTopicSuggestions(query) {
         chip.textContent = label;
         chip.addEventListener('click', () => {
             searchInput.value = '';
-            const target = document.querySelector(`.category-btn[data-filter="${CSS.escape(filter)}"]`);
-            if (target) target.click();
+            const target = document.querySelector(
+                `.category-btn[data-filter="${CSS.escape(filter)}"], .topic-item[data-filter="${CSS.escape(filter)}"]`
+            );
+            if (target) {
+                const groupWrapper = target.closest('.topic-group-wrapper');
+                if (groupWrapper) groupWrapper.classList.add('open');
+                target.click();
+            }
         });
         chips.appendChild(chip);
     }
@@ -2209,8 +2218,10 @@ let SPECIAL_FILTERS = new Set();
 function applyBuiltinModifications() {
     const deleted = loadDeletedBuiltins();
     const renames = loadRenamedBuiltins();
-    document.querySelectorAll('.category-btn').forEach(btn => {
+    document.querySelectorAll('.category-btn, .topic-item').forEach(btn => {
+        if (btn.classList.contains('topic-group-btn')) return;
         const orig = btn.dataset.filter;
+        if (!orig) return;
         btn.dataset.originalFilter = orig;
         if (deleted.has(orig)) {
             if (currentCategory === orig) currentCategory = 'all';
@@ -2282,7 +2293,7 @@ function syncTopConfActiveState() {
 }
 
 function _selectCategory(filter, activeEl) {
-    document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.category-btn, .topic-item').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
     if (activeEl) activeEl.classList.add('active');
     currentCategory = filter;
@@ -2302,14 +2313,19 @@ function bindCategoryBtns() {
     filtersDiv._delegated = true;
 
     filtersDiv.addEventListener('click', (e) => {
+        const topicItem = e.target.closest('.topic-item');
+        if (topicItem) {
+            _selectCategory(topicItem.dataset.filter, topicItem);
+            return;
+        }
         const btn = e.target.closest('.category-btn');
-        if (!btn || btn.classList.contains('top-conf-btn')) return;
+        if (!btn || btn.classList.contains('top-conf-btn') || btn.classList.contains('topic-group-btn')) return;
         _selectCategory(btn.dataset.filter, btn);
     });
 
     filtersDiv.addEventListener('contextmenu', (e) => {
-        const btn = e.target.closest('.category-btn');
-        if (!btn) return;
+        const btn = e.target.closest('.category-btn, .topic-item');
+        if (!btn || btn.classList.contains('topic-group-btn')) return;
         e.preventDefault();
         showCtxMenu(btn, e.pageX, e.pageY);
     });
@@ -2382,11 +2398,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
         currentCategory = savedCategory;
-        // 找到對應的按鈕並設為 active
-        const targetBtn = document.querySelector(`.category-btn[data-filter="${CSS.escape(savedCategory)}"]`);
+        const targetBtn = document.querySelector(
+            `.category-btn[data-filter="${CSS.escape(savedCategory)}"], .topic-item[data-filter="${CSS.escape(savedCategory)}"]`
+        );
         if (targetBtn) {
-            document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.category-btn, .topic-item').forEach(b => b.classList.remove('active'));
             targetBtn.classList.add('active');
+            const groupWrapper = targetBtn.closest('.topic-group-wrapper');
+            if (groupWrapper) groupWrapper.classList.add('open');
         }
     }
 

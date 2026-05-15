@@ -96,12 +96,27 @@ async def fetch_arxiv_listing(
         f"{ARXIV_BASE}?search_query=cat:{cat}"
         f"&sortBy=submittedDate&sortOrder=descending&max_results={max_results}"
     )
-    try:
-        r = await client.get(url, timeout=30.0)
-        r.raise_for_status()
-    except Exception as e:
-        logger.error("arXiv listing failed: %s", e)
-        raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
+    # arXiv 嚴格限流;遇 429/503 退避重試,避免整輪 warmup 把 IP 卡死
+    delays = (3.0, 8.0, 0.0)  # 最後一次不再 sleep
+    for attempt, sleep_s in enumerate(delays):
+        try:
+            r = await client.get(url, timeout=30.0)
+            if r.status_code in (429, 503):
+                if sleep_s > 0:
+                    logger.info("arXiv %d on %s, retrying in %ss", r.status_code, cat, sleep_s)
+                    await asyncio.sleep(sleep_s)
+                    continue
+                raise HTTPException(status_code=502, detail="arXiv rate-limited")
+            r.raise_for_status()
+            break
+        except HTTPException:
+            raise
+        except Exception as e:
+            if attempt < len(delays) - 1:
+                await asyncio.sleep(sleep_s or 2.0)
+                continue
+            logger.error("arXiv listing failed: %s", e)
+            raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
     cutoff = datetime.now() - timedelta(days=days)
     return _parse_arxiv_entries(r.content, cutoff)
 
@@ -198,6 +213,106 @@ async def fetch_s2_batch(
                 or item.get("venue")
                 or "",
             }
+    return out
+
+
+# ── S2 paper search (作為 arXiv listing 的補強;按 fieldsOfStudy + query) ─────
+_S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+
+# arXiv 主分類 → S2 fieldsOfStudy 映射(粗粒度)
+_S2_FOS_PREFIX = (
+    ("cs.",        "Computer Science"),
+    ("stat.",      "Mathematics"),
+    ("math.",      "Mathematics"),
+    ("physics.",   "Physics"),
+    ("astro-ph",   "Physics"),
+    ("cond-mat",   "Physics"),
+    ("hep-",       "Physics"),
+    ("gr-qc",      "Physics"),
+    ("nucl-",      "Physics"),
+    ("quant-ph",   "Physics"),
+    ("q-bio.",     "Biology"),
+    ("q-fin.",     "Economics"),
+    ("econ.",      "Economics"),
+    ("eess.",      "Engineering"),
+)
+
+
+def s2_fos_for_cat(cat: str) -> str | None:
+    if not cat:
+        return None
+    for prefix, fos in _S2_FOS_PREFIX:
+        if cat.startswith(prefix) or cat == prefix.rstrip("."):
+            return fos
+    return None
+
+
+async def fetch_s2_search(
+    client: httpx.AsyncClient,
+    query: str,
+    fos: str | None,
+    days: int,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    """以 query + fieldsOfStudy 搜近期論文;arXiv 限流時的第二來源。soft-fail。"""
+    if not query:
+        return []
+    year = datetime.now().year
+    params: dict[str, Any] = {
+        "query": query,
+        "fields": "title,abstract,year,authors,externalIds,publicationDate,venue,citationCount",
+        "limit": min(max(max_results, 10), 100),
+        "year": f"{year - 1}-{year}",
+    }
+    if fos:
+        params["fieldsOfStudy"] = fos
+    try:
+        r = await client.get(_S2_SEARCH_URL, params=params, timeout=15.0)
+        if r.status_code != 200:
+            logger.warning("S2 search %s: %s", r.status_code, r.text[:200])
+            return []
+        data = r.json()
+    except Exception as e:
+        logger.warning("S2 search failed: %s", e)
+        return []
+
+    cutoff = datetime.now() - timedelta(days=days)
+    out: list[dict[str, Any]] = []
+    for p in data.get("data") or []:
+        title = (p.get("title") or "").strip()
+        if not title:
+            continue
+        pub_raw = p.get("publicationDate") or ""
+        try:
+            pub_date = datetime.strptime(pub_raw, "%Y-%m-%d")
+            if pub_date < cutoff:
+                continue
+            published_str = pub_date.strftime("%Y-%m-%d 00:00")
+        except (ValueError, TypeError):
+            # 缺日期就靠 year 過濾;保守接受當年的(去年的 cutoff 應已過濾)
+            if p.get("year") and p["year"] < year:
+                continue
+            published_str = str(p.get("year") or "")
+        ext_ids = p.get("externalIds") or {}
+        arxiv_id = ext_ids.get("ArXiv") or ""
+        doi = (ext_ids.get("DOI") or "").lower()
+        url = (
+            f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id
+            else (f"https://doi.org/{doi}" if doi else (p.get("url") or ""))
+        )
+        out.append({
+            "title": title,
+            "summary": (p.get("abstract") or "").strip(),
+            "url": url,
+            "published": published_str,
+            "authors": [a.get("name", "") for a in (p.get("authors") or []) if a.get("name")],
+            "source": "s2_search",
+            "external_ids": {**({"arxiv": arxiv_id} if arxiv_id else {}), **({"doi": doi} if doi else {})},
+            "venue": p.get("venue") or "",
+            "citation_count": p.get("citationCount") or 0,
+        })
+        if len(out) >= max_results:
+            break
     return out
 
 

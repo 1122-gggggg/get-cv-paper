@@ -35,6 +35,16 @@ window.DISCIPLINES = {
             'Generation', 'Medical Imaging', 'Self-Supervised', 'Model Compression',
             'Autonomous Driving',
         ],
+        topicGroups: [
+            { icon: '✨', name: '生成模型', nameEn: 'Generative',
+              topics: ['Diffusion Model', 'Generation', 'Super Resolution', 'Multimodal'] },
+            { icon: '🧊', name: '3D 視覺', nameEn: '3D Vision',
+              topics: ['NeRF', 'Gaussian Splatting', '3D Reconstruction', 'Depth Estimation', 'Point Cloud', 'SLAM'] },
+            { icon: '🎯', name: '辨識理解', nameEn: 'Recognition',
+              topics: ['Segmentation', 'Object Detection', 'Pose Estimation', 'Video Understanding', 'Optical Flow', 'Feature Matching'] },
+            { icon: '🔧', name: '架構應用', nameEn: 'Backbone & Apps',
+              topics: ['Transformer', 'Self-Supervised', 'Model Compression', 'Medical Imaging', 'Autonomous Driving'] },
+        ],
         synonyms: {
             'nerf': ['neural radiance', 'radiance field', 'neural rendering'],
             'gaussian splatting': ['3dgs', 'gs', 'splat', 'splatting', '3d gaussian'],
@@ -81,6 +91,16 @@ window.DISCIPLINES = {
             'Prompt Engineering', 'Long Context', 'Model Compression', 'Benchmark',
             'Evaluation',
         ],
+        topicGroups: [
+            { icon: '🧬', name: '基礎模型', nameEn: 'Foundation',
+              topics: ['Large Language Model', 'Instruction Tuning', 'Long Context', 'Model Compression', 'Multilingual'] },
+            { icon: '🎯', name: '對齊與推理', nameEn: 'Align & Reason',
+              topics: ['Alignment', 'RLHF', 'Reasoning', 'Chain-of-Thought', 'Prompt Engineering'] },
+            { icon: '🛠️', name: '檢索與代理', nameEn: 'RAG & Agents',
+              topics: ['RAG', 'Retrieval', 'Agent', 'Tool Use', 'Code Generation'] },
+            { icon: '📚', name: '下游任務', nameEn: 'Downstream',
+              topics: ['Translation', 'Summarization', 'Dialogue', 'Question Answering', 'Benchmark', 'Evaluation'] },
+        ],
         synonyms: {
             'large language model': ['llm', 'gpt', 'llama', 'mistral'],
             'chain-of-thought': ['cot', 'reasoning chain'],
@@ -123,6 +143,16 @@ window.DISCIPLINES = {
             'Causal', 'Graph Neural Network', 'Reinforcement Learning',
             'Bayesian', 'Generative Model',
         ],
+        topicGroups: [
+            { icon: '🧠', name: '架構與表示', nameEn: 'Architecture',
+              topics: ['Transformer', 'Attention', 'Mixture of Experts', 'Graph Neural Network', 'Representation Learning'] },
+            { icon: '⚡', name: '訓練優化', nameEn: 'Training',
+              topics: ['Optimization', 'Generalization', 'Self-Supervised', 'Contrastive', 'Meta-Learning', 'Continual Learning'] },
+            { icon: '📦', name: '效率壓縮', nameEn: 'Efficiency',
+              topics: ['Model Compression', 'Distillation', 'Quantization', 'Pruning', 'Federated Learning'] },
+            { icon: '🎲', name: '生成與決策', nameEn: 'Generative & RL',
+              topics: ['Diffusion', 'Generative Model', 'Reinforcement Learning', 'Bayesian', 'Causal'] },
+        ],
         synonyms: {
             'mixture of experts': ['moe', 'experts'],
             'graph neural network': ['gnn', 'message passing'],
@@ -160,6 +190,16 @@ window.DISCIPLINES = {
             'Ethics', 'Alignment', 'Foundation Model', 'Model Compression', 'Agent',
             'Causal Inference', 'Neurosymbolic', 'Constraint Satisfaction',
         ],
+        topicGroups: [
+            { icon: '🧩', name: '推理規劃', nameEn: 'Reasoning & Planning',
+              topics: ['Reasoning', 'Planning', 'Search', 'Constraint Satisfaction'] },
+            { icon: '🌐', name: '知識符號', nameEn: 'Knowledge & Symbolic',
+              topics: ['Knowledge Graph', 'Symbolic', 'Logic', 'Neurosymbolic', 'Causal Inference'] },
+            { icon: '🎭', name: '代理與多智能體', nameEn: 'Agents',
+              topics: ['Multi-Agent', 'Agent', 'Game Theory'] },
+            { icon: '⚖️', name: '責任與基礎', nameEn: 'Foundation & Ethics',
+              topics: ['Foundation Model', 'Model Compression', 'Alignment', 'Ethics', 'Explainable'] },
+        ],
         synonyms: {
             'multi-agent': ['multiagent', 'agent-based'],
             'knowledge graph': ['kg', 'ontology'],
@@ -196,6 +236,16 @@ window.DISCIPLINES = {
             'Sim-to-Real', 'Humanoid', 'Soft Robotics', 'Tactile',
             'Whole-Body Control', 'Quadruped', 'Dexterous', 'Visual Servoing',
             'Teleoperation', 'Haptic', 'Legged', 'Autonomous Driving',
+        ],
+        topicGroups: [
+            { icon: '🦾', name: '操作與抓取', nameEn: 'Manipulation',
+              topics: ['Manipulation', 'Grasping', 'Dexterous', 'Tactile', 'Visual Servoing', 'Teleoperation', 'Haptic'] },
+            { icon: '🚶', name: '移動運動', nameEn: 'Locomotion',
+              topics: ['Locomotion', 'Humanoid', 'Quadruped', 'Legged', 'Whole-Body Control', 'Soft Robotics'] },
+            { icon: '🗺️', name: '導航規劃', nameEn: 'Navigation',
+              topics: ['Navigation', 'SLAM', 'Motion Planning', 'Autonomous Driving'] },
+            { icon: '🎓', name: '學習方法', nameEn: 'Learning',
+              topics: ['Imitation Learning', 'Reinforcement Learning', 'Sim-to-Real'] },
         ],
         synonyms: {
             'sim-to-real': ['sim2real', 'domain randomization'],
@@ -2077,6 +2127,31 @@ window.DISCIPLINE_CATEGORIES = [
 
 // 預設顯示順序：依類別展開（picker 也照此順）
 window.DISCIPLINE_ORDER = window.DISCIPLINE_CATEGORIES.flatMap(c => c.ids);
+
+// 兩層折疊式主題分組：discipline 可定義 topicGroups: [{name, topics}]
+// 沒定義就自動切兩組（前 6 個熱門 + 其餘延伸）
+window.getTopicGroups = function (discipline) {
+    if (!discipline) return [];
+    if (Array.isArray(discipline.topicGroups) && discipline.topicGroups.length) {
+        return discipline.topicGroups.map(g => ({
+            name: g.name || '主題',
+            nameEn: g.nameEn || '',
+            icon: g.icon || '',
+            topics: Array.isArray(g.topics) ? g.topics : [],
+        })).filter(g => g.topics.length > 0);
+    }
+    const topics = Array.isArray(discipline.topics) ? discipline.topics : [];
+    if (topics.length === 0) return [];
+    if (topics.length <= 6) {
+        return [{ name: '主題', nameEn: 'Topics', icon: '🏷️', topics: [...topics] }];
+    }
+    const featured = topics.slice(0, 6);
+    const rest = topics.slice(6);
+    return [
+        { name: '熱門', nameEn: 'Featured', icon: '🔥', topics: featured },
+        { name: '延伸', nameEn: 'More', icon: '➕', topics: rest },
+    ];
+};
 
 window.getActiveDiscipline = function () {
     const saved = localStorage.getItem('visionary_discipline');
