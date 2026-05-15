@@ -104,10 +104,6 @@
                             </div>
                         </div>
                         <!-- Topic buttons injected dynamically per discipline -->
-                        <div class="add-topic-wrapper">
-                            <input type="text" id="customTopicInput" placeholder="新增主題..." />
-                            <button id="addTopicBtn" class="add-topic-btn">＋</button>
-                        </div>
                     </div>
                     <button class="filter-arrow filter-arrow-right" id="filterArrowRight" aria-label="向右捲動" hidden>&#8250;</button>
                 </div>
@@ -128,6 +124,8 @@
                 <div class="search-box">
                     <input type="search" id="searchInput" name="visionary-search" placeholder="搜尋標題、作者或關鍵字（Enter 搜全庫）" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
                     <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <button id="semanticToggle" class="semantic-toggle" title="切換語意搜尋（理解語句而非字面匹配）" aria-pressed="false">🧠</button>
+                    <button id="crossDiscToggle" class="cross-disc-toggle" title="跨領域搜尋（同時搜 CV/NLP/ML/AI）" aria-pressed="false" hidden>🌐</button>
                     <button id="pinSearchBtn" class="pin-search-btn" title="釘選此搜尋為主題標籤">📌</button>
                 </div>
             </div>

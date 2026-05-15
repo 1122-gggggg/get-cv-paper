@@ -44,6 +44,7 @@ from clients import (
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
+from semantic import HF_EMBED_MODEL, HF_TOKEN, cache_stats as semantic_cache_stats, semantic_rank
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -515,6 +516,71 @@ async def search_papers(q: str, max_results: int = 50):
     return {"papers": await fetch_arxiv_search(_client(), query, max_results)}
 
 
+async def _papers_for_discipline(discipline_id: str, days: int, max_results: int) -> list[dict]:
+    cache_key, builder = _papers_build_spec(discipline_id, days, max_results)
+    body, _etag = await _papers_cache.get_or_build(cache_key, builder)
+    payload = _json.loads(body)
+    return payload.get("papers") or []
+
+
+@app.get("/api/semantic-search")
+async def semantic_search(
+    q: str,
+    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    days: int = 30,
+    top_k: int = 30,
+    cross: bool = False,
+):
+    """Cosine top-k over HF-embedded paper pool.
+
+    `cross=true` (or `discipline=all`) pools warmup disciplines for interdisciplinary search.
+    """
+    query = q.strip()
+    if not query:
+        return {"papers": [], "query": "", "model": HF_EMBED_MODEL}
+    if not HF_TOKEN:
+        raise HTTPException(status_code=503, detail="semantic search unavailable (HF_TOKEN missing)")
+
+    days = _bounded_int(days, default=30, min_value=1, max_value=_PAPERS_DAYS_MAX)
+    top_k = _bounded_int(top_k, default=30, min_value=1, max_value=100)
+
+    if cross or discipline_id == "all":
+        pools = await asyncio.gather(*[
+            _papers_for_discipline(d, days, 1000) for d in _WARMUP_DISCIPLINES
+        ], return_exceptions=True)
+        papers: list[dict] = []
+        seen: set[str] = set()
+        for pool in pools:
+            if isinstance(pool, Exception):
+                continue
+            for p in pool:
+                k = p.get("id") or p.get("doi") or p.get("link") or p.get("title", "")
+                if k and k not in seen:
+                    seen.add(k)
+                    papers.append(p)
+        used_disc = "all"
+    else:
+        papers = await _papers_for_discipline(discipline_id, days, 1000)
+        used_disc = discipline_id
+
+    if len(papers) > 400:
+        papers = papers[:400]
+
+    try:
+        ranked = await semantic_rank(_client(), query, papers, top_k=top_k)
+    except Exception as e:
+        logger.warning("semantic_rank failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"embedding failure: {e}") from e
+
+    return {
+        "papers": ranked,
+        "query": query,
+        "discipline": used_disc,
+        "model": HF_EMBED_MODEL,
+        "pool_size": len(papers),
+    }
+
+
 @app.get("/api/disciplines")
 def list_disciplines():
     return {
@@ -620,6 +686,7 @@ def get_metrics(key: str = ""):
         "trending_cache": _trending_cache.stats(),
         "s2_store": {"entries": len(_s2_store._data)},
         "pwc_store": {"entries": len(_pwc_store._data)},
+        "semantic_cache": semantic_cache_stats(),
     }
 
 

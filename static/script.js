@@ -201,7 +201,6 @@ function applyDiscipline(disciplineId) {
 
     // localStorage key 加上領域後綴，讓每個領域有自己的分類／釘選／筆記分類
     PINNED_TOPICS_KEY    = _scopedKey('visionary_pinned_topics', d.id);
-    CUSTOM_TOPICS_KEY    = _scopedKey('visionary_custom_topics', d.id);
     DELETED_BUILTIN_KEY  = _scopedKey('visionary_deleted_builtins', d.id);
     RENAMED_BUILTIN_KEY  = _scopedKey('visionary_renamed_builtins', d.id);
     LAST_CATEGORY_KEY    = _scopedKey('visionary_last_category', d.id);
@@ -261,20 +260,19 @@ function renderDisciplineFilters() {
     }
 
     const filtersDiv = document.querySelector('.category-filters');
-    const wrapper = document.querySelector('.add-topic-wrapper');
-    if (filtersDiv && wrapper) {
-        // 先清掉舊主題按鈕（避免切換領域殘留，雖然目前切換會 reload）
+    if (filtersDiv) {
         filtersDiv.querySelectorAll('.category-btn[data-discipline-topic="true"]').forEach(el => el.remove());
         for (const topic of d.topics) {
             const btn = document.createElement('button');
             btn.className = 'category-btn';
             btn.dataset.filter = topic.toLowerCase();
             btn.dataset.disciplineTopic = 'true';
+            btn.title = topic;
             const label = document.createElement('span');
             label.className = 'label-span';
             label.textContent = topic;
             btn.appendChild(label);
-            filtersDiv.insertBefore(btn, wrapper);
+            filtersDiv.appendChild(btn);
         }
     }
 }
@@ -478,12 +476,12 @@ function addPinnedBtn(topic, save = true) {
     }
 
     const filtersDiv = document.querySelector('.category-filters');
-    const wrapper = document.querySelector('.add-topic-wrapper');
 
     const btn = document.createElement('button');
     btn.className = 'category-btn pinned-topic-btn';
     btn.dataset.filter = label;
     btn.dataset.pinned = 'true';
+    btn.title = label;
 
     const pin = document.createElement('span');
     pin.className = 'pin-icon';
@@ -495,7 +493,7 @@ function addPinnedBtn(topic, save = true) {
 
     btn.appendChild(pin);
     btn.appendChild(labelSpan);
-    filtersDiv.insertBefore(btn, wrapper);
+    filtersDiv.appendChild(btn);
 
     if (save) {
         savePinnedTopics();
@@ -1993,7 +1991,47 @@ function handleSearchInput() {
         filterPapers();
         return;
     }
+    if (window._SEMANTIC_ON) return; // semantic 模式只在 Enter 時觸發
     searchDebounceTimer = setTimeout(() => searchAllPapers(query), 250);
+}
+
+async function semanticSearchPapers(query) {
+    currentPage = 1;
+    papersGrid.classList.add('hidden');
+    noResults.classList.add('hidden');
+    loader.classList.remove('hidden');
+    const loaderText = document.getElementById('loaderText');
+    if (loaderText) loaderText.textContent = '🧠 計算語意相似度中（首次搜尋會慢一些）…';
+
+    if (_searchAbort) _searchAbort.abort();
+    _searchAbort = new AbortController();
+    const signal = _searchAbort.signal;
+
+    const disc = window.getActiveDiscipline?.()?.id || 'cv';
+    const cross = window._CROSS_DISC_ON ? '&cross=true' : '';
+    const url = `/api/semantic-search?q=${encodeURIComponent(query)}&discipline=${encodeURIComponent(disc)}&days=180&top_k=40${cross}`;
+    try {
+        const res = await fetch(url, { signal });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        if (signal.aborted) return;
+        let papers = indexPapers(data.papers || []);
+        await prepareMetricData(papers, currentSortValue);
+        // semantic 結果已照相似度排序；若使用者改 sort 則重排，否則保留原序
+        if (currentSortValue && currentSortValue !== 'latest') {
+            papers = sortPapersByMetric(papers, currentSortValue);
+        }
+        const scope = data.discipline === 'all' ? '跨領域' : (window.getActiveDiscipline?.()?.name || '');
+        renderPapers(papers, `🧠 語意搜尋「${query}」（${scope} · ${data.pool_size || 0} 候選）`);
+    } catch (e) {
+        if (e.name === 'AbortError') return;
+        loader.classList.add('hidden');
+        if (loaderText) loaderText.textContent = '正在自動為您抓取最新論文...';
+        showToast('語意搜尋失敗：' + e.message);
+    }
 }
 
 // ── 模糊主題匹配（由 applyDiscipline 填入）─────────────────────
@@ -2171,7 +2209,7 @@ let SPECIAL_FILTERS = new Set();
 function applyBuiltinModifications() {
     const deleted = loadDeletedBuiltins();
     const renames = loadRenamedBuiltins();
-    document.querySelectorAll('.category-btn:not([data-custom])').forEach(btn => {
+    document.querySelectorAll('.category-btn').forEach(btn => {
         const orig = btn.dataset.filter;
         btn.dataset.originalFilter = orig;
         if (deleted.has(orig)) {
@@ -2201,13 +2239,9 @@ function editBtnLabel(btn) {
     if (currentCategory === btn.dataset.filter) currentCategory = newFilter;
     btn.dataset.filter = newFilter;
 
-    if (btn.dataset.custom === 'true') {
-        saveCustomTopics();
-    } else {
-        const renames = loadRenamedBuiltins();
-        renames[origFilter] = { label: trimmed, filter: newFilter };
-        saveRenamedBuiltins(renames);
-    }
+    const renames = loadRenamedBuiltins();
+    renames[origFilter] = { label: trimmed, filter: newFilter };
+    saveRenamedBuiltins(renames);
     showToast(`已重新命名為「${trimmed}」`);
     filterPapers();
 }
@@ -2216,7 +2250,6 @@ function editBtnLabel(btn) {
 function deleteCategoryBtn(btn) {
     const label = getLabelText(btn);
     const origFilter = btn.dataset.originalFilter || btn.dataset.filter;
-    const isCustom = btn.dataset.custom === 'true';
 
     if (currentCategory === btn.dataset.filter) {
         currentCategory = 'all';
@@ -2231,13 +2264,9 @@ function deleteCategoryBtn(btn) {
     btn.remove();
     bindCategoryBtns();
 
-    if (isCustom) {
-        saveCustomTopics();
-    } else {
-        const deleted = loadDeletedBuiltins();
-        deleted.add(origFilter);
-        saveDeletedBuiltins(deleted);
-    }
+    const deleted = loadDeletedBuiltins();
+    deleted.add(origFilter);
+    saveDeletedBuiltins(deleted);
     showToast(`已刪除「${label}」`);
 }
 
@@ -2286,20 +2315,7 @@ function bindCategoryBtns() {
     });
 }
 
-// ── 自訂主題 ────────────────────────────────────────────────────
-let CUSTOM_TOPICS_KEY = 'visionary_custom_topics';
 let LAST_CATEGORY_KEY = 'visionary_last_category';
-
-function loadCustomTopics() {
-    const saved = JSON.parse(localStorage.getItem(CUSTOM_TOPICS_KEY) || '[]');
-    saved.forEach(topic => addTopicBtn(topic, false));
-}
-
-function saveCustomTopics() {
-    const customBtns = document.querySelectorAll('.category-btn[data-custom="true"]');
-    const topics = Array.from(customBtns).map(b => b.dataset.filter);
-    localStorage.setItem(CUSTOM_TOPICS_KEY, JSON.stringify(topics));
-}
 
 function showToast(msg) {
     const t = document.createElement('div');
@@ -2311,35 +2327,6 @@ function showToast(msg) {
         t.classList.remove('toast-show');
         setTimeout(() => t.remove(), 300);
     }, 1800);
-}
-
-function addTopicBtn(topic, save = true) {
-    const label = topic.trim();
-    if (!label) return;
-
-    const existing = document.querySelector(`.category-btn[data-filter="${CSS.escape(label)}"]`);
-    if (existing) {
-        existing.scrollIntoView({ behavior: 'smooth', inline: 'center' });
-        return;
-    }
-
-    const filtersDiv = document.querySelector('.category-filters');
-    const wrapper = document.querySelector('.add-topic-wrapper');
-
-    const btn = document.createElement('button');
-    btn.className = 'category-btn custom-topic-btn';
-    btn.dataset.filter = label;
-    btn.dataset.custom = 'true';
-    btn.dataset.originalFilter = label;
-
-    const labelSpan = document.createElement('span');
-    labelSpan.className = 'label-span';
-    labelSpan.textContent = label;
-    btn.appendChild(labelSpan);
-
-    filtersDiv.insertBefore(btn, wrapper);
-
-    if (save) saveCustomTopics();
 }
 
 // Initial Load
@@ -2389,7 +2376,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     applyBuiltinModifications();
     loadPinnedTopics();
-    loadCustomTopics();
     bindCategoryBtns();
 
     // 恢復上次的分類
@@ -2590,17 +2576,47 @@ document.addEventListener('DOMContentLoaded', () => {
         if (query) addPinnedBtn(query);
     });
 
-    document.getElementById('addTopicBtn').addEventListener('click', () => {
-        const input = document.getElementById('customTopicInput');
-        addTopicBtn(input.value);
-        input.value = '';
-        input.focus();
+    // ── 語意搜尋切換 ─────────────────────────────────────────────
+    const semanticToggle = document.getElementById('semanticToggle');
+    const crossDiscToggle = document.getElementById('crossDiscToggle');
+    window._SEMANTIC_ON = false;
+    window._CROSS_DISC_ON = false;
+    try {
+        window._SEMANTIC_ON = localStorage.getItem('visionary_semantic_on') === '1';
+        window._CROSS_DISC_ON = localStorage.getItem('visionary_cross_disc_on') === '1';
+    } catch (e) {}
+    function syncSemanticUI() {
+        semanticToggle.classList.toggle('active', window._SEMANTIC_ON);
+        semanticToggle.setAttribute('aria-pressed', window._SEMANTIC_ON);
+        crossDiscToggle.hidden = !window._SEMANTIC_ON;
+        crossDiscToggle.classList.toggle('active', window._CROSS_DISC_ON);
+        crossDiscToggle.setAttribute('aria-pressed', window._CROSS_DISC_ON);
+        searchInput.placeholder = window._SEMANTIC_ON
+            ? '描述你想找的研究（按 Enter 觸發語意搜尋）'
+            : '搜尋標題、作者或關鍵字（Enter 搜全庫）';
+    }
+    semanticToggle.addEventListener('click', () => {
+        window._SEMANTIC_ON = !window._SEMANTIC_ON;
+        try { localStorage.setItem('visionary_semantic_on', window._SEMANTIC_ON ? '1' : '0'); } catch (e) {}
+        syncSemanticUI();
+        if (window._SEMANTIC_ON) searchInput.focus();
     });
+    crossDiscToggle.addEventListener('click', () => {
+        window._CROSS_DISC_ON = !window._CROSS_DISC_ON;
+        try { localStorage.setItem('visionary_cross_disc_on', window._CROSS_DISC_ON ? '1' : '0'); } catch (e) {}
+        syncSemanticUI();
+    });
+    syncSemanticUI();
 
-    document.getElementById('customTopicInput').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            addTopicBtn(e.target.value);
-            e.target.value = '';
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const q = searchInput.value.trim();
+        if (!q) return;
+        e.preventDefault();
+        if (window._SEMANTIC_ON) {
+            semanticSearchPapers(q);
+        } else {
+            searchAllPapers(q);
         }
     });
 
