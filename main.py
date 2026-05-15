@@ -516,8 +516,9 @@ async def search_papers(q: str, max_results: int = 50):
     return {"papers": await fetch_arxiv_search(_client(), query, max_results)}
 
 
-async def _papers_for_discipline(discipline_id: str, days: int, max_results: int) -> list[dict]:
-    cache_key, builder = _papers_build_spec(discipline_id, days, max_results)
+async def _papers_for_discipline(discipline_id: str) -> list[dict]:
+    """Reuse the warmup cache key so we never hit arXiv with a large fresh build."""
+    cache_key, builder = _papers_build_spec(discipline_id, _WARMUP_DAYS, _WARMUP_MAX)
     body, _etag = await _papers_cache.get_or_build(cache_key, builder)
     payload = _json.loads(body)
     return payload.get("papers") or []
@@ -527,11 +528,10 @@ async def _papers_for_discipline(discipline_id: str, days: int, max_results: int
 async def semantic_search(
     q: str,
     discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
-    days: int = 30,
     top_k: int = 30,
     cross: bool = False,
 ):
-    """Cosine top-k over HF-embedded paper pool.
+    """Cosine top-k over HF-embedded paper pool. Reuses warmup cache to avoid arXiv 429.
 
     `cross=true` (or `discipline=all`) pools warmup disciplines for interdisciplinary search.
     """
@@ -541,12 +541,11 @@ async def semantic_search(
     if not HF_TOKEN:
         raise HTTPException(status_code=503, detail="semantic search unavailable (HF_TOKEN missing)")
 
-    days = _bounded_int(days, default=30, min_value=1, max_value=_PAPERS_DAYS_MAX)
     top_k = _bounded_int(top_k, default=30, min_value=1, max_value=100)
 
     if cross or discipline_id == "all":
         pools = await asyncio.gather(*[
-            _papers_for_discipline(d, days, 1000) for d in _WARMUP_DISCIPLINES
+            _papers_for_discipline(d) for d in _WARMUP_DISCIPLINES
         ], return_exceptions=True)
         papers: list[dict] = []
         seen: set[str] = set()
@@ -560,7 +559,11 @@ async def semantic_search(
                     papers.append(p)
         used_disc = "all"
     else:
-        papers = await _papers_for_discipline(discipline_id, days, 1000)
+        try:
+            papers = await _papers_for_discipline(discipline_id)
+        except Exception as e:
+            logger.warning("semantic-search: paper pool unavailable for %s: %s", discipline_id, e)
+            raise HTTPException(status_code=503, detail=f"paper pool unavailable: {e}") from e
         used_disc = discipline_id
 
     if len(papers) > 400:
