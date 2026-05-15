@@ -25,6 +25,4 @@ typing-inspection==0.4.2
 urllib3==2.6.3
 uvicorn==0.42.0
 python-dotenv>=1.0.0
-asyncpg>=0.29.0
-google-auth>=2.30.0
 brotli-asgi>=1.4.0

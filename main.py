@@ -1,8 +1,7 @@
 """FastAPI app: arXiv dashboard backend.
 
 Composition only — no business logic. Cache lives in cache.py, upstream
-adapters in clients.py, auth + user data in userdata.py, discipline map
-in disciplines.py.
+adapters in clients.py, discipline map in disciplines.py.
 """
 from __future__ import annotations
 
@@ -45,7 +44,6 @@ from clients import (
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
-from userdata import router as userdata_router
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -312,7 +310,6 @@ app.add_middleware(HeadersMiddleware)
 
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.include_router(userdata_router)
 
 
 # ── routes ───────────────────────────────────────────────────────
