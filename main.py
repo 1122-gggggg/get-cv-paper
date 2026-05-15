@@ -46,6 +46,7 @@ from clients import (
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
+from paper_store import PaperStore
 from semantic import HF_EMBED_MODEL, HF_TOKEN, cache_stats as semantic_cache_stats, semantic_rank
 
 load_dotenv()
@@ -95,6 +96,11 @@ _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
 # 個別 ID-level 快取(citations / pwc):跨 request 共享、JSON 持久化
 _s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600, cache_dir=CACHE_DIR)
 _pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600, cache_dir=CACHE_DIR)
+
+# L2 持久化論文庫:跨容器重啟保留近 N 天熱門論文,upstream 429 時降級供應
+_paper_store = PaperStore(CACHE_DIR / "papers.sqlite")
+_PAPER_STORE_RETENTION_DAYS = 100
+_PAPER_STORE_CLEANUP_INTERVAL = 6 * 3600
 
 # Warmup:啟動立刻跑 + 每 5 分鐘背景刷新熱門 disciplines。
 # 注意:max 必須與 script.js 實際請求對齊(/api/papers?max_results=50),否則 cache key 不同,
@@ -157,6 +163,20 @@ async def _flush_task() -> None:
             await asyncio.sleep(60)
 
 
+async def _paper_cleanup_task() -> None:
+    """每 6 小時刪除 retention 視窗外的 L2 論文,控制 SQLite 大小。"""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await asyncio.to_thread(_paper_store.cleanup, _PAPER_STORE_RETENTION_DAYS)
+            await asyncio.sleep(_PAPER_STORE_CLEANUP_INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("paper cleanup task error: %s", e)
+            await asyncio.sleep(_PAPER_STORE_CLEANUP_INTERVAL)
+
+
 async def _warmup_loop() -> None:
     """背景預熱:啟動後等 5 秒讓 server ready,然後每 _WARMUP_INTERVAL 跑一輪。
 
@@ -203,13 +223,16 @@ async def lifespan(app: FastAPI):
         logger.warning("index.html load failed: %s", e)
     flush = asyncio.create_task(_flush_task())
     warm = asyncio.create_task(_warmup_loop())
+    cleanup = asyncio.create_task(_paper_cleanup_task())
     try:
         yield
     finally:
         flush.cancel()
         warm.cancel()
+        cleanup.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
+        _paper_store.close()
         if _http_client is not None:
             await _http_client.aclose()
 
@@ -473,9 +496,31 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
 
         sources = await asyncio.gather(*tasks)
         merged = merge_sources(*sources)
-        # stale-on-error: 全部源都掛(merged 空)時 raise,讓 SWR 保留舊資料,
-        # 而不是把 cache 寫成空白覆蓋掉好的歷史
-        if not merged and any(len(s) == 0 for s in sources) and all(len(s) == 0 for s in sources):
+
+        primary_cat = disc.get("cat") or ""
+        if merged and primary_cat:
+            try:
+                await asyncio.to_thread(_paper_store.upsert_many, merged, primary_cat)
+            except Exception as e:
+                logger.warning("paper_store upsert failed for %s: %s", discipline_id, e)
+
+        if not merged:
+            # L2 fallback: upstream 全掛時,改從 SQLite 撈最近 days 內的歷史紀錄
+            if primary_cat:
+                try:
+                    l2 = await asyncio.to_thread(
+                        _paper_store.query, primary_cat, days, max_results
+                    )
+                except Exception as e:
+                    logger.warning("paper_store query failed for %s: %s", discipline_id, e)
+                    l2 = []
+                if l2:
+                    logger.info("L2 fallback for %s: %d papers", discipline_id, len(l2))
+                    return {
+                        "papers": l2[:500],
+                        "arxiv_native": arxiv_native,
+                        "from_l2": True,
+                    }
             raise RuntimeError(f"all sources empty for {discipline_id}")
         if len(merged) > 500:
             merged = merged[:500]
@@ -707,6 +752,7 @@ def get_metrics(key: str = ""):
         "s2_store": {"entries": len(_s2_store._data)},
         "pwc_store": {"entries": len(_pwc_store._data)},
         "semantic_cache": semantic_cache_stats(),
+        "paper_store": _paper_store.stats(),
     }
 
 
