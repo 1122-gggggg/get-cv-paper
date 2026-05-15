@@ -6,7 +6,6 @@ paper id (no DB). HF token comes from env (HF_TOKEN); model from HF_EMBED_MODEL
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 import os
@@ -18,8 +17,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 HF_TOKEN = (os.environ.get("HF_TOKEN") or "").strip()
-HF_EMBED_MODEL = (os.environ.get("HF_EMBED_MODEL") or "intfloat/multilingual-e5-small").strip()
-_HF_BASE = "https://router.huggingface.co/hf-inference/models"
+HF_EMBED_MODEL = (os.environ.get("HF_EMBED_MODEL") or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
+_HF_LEGACY = "https://api-inference.huggingface.co/models"
+_HF_ROUTER = "https://router.huggingface.co/hf-inference/models"
 _BATCH_SIZE = 16
 _HTTP_TIMEOUT = 45.0
 
@@ -90,13 +90,20 @@ def _flatten_vec(v: Any) -> list[float] | None:
     return None
 
 
+async def _hf_post(client: httpx.AsyncClient, url: str, payload: dict) -> httpx.Response:
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    return await client.post(url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
+
+
 async def _hf_embed(client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
     if not HF_TOKEN:
         raise RuntimeError("HF_TOKEN not configured")
-    url = f"{_HF_BASE}/{HF_EMBED_MODEL}/pipeline/feature-extraction"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {"inputs": texts, "options": {"wait_for_model": True}}
-    r = await client.post(url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
+    legacy_url = f"{_HF_LEGACY}/{HF_EMBED_MODEL}"
+    r = await _hf_post(client, legacy_url, payload)
+    if r.status_code in (401, 403, 404):
+        router_url = f"{_HF_ROUTER}/{HF_EMBED_MODEL}/pipeline/feature-extraction"
+        r = await _hf_post(client, router_url, payload)
     if r.status_code != 200:
         raise RuntimeError(f"HF embed {r.status_code}: {r.text[:200]}")
     data = r.json()
