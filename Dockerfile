@@ -11,7 +11,7 @@ RUN npm install -g --no-audit --no-fund esbuild@0.24.2 >/dev/null && \
     done && \
     for f in style.css washi.css; do \
         if [ -f "static/$f" ]; then \
-            esbuild "static/$f" --minify --loader=css > "static/$f.min" && \
+            esbuild "static/$f" --minify > "static/$f.min" && \
             mv "static/$f.min" "static/$f"; \
         fi; \
     done && \
