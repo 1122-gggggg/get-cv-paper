@@ -308,3 +308,231 @@ async def semantic_rank(
 
 def cache_stats() -> dict[str, int]:
     return {"size": len(_cache), "max": _cache._max, "disk": _cache.disk_size()}
+
+
+async def rerank_by_centroid(
+    client: httpx.AsyncClient,
+    favorite_papers: list[dict[str, Any]],
+    candidate_papers: list[dict[str, Any]],
+    top_k: int = 30,
+    blend: float = 0.4,
+) -> list[dict[str, Any]]:
+    """以使用者收藏的論文 embedding 取質心,對 candidates 重新排序。
+
+    `blend` 控制原始順序 vs 個人化分數的權重:0=純個人化,1=純原始。
+    回傳前 top_k 個 candidates,每篇附 `personal_score` (0..1)。
+    """
+    if not favorite_papers or not candidate_papers:
+        return candidate_papers[:top_k]
+
+    fav_vecs_map = await _embed_papers(client, favorite_papers)
+    fav_vecs = [v for v in fav_vecs_map.values() if v]
+    if not fav_vecs:
+        return candidate_papers[:top_k]
+
+    dim = len(fav_vecs[0])
+    centroid = [0.0] * dim
+    for v in fav_vecs:
+        if len(v) != dim:
+            continue
+        for i in range(dim):
+            centroid[i] += v[i]
+    n = len(fav_vecs)
+    centroid = [x / n for x in centroid]
+    # L2 normalize
+    norm = math.sqrt(sum(x * x for x in centroid)) or 1.0
+    centroid = [x / norm for x in centroid]
+
+    cand_vecs_map = await _embed_papers(client, candidate_papers)
+
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    fav_keys = set(fav_vecs_map.keys())
+    for idx, p in enumerate(candidate_papers):
+        k = _paper_key(p)
+        if not k or k in fav_keys:
+            # 跳過已收藏的(不要把收藏放回推薦列表)
+            continue
+        v = cand_vecs_map.get(k)
+        if not v:
+            scored.append((0.0, idx, p))
+            continue
+        sim = _cosine(centroid, v)  # -1..1
+        personal = (sim + 1.0) / 2.0  # 0..1
+        # 原始排名也歸一化(idx 越小越前)
+        pos_score = 1.0 - (idx / max(1, len(candidate_papers)))
+        score = blend * pos_score + (1.0 - blend) * personal
+        scored.append((score, idx, p))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    out: list[dict[str, Any]] = []
+    for s, _idx, p in scored[:top_k]:
+        item = dict(p)
+        item["personal_score"] = round(s, 4)
+        out.append(item)
+    return out
+
+
+# ── 動態子題聚類 (k-means on cached embeddings) ────────────────
+import random as _random
+import re as _re_cluster
+from collections import Counter as _Counter
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "with", "by", "from",
+    "is", "are", "be", "as", "at", "this", "that", "we", "our", "their", "its",
+    "using", "based", "via", "novel", "new", "method", "approach", "model", "models",
+    "framework", "task", "tasks", "study", "studies", "paper", "results", "result",
+    "show", "shows", "propose", "proposed", "show", "however", "while", "but",
+    "can", "may", "have", "has", "such", "across", "each", "more", "than", "also",
+    "first", "second", "well", "many", "most", "use", "used", "uses", "given",
+    "data", "training", "performance", "quality", "high", "low", "large", "small",
+    "learning", "deep", "neural", "network", "networks",  # too generic
+})
+_TOK_RE = _re_cluster.compile(r"[a-zA-Z][a-zA-Z\-]{2,}")
+
+
+def _tokenize_title(t: str) -> list[str]:
+    return [w.lower() for w in _TOK_RE.findall(t or "") if w.lower() not in _STOPWORDS and len(w) >= 4]
+
+
+def _kmeans_pp_seed(vecs: list[list[float]], k: int) -> list[list[float]]:
+    """k-means++ 初始化(避免隨機 seed 落入退化解)。"""
+    if not vecs or k <= 0:
+        return []
+    if len(vecs) <= k:
+        return [list(v) for v in vecs]
+    centroids: list[list[float]] = [list(_random.choice(vecs))]
+    for _ in range(k - 1):
+        dists = []
+        for v in vecs:
+            d = min(1.0 - _cosine(v, c) for c in centroids)
+            dists.append(max(0.0, d))
+        total = sum(dists) or 1e-9
+        # weighted random pick
+        r = _random.random() * total
+        acc = 0.0
+        pick = vecs[-1]
+        for v, d in zip(vecs, dists):
+            acc += d
+            if acc >= r:
+                pick = v
+                break
+        centroids.append(list(pick))
+    return centroids
+
+
+def _kmeans(vecs: list[list[float]], k: int, max_iter: int = 12) -> tuple[list[int], list[list[float]]]:
+    """純 Python mini k-means (cosine similarity)。回傳 (assign, centroids)。"""
+    n = len(vecs)
+    if n == 0 or k <= 0:
+        return [], []
+    k = min(k, n)
+    centroids = _kmeans_pp_seed(vecs, k)
+    assign = [0] * n
+    dim = len(vecs[0])
+    for _ in range(max_iter):
+        # Assign
+        changed = 0
+        for i, v in enumerate(vecs):
+            best, best_sim = 0, -2.0
+            for ci, c in enumerate(centroids):
+                s = _cosine(v, c)
+                if s > best_sim:
+                    best_sim, best = s, ci
+            if assign[i] != best:
+                changed += 1
+                assign[i] = best
+        if changed == 0:
+            break
+        # Update centroids (mean)
+        new_cents = [[0.0] * dim for _ in range(k)]
+        counts = [0] * k
+        for i, v in enumerate(vecs):
+            c = assign[i]
+            counts[c] += 1
+            for d in range(dim):
+                new_cents[c][d] += v[d]
+        for c in range(k):
+            if counts[c] > 0:
+                for d in range(dim):
+                    new_cents[c][d] /= counts[c]
+            else:
+                # 空 cluster 給 random vec 重啟,避免維度全 0
+                new_cents[c] = list(_random.choice(vecs))
+        centroids = new_cents
+    return assign, centroids
+
+
+def _cluster_label(papers: list[dict[str, Any]]) -> str:
+    """從一群論文標題中抓最常見的 1-2 字 phrase 當 cluster 標籤。"""
+    if not papers:
+        return "misc"
+    tokens: list[str] = []
+    bigrams: list[str] = []
+    for p in papers:
+        ts = _tokenize_title(p.get("title") or "")
+        tokens.extend(ts)
+        for i in range(len(ts) - 1):
+            bigrams.append(f"{ts[i]} {ts[i+1]}")
+    if not tokens:
+        return "misc"
+    bg_top = _Counter(bigrams).most_common(1)
+    if bg_top and bg_top[0][1] >= max(2, len(papers) // 4):
+        return bg_top[0][0]
+    tk_top = _Counter(tokens).most_common(1)
+    return tk_top[0][0] if tk_top else "misc"
+
+
+async def cluster_papers(
+    client: httpx.AsyncClient,
+    papers: list[dict[str, Any]],
+    k: int = 6,
+    min_cluster: int = 3,
+) -> list[dict[str, Any]]:
+    """對一組論文做 k-means 聚類,回傳 [{label, count, sample_titles}].
+
+    只用既有 cache 過的 embedding(若該批論文已被 warmup 過,即不打 HF API)。
+    沒 embedding 的論文會略過。
+    """
+    if not papers:
+        return []
+    keyed: list[tuple[str, dict[str, Any]]] = []
+    for p in papers:
+        k_ = _paper_key(p)
+        if k_:
+            keyed.append((k_, p))
+    if not keyed:
+        return []
+    paper_vecs = await _embed_papers(client, [p for _, p in keyed])
+
+    vecs: list[list[float]] = []
+    papers_aligned: list[dict[str, Any]] = []
+    for k_, p in keyed:
+        v = paper_vecs.get(k_)
+        if v:
+            vecs.append(v)
+            papers_aligned.append(p)
+    if len(vecs) < min_cluster:
+        return []
+
+    k_eff = max(2, min(k, len(vecs) // min_cluster))
+    assign, _ = _kmeans(vecs, k_eff)
+
+    buckets: dict[int, list[dict[str, Any]]] = {}
+    for i, p in enumerate(papers_aligned):
+        buckets.setdefault(assign[i], []).append(p)
+
+    out: list[dict[str, Any]] = []
+    for cid, members in buckets.items():
+        if len(members) < min_cluster:
+            continue
+        label = _cluster_label(members)
+        out.append({
+            "label": label,
+            "count": len(members),
+            "sample_titles": [m.get("title", "")[:120] for m in members[:5]],
+        })
+    out.sort(key=lambda x: x["count"], reverse=True)
+    return out

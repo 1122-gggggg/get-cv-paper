@@ -17,7 +17,7 @@ const RANGE_MIGRATION = {
     citations: 'week',
     signal: 'week',
 };
-const SORT_VALUES = new Set(['latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m']);
+const SORT_VALUES = new Set(['latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m', 'personalized']);
 const TIME_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter']);
 let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'latest';
 let currentTimeRange = localStorage.getItem('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
@@ -43,6 +43,7 @@ const SORT_META = {
     velocity:   { label: '引用速度', title: '快速升溫' },
     hf:         { label: 'HF 熱度', title: '社群熱門' },
     hot3m:      { label: '近三月熱門', title: '近三月熱門排名' },
+    personalized:{ label: '為你推薦', title: '依收藏質心個人化排序' },
 };
 
 // ── 安全：HTML escape（防 XSS，arXiv 摘要可能含 <、> 等字元）─────
@@ -318,6 +319,96 @@ function renderDisciplineFilters() {
         wrapper.appendChild(submenu);
         filtersDiv.appendChild(wrapper);
     }
+
+    // 第 5 群:動態子題(fire-and-forget,不阻塞首屏)
+    loadDynamicSubtopics(d.id, filtersDiv, openSet, persistOpen).catch(() => {});
+}
+
+// 動態子題:從 /api/subtopics 拉聚類結果並渲染為第 5 個 group
+const _SUBTOPIC_INFLIGHT = new Map(); // discipline -> Promise
+async function loadDynamicSubtopics(disciplineId, filtersDiv, openSet, persistOpen) {
+    if (!disciplineId || !filtersDiv) return;
+    // 避免短時間重複 fetch(切回同 discipline 時)
+    if (_SUBTOPIC_INFLIGHT.has(disciplineId)) {
+        try { await _SUBTOPIC_INFLIGHT.get(disciplineId); } catch (e) {}
+        return;
+    }
+    const p = (async () => {
+        const resp = await fetch(`/api/subtopics?discipline=${encodeURIComponent(disciplineId)}&k=6`);
+        if (!resp.ok) return null;
+        return resp.json();
+    })();
+    _SUBTOPIC_INFLIGHT.set(disciplineId, p);
+    let data;
+    try {
+        data = await p;
+    } finally {
+        _SUBTOPIC_INFLIGHT.delete(disciplineId);
+    }
+    // 中途切過 discipline 就放棄
+    if (!ACTIVE_DISCIPLINE || ACTIVE_DISCIPLINE.id !== disciplineId) return;
+    if (!data || !Array.isArray(data.clusters) || data.clusters.length === 0) return;
+
+    // 避免重複插入(快取命中時 renderDisciplineFilters 重跑會先 remove)
+    const existing = filtersDiv.querySelector('.topic-group-wrapper[data-dynamic="true"]');
+    if (existing) existing.remove();
+
+    const groupName = '動態子題';
+    const groupNameEn = 'Trending';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'topic-group-wrapper';
+    wrapper.dataset.dynamic = 'true';
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'category-btn topic-group-btn';
+    header.dataset.groupName = groupName;
+    const headLabel = document.createElement('span');
+    headLabel.className = 'label-span topic-group-label';
+    headLabel.innerHTML = `<span class="topic-group-icon">🔥</span>${escapeHtml(groupName)} <em class="topic-group-en">${escapeHtml(groupNameEn)}</em>`;
+    header.appendChild(headLabel);
+    const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chevron.setAttribute('class', 'chevron-icon');
+    chevron.setAttribute('width', '12');
+    chevron.setAttribute('height', '12');
+    chevron.setAttribute('viewBox', '0 0 24 24');
+    chevron.setAttribute('fill', 'none');
+    chevron.setAttribute('stroke', 'currentColor');
+    chevron.setAttribute('stroke-width', '2.5');
+    chevron.innerHTML = '<polyline points="6 9 12 15 18 9"/>';
+    header.appendChild(chevron);
+
+    const submenu = document.createElement('div');
+    submenu.className = 'topic-submenu';
+    for (const c of data.clusters) {
+        const label = (c.label || '').trim();
+        if (!label) continue;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'topic-item';
+        btn.dataset.filter = label.toLowerCase();
+        btn.dataset.disciplineTopic = 'true';
+        btn.dataset.dynamic = 'true';
+        btn.title = `${label} (${c.count} papers)`;
+        btn.textContent = `${label} · ${c.count}`;
+        submenu.appendChild(btn);
+    }
+    if (!submenu.children.length) return;
+
+    if (openSet && openSet.has(groupName)) wrapper.classList.add('open');
+
+    header.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = wrapper.classList.toggle('open');
+        if (openSet) {
+            if (isOpen) openSet.add(groupName); else openSet.delete(groupName);
+        }
+        if (persistOpen) persistOpen();
+    });
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(submenu);
+    filtersDiv.appendChild(wrapper);
 }
 
 // ── 研究領域選擇器 UI ──────────────────────────────────────────
@@ -486,6 +577,132 @@ function selectDiscipline(id) {
     }
     // 切換領域 → reload 使整個 UI／localStorage 狀態重新初始化
     location.reload();
+}
+
+// ── 相似論文 modal ─────────────────────────────────────────────
+function _extractArxivId(paper) {
+    const ext = paper.external_ids || {};
+    if (ext.arxiv) {
+        const m = String(ext.arxiv).match(/(\d{4}\.\d{4,6})/);
+        if (m) return m[1];
+    }
+    const url = paper.url || '';
+    const m2 = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,6})/i);
+    return m2 ? m2[1] : null;
+}
+
+async function openSimilarModal(paper) {
+    const modal = document.getElementById('similarModal');
+    if (!modal) return;
+    const seedEl = document.getElementById('similarSeed');
+    const bodyEl = document.getElementById('similarBody');
+    if (seedEl) seedEl.innerHTML = `<div class="similar-seed-title">${escapeHtml(paper.title)}</div>`;
+    if (bodyEl) bodyEl.innerHTML = '<div class="similar-loading">載入中…</div>';
+    modal.classList.remove('hidden');
+
+    const arxivId = _extractArxivId(paper);
+    if (!arxivId) {
+        if (bodyEl) bodyEl.innerHTML = '<div class="similar-empty">此論文無 arXiv ID，無法推薦相似論文。</div>';
+        return;
+    }
+    try {
+        const r = await fetch(`/api/recommendations?arxiv_id=${encodeURIComponent(arxivId)}&limit=10`);
+        if (!r.ok) throw new Error('rec failed');
+        const data = await r.json();
+        const papers = data.papers || [];
+        if (!papers.length) {
+            if (bodyEl) bodyEl.innerHTML = '<div class="similar-empty">尚無相似論文資料（Semantic Scholar 可能還沒索引這篇）。</div>';
+            return;
+        }
+        if (bodyEl) {
+            bodyEl.innerHTML = papers.map(p => {
+                const title = escapeHtml(p.title || '');
+                const url = escapeHtml(p.url || '#');
+                const authors = (p.authors || []).slice(0, 4).join(', ');
+                const venue = p.venue ? `<span class="sim-venue">${escapeHtml(p.venue)}</span>` : '';
+                const yr = p.year ? `<span class="sim-year">${escapeHtml(String(p.year))}</span>` : '';
+                const cit = p.citation_count ? `<span class="sim-cit">📊 ${p.citation_count}</span>` : '';
+                return `<a class="sim-item" href="${url}" target="_blank" rel="noopener noreferrer">
+                    <div class="sim-title">${title}</div>
+                    <div class="sim-meta">${escapeHtml(authors)} ${venue} ${yr} ${cit}</div>
+                </a>`;
+            }).join('');
+        }
+    } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = `<div class="similar-empty">載入失敗：${escapeHtml(e.message || 'unknown')}</div>`;
+    }
+}
+
+function closeSimilarModal() {
+    document.getElementById('similarModal')?.classList.add('hidden');
+}
+
+// ── 最近搜尋（每個 discipline 各自 5 筆） ───────────────────────
+const _RECENT_SEARCHES_MAX = 5;
+function _recentSearchesKey() {
+    return _scopedKey('visionary_recent_searches', ACTIVE_DISCIPLINE?.id || '');
+}
+function loadRecentSearches() {
+    try { return JSON.parse(localStorage.getItem(_recentSearchesKey()) || '[]'); }
+    catch (e) { return []; }
+}
+function saveRecentSearches(arr) {
+    try { localStorage.setItem(_recentSearchesKey(), JSON.stringify(arr.slice(0, _RECENT_SEARCHES_MAX))); }
+    catch (e) {}
+}
+function pushRecentSearch(q) {
+    q = (q || '').trim();
+    if (!q || q.length > 80) return;
+    const cur = loadRecentSearches().filter(x => x !== q);
+    cur.unshift(q);
+    saveRecentSearches(cur);
+    renderRecentSearches();
+}
+function clearRecentSearches() {
+    saveRecentSearches([]);
+    renderRecentSearches();
+}
+function renderRecentSearches() {
+    const bar = document.getElementById('recentSearchesBar');
+    if (!bar) return;
+    const items = loadRecentSearches();
+    if (!items.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+    bar.classList.remove('hidden');
+    bar.innerHTML = `<span class="rs-label">最近：</span>` + items.map(q =>
+        `<button class="rs-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`
+    ).join('') + `<button class="rs-clear" title="清除最近搜尋">×</button>`;
+}
+
+// ── 統一熱度指數（Heat Index） ──────────────────────────────────
+// 結合 value score / velocity / hf_upvotes / citation_count,輸出 0-100。
+function computeHeatIndex(paper) {
+    const v = Number(paper.signal_score || paper.value_score || 0); // 0-100
+    const vel = Number(paper.citation_velocity || 0);                // 引用/月,小數
+    const hf = Number(paper.hf_upvotes || 0);                        // 0+
+    const cit = Number(paper.citation_count || 0);
+    // 各維度先壓到 0-1
+    const vN = Math.max(0, Math.min(1, v / 100));
+    const velN = Math.max(0, Math.min(1, Math.log1p(vel * 12) / Math.log(50)));
+    const hfN = Math.max(0, Math.min(1, Math.log1p(hf) / Math.log(200)));
+    const citN = Math.max(0, Math.min(1, Math.log1p(cit) / Math.log(500)));
+    // 加權
+    const score = 0.45 * vN + 0.25 * velN + 0.18 * hfN + 0.12 * citN;
+    return Math.round(score * 100);
+}
+function heatIndexTier(h) {
+    if (h >= 70) return { cls: 'heat-hot', label: '🔥 高熱', tier: 'hot' };
+    if (h >= 45) return { cls: 'heat-warm', label: '☀️ 中熱', tier: 'warm' };
+    if (h >= 20) return { cls: 'heat-cool', label: '🌤 低熱', tier: 'cool' };
+    return { cls: 'heat-cold', label: '🌙 冷', tier: 'cold' };
+}
+
+// ── OpenReview 評審分數色階 ────────────────────────────────────
+function orRatingTier(rating) {
+    const r = Number(rating);
+    if (!isFinite(r) || r <= 0) return null;
+    if (r >= 6) return { cls: 'or-green', label: `OR ${r.toFixed(1)}` };
+    if (r >= 5) return { cls: 'or-yellow', label: `OR ${r.toFixed(1)}` };
+    return { cls: 'or-red', label: `OR ${r.toFixed(1)}` };
 }
 
 // ── 收藏夾系統 ─────────────────────────────────────────────────
@@ -981,6 +1198,20 @@ function populateBadgeSlot(badgeSlot, paper) {
     if (speed >= 2)            items.push(['speed-badge', `🚀 ${speed >= 10 ? speed.toFixed(0) : speed.toFixed(1)}/月`, '引用速度：每月新增的引用數']);
     if (paper.hf_upvotes >= 5) items.push(['hf-badge', `🤗 ${paper.hf_upvotes}`, 'HuggingFace Daily Papers 社群 upvote 數']);
     if (localViews > 0)        items.push(['view-badge', `👁 ${localViews} 點閱`, '本機點閱次數（此瀏覽器/登入同步資料）']);
+    // OpenReview 評審分數色階（綠 6+ / 黃 5 / 紅 ≤4）
+    const orTier = orRatingTier(paper.or_rating || paper.review_avg);
+    if (orTier) items.push([`or-badge ${orTier.cls}`, orTier.label, 'OpenReview 評審平均分數']);
+    // 熱度指數（綜合 value/velocity/hf/citations）
+    const heat = computeHeatIndex({
+        signal_score: getValueScore(paper),
+        citation_velocity: speed,
+        hf_upvotes: paper.hf_upvotes,
+        citation_count: citCount >= 0 ? citCount : 0,
+    });
+    if (heat >= 20) {
+        const t = heatIndexTier(heat);
+        items.push([`heat-badge ${t.cls}`, `${t.label} ${heat}`, '統合熱度指數（價值+速度+HF+引用）']);
+    }
     // similar-to-favorite: 跟已收藏論文共享至少 1 位作者 lastname,且本身未收藏
     if (favorites.size > 0 && !favorites.has(paper.url)) {
         const favSet = _getFavAuthorSet();
@@ -1121,6 +1352,14 @@ function _bindPapersGridDelegation() {
         if (readBtn && card.contains(readBtn)) {
             e.stopPropagation();
             toggleRead(url, card);
+            return;
+        }
+
+        const similarBtn = e.target.closest('.similar-btn');
+        if (similarBtn && card.contains(similarBtn)) {
+            e.stopPropagation();
+            const paper = currentFilteredPapers.find(p => p.url === url);
+            if (paper) openSimilarModal(paper);
             return;
         }
 
@@ -1697,6 +1936,14 @@ async function fetchPwcData(papers) {
     }
 }
 
+function _matchCatTerm(term, tLc, sLc) {
+    if (tLc.includes(term) || sLc.includes(term)) return true;
+    if (!term.includes(' ')) return false;
+    const toks = term.split(/\s+/).filter(t => t.length >= 2);
+    if (toks.length < 2) return false;
+    return toks.every(tok => tLc.includes(tok) || sLc.includes(tok));
+}
+
 function applyFilter(pool, query) {
     const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || CONF_FILTERS.has(currentCategory)
         ? null
@@ -1724,7 +1971,7 @@ function applyFilter(pool, query) {
         } else if (confKey) {
             matchesCategory = tLc.includes(confKey) || sLc.includes(confKey);
         } else if (cat) {
-            matchesCategory = catTerms.some(term => tLc.includes(term) || sLc.includes(term));
+            matchesCategory = catTerms.some(term => _matchCatTerm(term, tLc, sLc));
         }
 
         return matchesQuery && matchesCategory;
@@ -1939,9 +2186,49 @@ async function filterPapers() {
     let filtered = applyFilter(pool, query);
     filtered = applyTimeRange(filtered);
 
-    await prepareMetricData(filtered, sortValue);
-    filtered = sortPapersByMetric(filtered, sortValue);
+    if (sortValue === 'personalized') {
+        const reranked = await applyPersonalizedRerank(filtered);
+        if (reranked) {
+            renderPapers(reranked, buildMetricTitle());
+            return;
+        }
+        // 失敗或無收藏:fallback 到 latest
+    }
+    await prepareMetricData(filtered, sortValue === 'personalized' ? 'latest' : sortValue);
+    filtered = sortPapersByMetric(filtered, sortValue === 'personalized' ? 'latest' : sortValue);
     renderPapers(filtered, buildMetricTitle());
+}
+
+// 個人化重排:取收藏的 arxiv id,呼叫 /api/personalized,失敗回 null 走 fallback
+async function applyPersonalizedRerank(filtered) {
+    const favIds = [];
+    for (const url of favorites) {
+        const m = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,6})/i);
+        if (m) favIds.push(m[1]);
+    }
+    if (favIds.length < 3) {
+        alert('「為你推薦」需要至少 3 篇收藏的 arXiv 論文。');
+        return null;
+    }
+    const disc = ACTIVE_DISCIPLINE?.id || '';
+    try {
+        const url = `/api/personalized?favorites=${encodeURIComponent(favIds.slice(0, 50).join(','))}&discipline=${encodeURIComponent(disc)}&top_k=60&blend=0.4`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const reranked = data.papers || [];
+        if (!reranked.length) return null;
+        // 與 filtered 取交集(保 filter / time-range),保 reranked 順序
+        const allowedUrls = new Set(filtered.map(p => p.url));
+        const out = reranked.filter(p => allowedUrls.has(p.url));
+        // reranked 可能少於 filtered;補上未排到的 filtered 維持完整度
+        const seen = new Set(out.map(p => p.url));
+        for (const p of filtered) if (!seen.has(p.url)) out.push(p);
+        return indexPapers(out);
+    } catch (e) {
+        console.warn('personalized rerank failed:', e);
+        return null;
+    }
 }
 
 async function filterByTag(tag) {
@@ -2394,18 +2681,27 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPinnedTopics();
     bindCategoryBtns();
 
-    // 恢復上次的分類
+    // 恢復上次的分類（找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
     const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
-        currentCategory = savedCategory;
+        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || CONF_FILTERS.has(savedCategory);
         const targetBtn = document.querySelector(
-            `.category-btn[data-filter="${CSS.escape(savedCategory)}"], .topic-item[data-filter="${CSS.escape(savedCategory)}"]`
+            `.category-btn[data-filter="${CSS.escape(savedCategory)}"], .topic-item[data-filter="${CSS.escape(savedCategory)}"], .conf-item[data-filter="${CSS.escape(savedCategory)}"]`
         );
-        if (targetBtn) {
-            document.querySelectorAll('.category-btn, .topic-item').forEach(b => b.classList.remove('active'));
-            targetBtn.classList.add('active');
-            const groupWrapper = targetBtn.closest('.topic-group-wrapper');
-            if (groupWrapper) groupWrapper.classList.add('open');
+        if (targetBtn || isVirtual) {
+            currentCategory = savedCategory;
+            if (targetBtn) {
+                document.querySelectorAll('.category-btn, .topic-item, .conf-item').forEach(b => b.classList.remove('active'));
+                targetBtn.classList.add('active');
+                const groupWrapper = targetBtn.closest('.topic-group-wrapper');
+                if (groupWrapper) groupWrapper.classList.add('open');
+            }
+        } else {
+            // 該 category 已不存在 (主題被移除/換 discipline) → 重設為 all
+            currentCategory = 'all';
+            localStorage.setItem(LAST_CATEGORY_KEY, 'all');
+            const allBtn = document.querySelector('.category-btn[data-filter="all"]');
+            if (allBtn) allBtn.classList.add('active');
         }
     }
 
@@ -2459,6 +2755,26 @@ document.addEventListener('DOMContentLoaded', () => {
         topConfWrapper.addEventListener('mouseleave', closeConfSubmenu);
         confSubmenu.addEventListener('mouseenter', () => clearTimeout(confSubmenuTimer));
         confSubmenu.addEventListener('mouseleave', closeConfSubmenu);
+
+        // 觸控/click 也能開啟（避免手機/平板無法叫出 conf submenu）
+        const topConfBtn = topConfWrapper.querySelector('.top-conf-btn');
+        if (topConfBtn) {
+            topConfBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confSubmenu.classList.contains('open')) {
+                    confSubmenu.classList.remove('open');
+                } else {
+                    openConfSubmenu();
+                }
+            });
+        }
+        // 點外部關閉
+        document.addEventListener('click', (e) => {
+            if (!confSubmenu.classList.contains('open')) return;
+            if (confSubmenu.contains(e.target)) return;
+            if (topConfWrapper.contains(e.target)) return;
+            confSubmenu.classList.remove('open');
+        });
 
         // conf-item 點擊委派（confSubmenu 已移至 body，在此統一綁定）
         confSubmenu.addEventListener('click', (e) => {
@@ -2632,11 +2948,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const q = searchInput.value.trim();
         if (!q) return;
         e.preventDefault();
+        pushRecentSearch(q);
         if (window._SEMANTIC_ON) {
             semanticSearchPapers(q);
         } else {
             searchAllPapers(q);
         }
+    });
+
+    // ── 最近搜尋 chip bar ─────────────────────────────────────────
+    renderRecentSearches();
+    const recentBar = document.getElementById('recentSearchesBar');
+    if (recentBar) {
+        recentBar.addEventListener('click', (e) => {
+            if (e.target.classList.contains('rs-clear')) {
+                clearRecentSearches();
+                return;
+            }
+            const chip = e.target.closest('.rs-chip');
+            if (!chip) return;
+            const q = chip.dataset.q;
+            if (!q) return;
+            searchInput.value = q;
+            pushRecentSearch(q);
+            if (window._SEMANTIC_ON) semanticSearchPapers(q);
+            else searchAllPapers(q);
+        });
+    }
+
+    // ── 相似論文 modal 關閉 ───────────────────────────────────────
+    document.getElementById('similarCloseBtn')?.addEventListener('click', closeSimilarModal);
+    document.querySelector('#similarModal .similar-backdrop')?.addEventListener('click', closeSimilarModal);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeSimilarModal();
     });
 
     // ── 空狀態「清除搜尋」按鈕 ────────────────────────────────

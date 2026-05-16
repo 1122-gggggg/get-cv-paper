@@ -39,6 +39,25 @@
     <!-- Google Fonts：critical (Inter + Outfit) preload；decorative 用 media trick 不阻塞首屏 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- Critical CSS inline:第一屏需要的最小規則,避免 FOUC + 加速 first paint -->
+    <style>
+      :root{--bg-color:#080c18;--text-primary:#eef2ff;--text-secondary:#8b9cc8;--card-bg:rgba(14,20,40,0.72);--card-border:rgba(255,255,255,0.07);--side-bg:#0f172a}
+      *{margin:0;padding:0;box-sizing:border-box}
+      html,body{background:var(--bg-color);color:var(--text-primary);font-family:'Inter',system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh;overflow-x:hidden;line-height:1.6}
+      .app-shell{display:flex;min-height:100vh}
+      .container{flex:1 1 auto;max-width:100%;padding:18px 24px 40px}
+      .hidden{display:none!important}
+      .loader-container{display:flex;flex-direction:column;align-items:center;padding:48px 12px}
+      .spinner{width:34px;height:34px;border:3px solid rgba(168,85,247,.18);border-top-color:#a855f7;border-radius:50%;animation:spin .8s linear infinite}
+      @keyframes spin{to{transform:rotate(360deg)}}
+      .skeleton-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px;margin-top:24px;width:100%}
+      .skeleton-card{background:rgba(14,20,40,.5);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:18px;min-height:180px}
+      .sk-line{height:10px;background:linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.12),rgba(255,255,255,.05));background-size:200% 100%;border-radius:6px;margin-bottom:10px;animation:sk 1.4s linear infinite}
+      .sk-block{height:48px;border-radius:8px;background:rgba(255,255,255,.04);margin:10px 0}
+      .sk-title{width:78%}.sk-author{width:55%;height:8px}.sk-tag{width:38%;height:8px}
+      @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+      body.light-mode{--bg-color:#eef1fb;--text-primary:#141930;--text-secondary:#3d4e72;--card-bg:#fff;--card-border:rgba(79,70,229,.14)}
+    </style>
     <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'">
     <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap"></noscript>
@@ -46,6 +65,17 @@
     <link rel="stylesheet" href="/static/washi.css" fetchpriority="high">
     <!-- 預先發 /api/papers 預設 cv 領域，與 CSS/JS 平行下載，省 1 RTT -->
     <link rel="preload" as="fetch" href="/api/papers?max_results=50&amp;discipline=cv" fetchpriority="high" crossorigin="anonymous">
+    <!-- DNS prefetch for upstream APIs (loaded lazily after first paper render) -->
+    <link rel="dns-prefetch" href="//api.semanticscholar.org">
+    <link rel="dns-prefetch" href="//paperswithcode.com">
+    <link rel="dns-prefetch" href="//openreview.net">
+    <link rel="dns-prefetch" href="//api2.openreview.net">
+    <link rel="dns-prefetch" href="//huggingface.co">
+    <link rel="dns-prefetch" href="//api-inference.huggingface.co">
+    <!-- Preload critical scripts so HTTP/2-3 multiplexing can start them early -->
+    <link rel="preload" as="script" href="/static/disciplines.js">
+    <link rel="preload" as="script" href="/static/value-metrics.js">
+    <link rel="preload" as="script" href="/static/script.js" fetchpriority="high">
     <script src="/static/disciplines.js" defer></script>
     <script src="/static/value-metrics.js" defer></script>
     <script src="/static/script.js" defer></script>
@@ -128,6 +158,7 @@
                     <button id="crossDiscToggle" class="cross-disc-toggle" title="跨領域搜尋（同時搜 CV/NLP/ML/AI）" aria-pressed="false" hidden>🌐</button>
                     <button id="pinSearchBtn" class="pin-search-btn" title="釘選此搜尋為主題標籤">📌</button>
                 </div>
+                <div id="recentSearchesBar" class="recent-searches hidden" aria-label="最近搜尋"></div>
             </div>
         </header>
 
@@ -155,6 +186,7 @@
                         <button class="sort-item" data-value="velocity">🚀 引用速度 <span>Velocity</span></button>
                         <button class="sort-item" data-value="hf">🤗 HF 熱度 <span>Upvotes</span></button>
                         <button class="sort-item" data-value="hot3m">🔥 近三月熱門 <span>Hot 3M</span></button>
+                        <button class="sort-item" data-value="personalized">✨ 為你推薦 <span>For You</span></button>
                     </div>
                 </div>
                 <span class="count-meta"></span>
@@ -186,6 +218,19 @@
                     <button class="read-btn" title="切換已讀狀態">
                         <svg width="12" height="12"><use href="#icon-circle"/></svg>
                         <span class="read-label">未讀</span>
+                    </button>
+                    <button class="similar-btn" title="相似論文">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"/>
+                            <circle cx="4" cy="6" r="2"/>
+                            <circle cx="20" cy="6" r="2"/>
+                            <circle cx="4" cy="18" r="2"/>
+                            <circle cx="20" cy="18" r="2"/>
+                            <line x1="6" y1="6.5" x2="10" y2="11"/>
+                            <line x1="18" y1="6.5" x2="14" y2="11"/>
+                            <line x1="6" y1="17.5" x2="10" y2="13"/>
+                            <line x1="18" y1="17.5" x2="14" y2="13"/>
+                        </svg>
                     </button>
                     <div>
                         <span class="venue-badge-slot"></span>
@@ -282,5 +327,20 @@
 
     <button id="kbdHintBtn" class="kbd-hint-btn" title="鍵盤快捷鍵說明">?</button>
     <button id="backToTopBtn" class="back-to-top" title="回到頂部">↑</button>
+
+    <!-- 相似論文 modal -->
+    <div id="similarModal" class="similar-modal hidden">
+        <div class="similar-backdrop"></div>
+        <div class="similar-panel">
+            <div class="similar-head">
+                <h3 class="similar-title">相似論文</h3>
+                <button id="similarCloseBtn" class="similar-close" title="關閉">×</button>
+            </div>
+            <div class="similar-seed" id="similarSeed"></div>
+            <div class="similar-body" id="similarBody">
+                <div class="similar-loading">載入中…</div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

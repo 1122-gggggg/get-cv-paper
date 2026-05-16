@@ -2086,6 +2086,37 @@ body.light-mode .tag-chip {
     display: flex; align-items: center; justify-content: center;
 }
 .discipline-picker.hidden { display: none; }
+/* 手機版改 bottom-sheet 形態：從底部滑出,佔滿寬度 + 圓角頂端 */
+@media (max-width: 720px) {
+    .discipline-picker { align-items: flex-end; }
+    .dp-modal {
+        width: 100%;
+        max-width: 100%;
+        max-height: 88vh;
+        padding: 18px 16px 14px;
+        border-radius: 18px 18px 0 0;
+        animation: dp-slide-up 0.28s cubic-bezier(.16,.84,.44,1);
+    }
+    .dp-title { font-size: 20px; }
+    .dp-subtitle { font-size: 12.5px; line-height: 1.45; }
+    /* 頂端 drag handle 提示（純視覺） */
+    .dp-modal::before {
+        content: '';
+        display: block;
+        width: 42px; height: 4px;
+        margin: 0 auto 10px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.35);
+    }
+    .dp-close {
+        top: 6px; right: 6px;
+        width: 30px; height: 30px;
+    }
+}
+@keyframes dp-slide-up {
+    from { transform: translateY(100%); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
 .dp-backdrop {
     position: absolute; inset: 0;
     background: rgba(5, 8, 20, 0.85);
@@ -2912,4 +2943,229 @@ body.light-mode .bridge-badge {
 .dp-card.tracked {
     outline: 1px solid rgba(251, 191, 36, 0.35);
     outline-offset: -1px;
+}
+
+/* ── 相似論文按鈕（卡片右上,read-btn 左側） ─────────────── */
+.similar-btn {
+    position: absolute;
+    top: 1rem;
+    right: 7rem;
+    width: 28px;
+    height: 26px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.22);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .2s, color .2s, transform .2s;
+    z-index: 1;
+    padding: 0;
+}
+.similar-btn:hover {
+    color: #c4b5fd;
+    background: rgba(168, 85, 247, 0.12);
+    transform: scale(1.1);
+}
+@media (max-width: 640px) {
+    .similar-btn { right: 6.2rem; }
+}
+
+/* ── 相似論文 modal ───────────────────────────────────── */
+.similar-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.similar-modal.hidden { display: none; }
+.similar-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(7, 12, 23, 0.72);
+    backdrop-filter: blur(6px);
+}
+.similar-panel {
+    position: relative;
+    width: min(720px, 92vw);
+    max-height: 82vh;
+    background: var(--side-bg, #0f172a);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 14px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.similar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.similar-title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+.similar-close {
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+}
+.similar-close:hover {
+    background: rgba(148, 163, 184, 0.15);
+    color: #fff;
+}
+.similar-seed {
+    padding: 10px 18px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+    background: rgba(168, 85, 247, 0.06);
+}
+.similar-seed-title {
+    font-size: 0.85rem;
+    color: #cbd5e1;
+    line-height: 1.4;
+}
+.similar-body {
+    padding: 6px 0;
+    overflow-y: auto;
+    flex: 1 1 auto;
+}
+.similar-loading, .similar-empty {
+    padding: 32px 18px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.9rem;
+}
+.sim-item {
+    display: block;
+    padding: 12px 18px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+    color: inherit;
+    text-decoration: none;
+    transition: background .15s;
+}
+.sim-item:hover {
+    background: rgba(148, 163, 184, 0.06);
+}
+.sim-title {
+    font-size: 0.92rem;
+    color: #e2e8f0;
+    line-height: 1.35;
+    margin-bottom: 4px;
+}
+.sim-meta {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.sim-venue {
+    color: #c4b5fd;
+}
+.sim-year { color: #94a3b8; }
+.sim-cit { color: #fbbf24; }
+
+/* ── 最近搜尋 chip bar ────────────────────────────────── */
+.recent-searches {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+.recent-searches.hidden { display: none; }
+.recent-searches .rs-label {
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+.rs-chip {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(148, 163, 184, 0.06);
+    color: #cbd5e1;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+}
+.rs-chip:hover {
+    background: rgba(168, 85, 247, 0.12);
+    border-color: rgba(168, 85, 247, 0.4);
+    color: #e2e8f0;
+}
+.rs-clear {
+    border: none;
+    background: transparent;
+    color: #64748b;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 6px;
+}
+.rs-clear:hover { color: #f87171; }
+
+/* ── OpenReview / Heat Index 徽章色階 ─────────────────── */
+.or-badge {
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+.or-green {
+    background: rgba(34, 197, 94, 0.12);
+    color: #4ade80;
+    border-color: rgba(34, 197, 94, 0.35);
+}
+.or-yellow {
+    background: rgba(234, 179, 8, 0.12);
+    color: #fcd34d;
+    border-color: rgba(234, 179, 8, 0.35);
+}
+.or-red {
+    background: rgba(239, 68, 68, 0.12);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.35);
+}
+.heat-badge {
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+.heat-hot {
+    background: rgba(239, 68, 68, 0.14);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.4);
+}
+.heat-warm {
+    background: rgba(245, 158, 11, 0.12);
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.35);
+}
+.heat-cool {
+    background: rgba(59, 130, 246, 0.10);
+    color: #93c5fd;
+    border-color: rgba(59, 130, 246, 0.30);
+}
+.heat-cold {
+    background: rgba(148, 163, 184, 0.08);
+    color: #94a3b8;
+    border-color: rgba(148, 163, 184, 0.25);
 }

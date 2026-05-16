@@ -189,6 +189,9 @@ class CachedJSON:
             return body, etag
         except BaseException as e:
             self.metrics["build_err"] += 1
+            # 透過 logger.exception 寫 ERROR 級別 log,讓 Sentry / BetterStack handler 自動撿走
+            if not isinstance(e, (asyncio.CancelledError, KeyboardInterrupt)):
+                logger.exception("CachedJSON build failed: key=%s", key)
             fut.set_exception(e)
             raise
         finally:

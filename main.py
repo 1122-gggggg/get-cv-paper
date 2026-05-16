@@ -15,6 +15,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
@@ -47,11 +48,93 @@ from clients import (
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
 from paper_store import PaperStore
-from semantic import HF_EMBED_MODEL, HF_TOKEN, cache_stats as semantic_cache_stats, semantic_rank
+from semantic import (
+    HF_EMBED_MODEL,
+    HF_TOKEN,
+    cache_stats as semantic_cache_stats,
+    cluster_papers,
+    rerank_by_centroid,
+    semantic_rank,
+)
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ── 錯誤外送(Sentry / BetterStack)──────────────────────────────
+# SENTRY_DSN 設了就啟用 Sentry;BETTERSTACK_TOKEN 設了就把 ERROR 級別 log 轉發到 BetterStack。
+# 兩者都沒設就完全 no-op。模組缺也 no-op,不阻塞啟動。
+class _BetterStackHandler(logging.Handler):
+    """非同步把 ERROR 級別 log POST 到 BetterStack/Logtail。失敗就吞,避免 log 風暴。"""
+
+    def __init__(self, token: str, endpoint: str = "https://in.logs.betterstack.com") -> None:
+        super().__init__(level=logging.ERROR)
+        self._token = token
+        self._endpoint = endpoint
+        self._sema = asyncio.Semaphore(4)  # 限 4 路並發,避免 burst 打死自家網絡
+        # 跑 logging 時 event loop 可能還沒起;用 lazy client
+        import httpx as _hx
+        self._client = _hx.AsyncClient(timeout=5.0, headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        })
+
+    async def _ship(self, payload: dict) -> None:
+        async with self._sema:
+            try:
+                await self._client.post(self._endpoint, json=payload)
+            except Exception:
+                pass
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            payload = {
+                "dt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(record.created)),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": self.format(record),
+            }
+            if record.exc_info:
+                payload["exception"] = logging.Formatter().formatException(record.exc_info)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._ship(payload))
+            except RuntimeError:
+                # 沒 loop(極早期 import 時)就丟棄,避免阻塞
+                pass
+        except Exception:
+            pass
+
+
+def _init_error_sinks() -> None:
+    dsn = (os.environ.get("SENTRY_DSN") or "").strip()
+    bs_token = (os.environ.get("BETTERSTACK_TOKEN") or "").strip()
+    if dsn:
+        try:
+            import sentry_sdk  # type: ignore
+            sentry_sdk.init(
+                dsn=dsn,
+                traces_sample_rate=float(os.environ.get("SENTRY_TRACES_RATE", "0.0")),
+                send_default_pii=False,
+                environment=os.environ.get("APP_ENV", "prod"),
+            )
+            logger.info("error sink: Sentry initialized")
+        except ImportError:
+            logger.warning("SENTRY_DSN set but sentry-sdk not installed (pip install sentry-sdk)")
+        except Exception as e:
+            logger.warning("Sentry init failed: %s", e)
+    if bs_token:
+        try:
+            h = _BetterStackHandler(bs_token, endpoint=os.environ.get("BETTERSTACK_ENDPOINT", "https://in.logs.betterstack.com"))
+            h.setFormatter(logging.Formatter("%(name)s | %(message)s"))
+            logging.getLogger().addHandler(h)
+            logger.info("error sink: BetterStack handler attached")
+        except Exception as e:
+            logger.warning("BetterStack handler init failed: %s", e)
+
+
+_init_error_sinks()
 
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", ".cache"))
 CACHE_DIR.mkdir(exist_ok=True)
@@ -97,6 +180,9 @@ _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
 _s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600, cache_dir=CACHE_DIR)
 _pwc_store = LRUStore("pwc", maxsize=20000, ttl=24 * 3600, cache_dir=CACHE_DIR)
 
+# 動態子題聚類:每 30 分新鮮、24h stale,k-means 在 cached embedding 上跑(不打 HF)
+_subtopics_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=16)
+
 # L2 持久化論文庫:跨容器重啟保留近 N 天熱門論文,upstream 429 時降級供應
 _paper_store = PaperStore(CACHE_DIR / "papers.sqlite")
 _PAPER_STORE_RETENTION_DAYS = 100
@@ -105,10 +191,14 @@ _PAPER_STORE_CLEANUP_INTERVAL = 6 * 3600
 # Warmup:啟動立刻跑 + 每 5 分鐘背景刷新熱門 disciplines。
 # 注意:max 必須與 script.js 實際請求對齊(/api/papers?max_results=50),否則 cache key 不同,
 # 首位使用者仍要付冷啟動成本。
+# 主層(常駐, 5 分鐘輪詢):首頁最熱 4 個領域,使用者體感命中率最高
 _WARMUP_DISCIPLINES = ("cv", "ml", "ai", "nlp")
+# 次層(輪詢, 15 分鐘):覆蓋第二梯隊熱門領域,提高跨領域命中率
+_WARMUP_DISCIPLINES_TIER2 = ("robotics", "graphics", "ir", "security", "systems", "hci")
 _WARMUP_DAYS = 7
 _WARMUP_MAX = 50
 _WARMUP_INTERVAL = 5 * 60
+_WARMUP_INTERVAL_TIER2 = 15 * 60
 _WARMUP_CONCURRENCY = 2  # arXiv 嚴格限流;同時 ≤2 路請求避免 429
 
 _PAPERS_MAX_RESULTS = 5000
@@ -211,6 +301,33 @@ async def _warmup_loop() -> None:
             await asyncio.sleep(_WARMUP_INTERVAL)
 
 
+async def _warmup_loop_tier2() -> None:
+    """次層預熱:第二梯隊領域,間隔較長(15 分鐘)避免 arXiv 限流。
+
+    Tier 2 命中時間敏感度低,但提高跨領域使用者首次體感。同樣有 Semaphore 保護。
+    """
+    await asyncio.sleep(60)  # 等 Tier 1 先完成一輪再啟動
+    sem = asyncio.Semaphore(_WARMUP_CONCURRENCY)
+
+    async def _warm_one(disc_id: str) -> None:
+        async with sem:
+            try:
+                key, builder = _papers_build_spec(disc_id, _WARMUP_DAYS, _WARMUP_MAX)
+                await _papers_cache.warm(key, builder)
+            except Exception as e:
+                logger.warning("warmup-t2 %s failed: %s", disc_id, e)
+
+    while True:
+        try:
+            await asyncio.gather(*[_warm_one(d) for d in _WARMUP_DISCIPLINES_TIER2])
+            await asyncio.sleep(_WARMUP_INTERVAL_TIER2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("warmup-t2 loop error: %s", e)
+            await asyncio.sleep(_WARMUP_INTERVAL_TIER2)
+
+
 _INDEX_HTML: str = ""
 
 
@@ -223,12 +340,14 @@ async def lifespan(app: FastAPI):
         logger.warning("index.html load failed: %s", e)
     flush = asyncio.create_task(_flush_task())
     warm = asyncio.create_task(_warmup_loop())
+    warm_t2 = asyncio.create_task(_warmup_loop_tier2())
     cleanup = asyncio.create_task(_paper_cleanup_task())
     try:
         yield
     finally:
         flush.cancel()
         warm.cancel()
+        warm_t2.cancel()
         cleanup.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
@@ -351,8 +470,49 @@ def health():
     return {"ok": True, "t": int(time.time())}
 
 
-def _ssr_compact(p: dict) -> dict:
-    return {
+_SSR_PAPER_COUNT = 30
+_SLIM_SUMMARY_MAX = 800   # 大部份摘要 < 600,800 留緩衝;省約 30% bytes
+_SLIM_TITLE_MAX = 320
+_SLIM_AUTHORS_MAX = 25
+
+
+def _slim_paper(p: dict) -> dict:
+    """壓掉 /api/papers payload:截斷長字串、丟掉前端不用的欄位。
+
+    保留的欄位都直接被 buildCard()/applyFilter()/dedup 使用;丟掉的都不影響功能。
+    可省 30-40% 傳輸,跨容器 SQLite L2 也跟著省。
+    """
+    title = (p.get("title") or "")[:_SLIM_TITLE_MAX]
+    summary = (p.get("summary") or "")[:_SLIM_SUMMARY_MAX]
+    authors = p.get("authors") or []
+    if isinstance(authors, list) and len(authors) > _SLIM_AUTHORS_MAX:
+        authors = authors[:_SLIM_AUTHORS_MAX]
+    out: dict[str, Any] = {
+        "title": title,
+        "summary": summary,
+        "url": p.get("url"),
+        "published": p.get("published"),
+        "authors": authors,
+        "source": p.get("source"),
+    }
+    ext = p.get("external_ids")
+    if ext:
+        out["external_ids"] = ext
+    if p.get("venue"):
+        out["venue"] = p["venue"]
+    if p.get("hf_upvotes"):
+        out["hf_upvotes"] = p["hf_upvotes"]
+    if p.get("github_url"):
+        out["github_url"] = p["github_url"]
+    if p.get("citation_count"):
+        out["citation_count"] = p["citation_count"]
+    if p.get("or_rating"):
+        out["or_rating"] = p["or_rating"]
+    return out
+
+
+def _ssr_compact(p: dict, citation_count: int | None = None) -> dict:
+    out = {
         "url": p.get("url"),
         "title": (p.get("title") or "")[:260],
         "summary": (p.get("summary") or "")[:280],
@@ -360,7 +520,44 @@ def _ssr_compact(p: dict) -> dict:
         "published": p.get("published"),
         "venue": p.get("venue"),
         "github_url": p.get("github_url"),
+        "hf_upvotes": p.get("hf_upvotes") or 0,
+        "external_ids": p.get("external_ids") or {},
     }
+    if citation_count is not None and citation_count >= 0:
+        out["citation_count"] = citation_count
+    return out
+
+
+_ARXIV_ID_RE_SSR = re.compile(r"(\d{4}\.\d{4,6})")
+
+
+def _ssr_citations_for(papers: list[dict]) -> dict[str, int]:
+    """從 _s2_store 快取批次撈引用數(用 arxiv_id 當 key);不發新請求,沒命中就略過。"""
+    out: dict[str, int] = {}
+    try:
+        for p in papers:
+            url = p.get("url") or ""
+            if not url:
+                continue
+            ext = p.get("external_ids") or {}
+            aid = ext.get("arxiv") if isinstance(ext, dict) else None
+            if not aid:
+                m = _ARXIV_ID_RE_SSR.search(url)
+                if m:
+                    aid = m.group(1)
+            if not aid:
+                continue
+            try:
+                entry = _s2_store.get(str(aid))
+            except Exception:
+                entry = None
+            if entry and isinstance(entry, dict):
+                cc = entry.get("citation_count")
+                if isinstance(cc, int) and cc >= 0:
+                    out[url] = cc
+    except Exception:
+        pass
+    return out
 
 
 @app.get("/")
@@ -374,9 +571,10 @@ async def read_root():
         if ent is not None:
             _at, body, _etag = ent
             data = _json.loads(body)
-            papers = (data.get("papers") or [])[:12]
+            papers = (data.get("papers") or [])[:_SSR_PAPER_COUNT]
             if papers:
-                compact = [_ssr_compact(p) for p in papers]
+                cits = _ssr_citations_for(papers)
+                compact = [_ssr_compact(p, cits.get(p.get("url"))) for p in papers]
                 safe = _html.escape(_json.dumps(compact, ensure_ascii=False), quote=True)
                 island = (
                     f'<div id="ssr-papers" hidden '
@@ -496,6 +694,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
 
         sources = await asyncio.gather(*tasks)
         merged = merge_sources(*sources)
+        merged = [_slim_paper(p) for p in merged]
 
         primary_cat = disc.get("cat") or ""
         if merged and primary_cat:
@@ -654,6 +853,102 @@ def list_disciplines():
     }
 
 
+# ── 個人化重排:以收藏質心 cosine 排序 candidates ──────────────
+@app.get("/api/personalized")
+async def get_personalized(
+    favorites: str = Query("", description="comma-separated arXiv IDs of user favorites"),
+    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    top_k: int = 30,
+    blend: float = 0.4,
+):
+    """以使用者收藏(arxiv IDs)取 embedding 質心,對該領域 paper pool 重排。
+
+    無 HF_TOKEN 或收藏為空時回原始順序。
+    """
+    if not HF_TOKEN:
+        raise HTTPException(status_code=503, detail="personalized rerank unavailable (HF_TOKEN missing)")
+    fav_ids = _unique_csv(favorites, max_items=50, field_name="favorites")
+    if not fav_ids:
+        return {"papers": [], "discipline": discipline_id, "reason": "no_favorites"}
+
+    top_k = _bounded_int(top_k, default=30, min_value=1, max_value=100)
+    blend = max(0.0, min(1.0, float(blend)))
+
+    try:
+        candidates = await _papers_for_discipline(discipline_id)
+    except Exception as e:
+        logger.warning("personalized: pool unavailable for %s: %s", discipline_id, e)
+        raise HTTPException(status_code=503, detail=f"pool unavailable: {e}") from e
+    if not candidates:
+        return {"papers": [], "discipline": discipline_id, "reason": "empty_pool"}
+
+    # 找 favorites 對應 paper dict(從 pool 取;或現組一個只含 id 的最小 dict)
+    fav_id_set = set(fav_ids)
+    fav_papers: list[dict] = []
+    seen: set[str] = set()
+    for p in candidates:
+        pid = (p.get("id") or "").strip()
+        if pid in fav_id_set and pid not in seen:
+            seen.add(pid)
+            fav_papers.append(p)
+    # 沒在 pool 找到的(可能跨領域)用最小占位 dict,讓 _paper_key 仍能命中 embed cache
+    for pid in fav_id_set - seen:
+        fav_papers.append({"id": pid, "title": "", "summary": ""})
+
+    try:
+        reranked = await rerank_by_centroid(
+            _client(), fav_papers, candidates[:300], top_k=top_k, blend=blend,
+        )
+    except Exception as e:
+        logger.warning("personalized: rerank failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"rerank failed: {e}") from e
+
+    return {
+        "papers": reranked,
+        "discipline": discipline_id,
+        "fav_count": len(fav_id_set),
+        "pool_size": min(300, len(candidates)),
+        "blend": blend,
+    }
+
+
+# ── 動態子題:k-means on cached embeddings ───────────────────────
+@app.get("/api/subtopics")
+async def list_subtopics(
+    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    k: int = 6,
+):
+    """回傳 [{label, count, sample_titles}],只用既存 embedding cache,不打 HF。
+
+    沒 HF_TOKEN 或 cache 空時回空清單(前端會略過動態 group)。
+    """
+    if not HF_TOKEN:
+        return {"clusters": [], "discipline": discipline_id, "reason": "no_hf_token"}
+
+    k = _bounded_int(k, default=6, min_value=2, max_value=10)
+    cache_key = f"{discipline_id}|k={k}"
+
+    async def _build():
+        try:
+            papers = await _papers_for_discipline(discipline_id)
+        except Exception as e:
+            logger.warning("subtopics: paper pool unavailable for %s: %s", discipline_id, e)
+            return {"clusters": [], "discipline": discipline_id, "reason": "pool_unavailable"}
+        if not papers:
+            return {"clusters": [], "discipline": discipline_id, "reason": "empty_pool"}
+        # 只取前 200 篇,降低聚類成本(k-means 是 O(n*k*iter))
+        pool = papers[:200]
+        try:
+            clusters = await cluster_papers(_client(), pool, k=k, min_cluster=3)
+        except Exception as e:
+            logger.warning("subtopics: cluster failed for %s: %s", discipline_id, e)
+            return {"clusters": [], "discipline": discipline_id, "reason": "cluster_failed"}
+        return {"clusters": clusters, "discipline": discipline_id, "pool_size": len(pool)}
+
+    body, _etag = await _subtopics_cache.get_or_build(cache_key, _build)
+    return _json.loads(body)
+
+
 # ── Semantic Scholar citation proxy ──────────────────────────────
 # GET 版:支援 service worker / browser HTTP cache (POST 不能)。
 @app.get("/api/citations")
@@ -754,6 +1049,83 @@ def get_metrics(key: str = ""):
         "semantic_cache": semantic_cache_stats(),
         "paper_store": _paper_store.stats(),
     }
+
+
+def _prom_format(metric: str, value: float, labels: dict[str, str] | None = None, mtype: str = "gauge", help_text: str = "") -> str:
+    """渲染單一 Prometheus exposition line(含 HELP/TYPE 標頭)。"""
+    label_str = ""
+    if labels:
+        parts = [f'{k}="{str(v).replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34))}"' for k, v in labels.items()]
+        label_str = "{" + ",".join(parts) + "}"
+    return f"# HELP {metric} {help_text}\n# TYPE {metric} {mtype}\n{metric}{label_str} {value}\n"
+
+
+@app.get("/metrics")
+def prometheus_metrics(key: str = ""):
+    """Prometheus exposition format。受 METRICS_KEY 保護。
+
+    暴露 cache hit/miss、store 大小、warmup 結果、build error 計數。
+    用法:scrape /metrics?key=$METRICS_KEY 進 Grafana / Prometheus。
+    """
+    if _METRICS_KEY and key != _METRICS_KEY:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    lines: list[str] = []
+    # cache hit/miss counters
+    for cname, cobj in (
+        ("papers", _papers_cache),
+        ("trending", _trending_cache),
+        ("subtopics", _subtopics_cache),
+    ):
+        s = cobj.stats()
+        for field in ("hit_fresh", "hit_stale", "miss", "build_err", "warm_ok", "warm_skip"):
+            v = int(s.get(field, 0))
+            lines.append(_prom_format(
+                f"cv_cache_{field}_total", v,
+                labels={"cache": cname},
+                mtype="counter",
+                help_text=f"CachedJSON {field} count",
+            ))
+        lines.append(_prom_format(
+            "cv_cache_entries", int(s.get("entries", 0)),
+            labels={"cache": cname},
+            help_text="CachedJSON in-memory entry count",
+        ))
+        lines.append(_prom_format(
+            "cv_cache_hit_rate", float(s.get("hit_rate", 0.0)),
+            labels={"cache": cname},
+            help_text="CachedJSON cumulative hit rate",
+        ))
+        lines.append(_prom_format(
+            "cv_cache_inflight", int(s.get("inflight", 0)),
+            labels={"cache": cname},
+            help_text="CachedJSON concurrent builders inflight",
+        ))
+
+    # KV stores
+    lines.append(_prom_format("cv_kv_entries", len(_s2_store._data), labels={"store": "s2"}, help_text="LRUStore entry count"))
+    lines.append(_prom_format("cv_kv_entries", len(_pwc_store._data), labels={"store": "pwc"}, help_text="LRUStore entry count"))
+
+    # paper_store (L2 SQLite)
+    try:
+        ps = _paper_store.stats()
+        for k, v in ps.items():
+            if isinstance(v, (int, float)):
+                lines.append(_prom_format(f"cv_paper_store_{k}", v, help_text=f"PaperStore {k}"))
+    except Exception:
+        pass
+
+    # semantic embed cache
+    try:
+        ss = semantic_cache_stats()
+        for k, v in ss.items():
+            if isinstance(v, (int, float)):
+                lines.append(_prom_format(f"cv_semantic_cache_{k}", v, help_text=f"Embed cache {k}"))
+    except Exception:
+        pass
+
+    body = "".join(lines)
+    return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 # ── OpenReview (ICLR / NeurIPS / ICML 投稿 + 評審) ────────────────
