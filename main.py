@@ -285,6 +285,32 @@ async def _warmup_loop() -> None:
             except Exception as e:
                 logger.warning("warmup %s failed: %s", disc_id, e)
 
+    async def _warm_subtopics(disc_id: str) -> None:
+        """預熱 cluster:papers 已熱身完才有 embedding cache,所以這要在 _warm_one 之後跑。"""
+        if not HF_TOKEN:
+            return
+        cache_key = f"{disc_id}|k=6"
+
+        async def _build():
+            try:
+                papers = await _papers_for_discipline(disc_id)
+            except Exception:
+                return {"clusters": [], "discipline": disc_id, "reason": "pool_unavailable"}
+            if not papers:
+                return {"clusters": [], "discipline": disc_id, "reason": "empty_pool"}
+            pool = papers[:200]
+            try:
+                clusters = await cluster_papers(_client(), pool, k=6, min_cluster=3)
+            except Exception as e:
+                logger.warning("warmup subtopics %s failed: %s", disc_id, e)
+                return {"clusters": [], "discipline": disc_id, "reason": "cluster_failed"}
+            return {"clusters": clusters, "discipline": disc_id, "pool_size": len(pool)}
+
+        try:
+            await _subtopics_cache.warm(cache_key, _build)
+        except Exception as e:
+            logger.warning("warmup subtopics %s outer failed: %s", disc_id, e)
+
     while True:
         try:
             await asyncio.gather(*[_warm_one(d) for d in _WARMUP_DISCIPLINES])
@@ -292,6 +318,9 @@ async def _warmup_loop() -> None:
                 await _trending_cache.warm("hf_daily:7", _trending_build_spec(7))
             except Exception as e:
                 logger.warning("warmup trending failed: %s", e)
+            # subtopics 預熱:序列跑,避免一次太多 HF 請求觸發限流
+            for d in _WARMUP_DISCIPLINES:
+                await _warm_subtopics(d)
             await asyncio.sleep(_WARMUP_INTERVAL)
         except asyncio.CancelledError:
             raise
