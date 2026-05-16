@@ -2334,12 +2334,11 @@ body.light-mode {
     display: flex; flex-direction: column;
     gap: 14px;
     padding: 22px 0 16px;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     z-index: 5;
 }
-.side::-webkit-scrollbar { width: 6px; }
-.side::-webkit-scrollbar-thumb { background: var(--side-line); border-radius: 3px; }
+.side-nav::-webkit-scrollbar { width: 6px; }
+.side-nav::-webkit-scrollbar-thumb { background: var(--side-line); border-radius: 3px; }
 
 /* Brand block */
 .side-brand {
@@ -2409,6 +2408,8 @@ body.light-mode .side-discipline .switch-discipline-btn {
     gap: 2px;
     flex: 1 1 auto;
     min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 .side-section-label {
     padding: 14px 10px 6px;
@@ -2587,11 +2588,12 @@ body.light-mode .side-discipline .switch-discipline-btn {
     font-weight: 500;
 }
 
-/* Sidebar footer: keyboard hints */
+/* Sidebar footer: keyboard hints — pinned to viewport bottom, never overlapped by expanded submenus */
 .side-foot {
-    margin-top: auto;
+    flex: 0 0 auto;
     padding: 12px 20px 4px;
     border-top: 1px solid var(--side-line-soft);
+    background: var(--side-bg);
     display: flex; flex-direction: column; gap: 5px;
 }
 .side-foot-item {
