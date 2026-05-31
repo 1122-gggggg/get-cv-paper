@@ -11,11 +11,13 @@ from __future__ import annotations
 import logging
 import math
 import os
+import random as _random
+import re as _re_cluster
 import sqlite3
 import struct
 import threading
 import time
-from collections import OrderedDict
+from collections import Counter as _Counter, OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -346,23 +348,22 @@ async def rerank_by_centroid(
     if not fav_vecs:
         return candidate_papers[:top_k]
 
-    dim = len(fav_vecs[0])
-    centroid = [0.0] * dim
-    for v in fav_vecs:
-        if len(v) != dim:
-            continue
-        for i in range(dim):
-            centroid[i] += v[i]
-    n = len(fav_vecs)
-    centroid = [x / n for x in centroid]
-    # L2 normalize
-    norm = math.sqrt(sum(x * x for x in centroid)) or 1.0
-    centroid = [x / norm for x in centroid]
+    # 多質心:把收藏分群成 1-3 個興趣中心,候選取「最相近的興趣」分數,
+    # 避免把多元興趣平均成一個模糊質心。
+    centroids = _multi_centroids(fav_vecs)
+    if not centroids:
+        return candidate_papers[:top_k]
+
+    # 冷啟動:收藏太少(<3)時質心噪音大,提高 blend 偏向原始排序避免過擬合。
+    eff_blend = blend
+    if len(fav_vecs) < 3:
+        eff_blend = min(1.0, blend + 0.25)
 
     cand_vecs_map = await _embed_papers(client, candidate_papers)
 
     scored: list[tuple[float, int, dict[str, Any]]] = []
     fav_keys = set(fav_vecs_map.keys())
+    n_cand = len(candidate_papers)
     for idx, p in enumerate(candidate_papers):
         k = _paper_key(p)
         if not k or k in fav_keys:
@@ -372,11 +373,11 @@ async def rerank_by_centroid(
         if not v:
             scored.append((0.0, idx, p))
             continue
-        sim = _cosine(centroid, v)  # -1..1
+        sim = max(_cosine(c, v) for c in centroids)  # -1..1,取最相近興趣
         personal = (sim + 1.0) / 2.0  # 0..1
         # 原始排名也歸一化(idx 越小越前)
-        pos_score = 1.0 - (idx / max(1, len(candidate_papers)))
-        score = blend * pos_score + (1.0 - blend) * personal
+        pos_score = 1.0 - (idx / max(1, n_cand))
+        score = eff_blend * pos_score + (1.0 - eff_blend) * personal
         scored.append((score, idx, p))
 
     scored.sort(key=lambda x: (-x[0], x[1]))
@@ -390,11 +391,6 @@ async def rerank_by_centroid(
 
 
 # ── 動態子題聚類 (k-means on cached embeddings) ────────────────
-import random as _random
-import re as _re_cluster
-from collections import Counter as _Counter
-
-
 _STOPWORDS = frozenset({
     "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "with", "by", "from",
     "is", "are", "be", "as", "at", "this", "that", "we", "our", "their", "its",
@@ -479,6 +475,41 @@ def _kmeans(vecs: list[list[float]], k: int, max_iter: int = 12) -> tuple[list[i
                 new_cents[c] = list(_random.choice(vecs))
         centroids = new_cents
     return assign, centroids
+
+
+def _normalize_vec(v: list[float]) -> list[float]:
+    norm = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / norm for x in v]
+
+
+def _mean_centroid(vecs: list[list[float]]) -> list[float]:
+    dim = len(vecs[0])
+    acc = [0.0] * dim
+    for v in vecs:
+        if len(v) != dim:
+            continue
+        for i in range(dim):
+            acc[i] += v[i]
+    n = len(vecs)
+    return _normalize_vec([x / n for x in acc])
+
+
+def _multi_centroids(fav_vecs: list[list[float]], max_k: int = 3) -> list[list[float]]:
+    """把收藏分群成最多 max_k 個興趣質心(支援多元興趣使用者)。
+
+    收藏很少 → 單一均值質心;否則 k-means(k≈n/2,上限 max_k)。
+    """
+    if not fav_vecs:
+        return []
+    n = len(fav_vecs)
+    if n <= 2:
+        return [_mean_centroid(fav_vecs)]
+    k = max(1, min(max_k, n // 2))
+    if k == 1:
+        return [_mean_centroid(fav_vecs)]
+    _assign, cents = _kmeans(fav_vecs, k)
+    out = [_normalize_vec(c) for c in cents if any(c)]
+    return out or [_mean_centroid(fav_vecs)]
 
 
 def _cluster_label(papers: list[dict[str, Any]]) -> str:
@@ -566,3 +597,131 @@ def _recent_share(members: list[dict[str, Any]], days: int = 3) -> float:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     recent = sum(1 for m in members if str(m.get("published") or "")[:10] >= cutoff)
     return round(recent / len(members), 3)
+
+
+# ── BM25 lexical scoring + Reciprocal Rank Fusion (hybrid recall) ──────
+_BM25_TOK_RE = _re_cluster.compile(r"[a-zA-Z0-9][a-zA-Z0-9\-]+")
+_RRF_K = 60
+
+
+def _bm25_tokens(text: str) -> list[str]:
+    return [w.lower() for w in _BM25_TOK_RE.findall(text or "")]
+
+
+def _bm25_doc_text(paper: dict[str, Any]) -> str:
+    title = (paper.get("title") or "").strip()
+    body = (paper.get("summary") or paper.get("abstract") or "").strip()[:600]
+    return f"{title} {body}"
+
+
+def _bm25_scores(
+    query: str, papers: list[dict[str, Any]], k1: float = 1.5, b: float = 0.75
+) -> dict[int, float]:
+    """Okapi BM25 over the in-memory pool. Pure Python, no network. {idx: score}."""
+    q_terms = set(_bm25_tokens(query))
+    if not q_terms or not papers:
+        return {}
+    docs = [_bm25_tokens(_bm25_doc_text(p)) for p in papers]
+    n_docs = len(docs)
+    avgdl = sum(len(d) for d in docs) / max(1, n_docs)
+    doc_tfs: list[dict[str, int]] = []
+    df: dict[str, int] = {}
+    for d in docs:
+        tf = _Counter(d)
+        doc_tfs.append(tf)
+        for term in tf:
+            df[term] = df.get(term, 0) + 1
+    scores: dict[int, float] = {}
+    for i, tf in enumerate(doc_tfs):
+        dl = len(docs[i]) or 1
+        s = 0.0
+        for term in q_terms:
+            f = tf.get(term, 0)
+            if not f:
+                continue
+            n_q = df.get(term, 0)
+            idf = math.log(1 + (n_docs - n_q + 0.5) / (n_q + 0.5))
+            s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        if s > 0:
+            scores[i] = s
+    return scores
+
+
+def _ranks_from_scores(scores: dict[int, float]) -> dict[int, int]:
+    """Map idx → 1-based rank by descending score (ties broken by idx)."""
+    order = sorted(scores, key=lambda i: (-scores[i], i))
+    return {idx: rank for rank, idx in enumerate(order, start=1)}
+
+
+async def _dense_scores(
+    client: httpx.AsyncClient, query: str, papers: list[dict[str, Any]]
+) -> dict[int, float]:
+    q_vecs = await _hf_embed(client, [_query_text(query)])
+    if not q_vecs:
+        raise RuntimeError("empty query embedding")
+    q_vec = q_vecs[0]
+    paper_vecs = await _embed_papers(client, papers)
+    scores: dict[int, float] = {}
+    for i, p in enumerate(papers):
+        v = paper_vecs.get(_paper_key(p))
+        if v:
+            scores[i] = _cosine(q_vec, v)
+    return scores
+
+
+async def hybrid_rank(
+    client: httpx.AsyncClient,
+    query: str,
+    papers: list[dict[str, Any]],
+    top_k: int = 30,
+    rrf_k: int = _RRF_K,
+) -> dict[str, Any]:
+    """BM25 ⊕ dense via Reciprocal Rank Fusion.
+
+    Dense 是 best-effort:HF embedding 失敗時退化成 BM25-only 而非拋錯,
+    讓召回端在 embedding 服務中斷時也不會 502。
+    回傳 {papers, dense, lexical},每篇附 hybrid/semantic/lexical 分數。
+    """
+    query = (query or "").strip()
+    if not query or not papers:
+        return {"papers": [], "dense": False, "lexical": False}
+
+    bm25 = _bm25_scores(query, papers)
+    bm25_ranks = _ranks_from_scores(bm25)
+
+    dense_scores: dict[int, float] = {}
+    dense_ranks: dict[int, int] = {}
+    dense_ok = False
+    try:
+        dense_scores = await _dense_scores(client, query, papers)
+        dense_ranks = _ranks_from_scores(dense_scores)
+        dense_ok = True
+    except Exception as e:
+        logger.warning("hybrid_rank: dense stage failed, BM25-only fallback: %s", e)
+
+    idxs = set(bm25_ranks) | set(dense_ranks)
+    if not idxs:
+        return {"papers": [], "dense": dense_ok, "lexical": bool(bm25)}
+
+    fused: dict[int, float] = {}
+    for i in idxs:
+        s = 0.0
+        r_b = bm25_ranks.get(i)
+        if r_b is not None:
+            s += 1.0 / (rrf_k + r_b)
+        r_d = dense_ranks.get(i)
+        if r_d is not None:
+            s += 1.0 / (rrf_k + r_d)
+        fused[i] = s
+
+    order = sorted(idxs, key=lambda i: (fused[i], dense_scores.get(i, 0.0)), reverse=True)
+    out: list[dict[str, Any]] = []
+    for i in order[:top_k]:
+        item = dict(papers[i])
+        item["hybrid_score"] = round(fused[i], 6)
+        if i in dense_scores:
+            item["semantic_score"] = round(dense_scores[i], 4)
+        if i in bm25:
+            item["lexical_score"] = round(bm25[i], 4)
+        out.append(item)
+    return {"papers": out, "dense": dense_ok, "lexical": bool(bm25)}

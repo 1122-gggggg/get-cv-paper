@@ -55,8 +55,8 @@ from semantic import (
     HF_TOKEN,
     cache_stats as semantic_cache_stats,
     cluster_papers,
+    hybrid_rank,
     rerank_by_centroid,
-    semantic_rank,
 )
 
 load_dotenv()
@@ -200,7 +200,7 @@ _WARMUP_DISCIPLINES = ("cv", "ml", "ai", "nlp")
 # 次層(輪詢, 15 分鐘):覆蓋第二梯隊熱門領域,提高跨領域命中率
 _WARMUP_DISCIPLINES_TIER2 = ("robotics", "graphics", "ir", "security", "systems", "hci")
 _WARMUP_DAYS = 7
-_WARMUP_MAX = 50
+_WARMUP_MAX = 80  # 召回池:單領域 ~80,跨 4 領域 union ~320(>300 召回目標)
 _WARMUP_INTERVAL = 5 * 60
 _WARMUP_INTERVAL_TIER2 = 15 * 60
 _WARMUP_CONCURRENCY = 2  # arXiv 嚴格限流;同時 ≤2 路請求避免 429
@@ -209,6 +209,7 @@ _PAPERS_MAX_RESULTS = 5000
 _PAPERS_DAYS_MAX = 90
 _TRENDING_DAYS_MAX = 30
 _SEARCH_MAX_RESULTS = 100
+_SEMANTIC_POOL_MAX = 500  # 混合召回(BM25+dense)單次評分的候選上限
 _EMERGING_WINDOW_MAX = 30
 _EMERGING_LIMIT = 40
 # Poisson-style burst 評分:delta / sqrt(baseline + prior)。prior 當平滑常數,
@@ -1000,21 +1001,25 @@ async def semantic_search(
             raise HTTPException(status_code=503, detail=f"paper pool unavailable: {e}") from e
         used_disc = discipline_id
 
-    if len(papers) > 400:
-        papers = papers[:400]
+    if len(papers) > _SEMANTIC_POOL_MAX:
+        papers = papers[:_SEMANTIC_POOL_MAX]
 
+    # Hybrid BM25 ⊕ dense via RRF. embedding 服務掛掉時自動退化成 BM25-only,
+    # 召回端永不 502;只有 BM25 與 dense 同時無結果才算空。
     try:
-        ranked = await semantic_rank(_client(), query, papers, top_k=top_k)
+        result = await hybrid_rank(_client(), query, papers, top_k=top_k)
     except Exception as e:
-        logger.warning("semantic_rank failed: %s", e)
-        raise HTTPException(status_code=502, detail=f"embedding failure: {e}") from e
+        logger.warning("hybrid_rank failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"ranking failure: {e}") from e
 
     return {
-        "papers": ranked,
+        "papers": result["papers"],
         "query": query,
         "discipline": used_disc,
         "model": HF_EMBED_MODEL,
         "pool_size": len(papers),
+        "dense": result["dense"],
+        "lexical": result["lexical"],
     }
 
 
