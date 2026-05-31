@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
 
 from cache import CachedJSON, LRUStore, etag_response, make_etag
 from clients import (
@@ -397,48 +397,63 @@ except ImportError:
     app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-# ── Static long-cache + security headers ─────────────────────────
-class HeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        path = request.url.path
+# ── Static long-cache + security headers (pure ASGI: no body buffering) ──
+class HeadersMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    def _apply(self, headers: MutableHeaders, path: str) -> None:
         if path.startswith("/static/"):
             if path.endswith("/sw.js"):
-                response.headers["Cache-Control"] = "no-cache"
+                headers["Cache-Control"] = "no-cache"
             elif path.endswith((".woff2", ".woff", ".ttf", ".png", ".jpg", ".webp")):
-                response.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+                headers["Cache-Control"] = "public, max-age=2592000, immutable"
             elif path.endswith("/disciplines.js"):
-                response.headers["Cache-Control"] = "public, max-age=604800, must-revalidate"
+                headers["Cache-Control"] = "public, max-age=604800, must-revalidate"
             elif path.endswith((".css", ".js", ".svg")):
-                response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
+                headers["Cache-Control"] = "public, max-age=300, must-revalidate"
             else:
-                response.headers["Cache-Control"] = "public, max-age=86400"
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-        response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+                headers["Cache-Control"] = "public, max-age=86400"
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+        # HSTS: TLS terminates at the Fly edge; force https on the apex + subdomains.
+        headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         # CSP: 唯一 inline script 是 index.html 的 JSON-LD,以 sha256 hash 放行;
         # style-src 保留 unsafe-inline (CSS-in-JS 與 :focus outline 樣式有 inline 需求)
-        if not response.headers.get("Content-Security-Policy"):
-            response.headers["Content-Security-Policy"] = (
+        if not headers.get("Content-Security-Policy"):
+            headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'sha256-rp6QQ0ouE7tj2BbEMIflchpTVG+LQoePo1NY8ph7K0w=' https://accounts.google.com https://apis.google.com; "
+                "script-src 'self' 'sha256-rp6QQ0ouE7tj2BbEMIflchpTVG+LQoePo1NY8ph7K0w='; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "img-src 'self' data: https:; "
-                "connect-src 'self' https://accounts.google.com; "
-                "frame-src https://accounts.google.com; "
+                "connect-src 'self'; "
+                "frame-ancestors 'self'; "
                 "font-src 'self' data: https://fonts.gstatic.com; "
                 "base-uri 'self'; form-action 'self'"
             )
-        return response
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                self._apply(MutableHeaders(raw=message["headers"]), path)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
-# ── 簡易 IP token bucket(免外部依賴,防濫用)────────────────────
-class RateLimitMiddleware(BaseHTTPMiddleware):
+# ── 簡易 IP token bucket(免外部依賴,防濫用)── pure ASGI ─────────
+class RateLimitMiddleware:
     """每 IP per-minute token bucket。寫入 user data 算高成本,GET 一律 cost=1。"""
 
     def __init__(self, app, burst: int = 600):
-        super().__init__(app)
+        self.app = app
         self.burst = burst
         self._buckets: dict[str, deque] = {}
         self._last_sweep = time.time()
@@ -453,18 +468,48 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         for ip in dead:
             self._buckets.pop(ip, None)
 
-    def _client_ip(self, request: Request) -> str:
-        fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            return fwd.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+    @staticmethod
+    def _client_ip(scope) -> str:
+        # Fly-Client-IP is set by the trusted Fly edge and cannot be spoofed by
+        # the client, unlike X-Forwarded-For (kept only as a non-Fly fallback).
+        fly = ""
+        xff = ""
+        for k, v in scope.get("headers", []):
+            if k == b"fly-client-ip" and not fly:
+                fly = v.decode("latin-1").strip()
+            elif k == b"x-forwarded-for" and not xff:
+                xff = v.decode("latin-1").split(",")[0].strip()
+        if fly:
+            return fly
+        if xff:
+            return xff
+        client = scope.get("client")
+        return client[0] if client else "unknown"
 
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+    @staticmethod
+    async def _reject(send) -> None:
+        body = _json.dumps({"detail": "rate limited"}).encode("utf-8")
+        await send({
+            "type": "http.response.start",
+            "status": 429,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"retry-after", b"10"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
         if not path.startswith("/api/") or path == "/api/health":
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        ip = self._client_ip(request)
+        ip = self._client_ip(scope)
         now = time.time()
         self._sweep_idle(now)
         window = 60.0
@@ -472,20 +517,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         while dq and now - dq[0] > window:
             dq.popleft()
 
-        cost = 3 if (request.method == "PUT" and path == "/api/me/data") else 1
-        if len(dq) + cost > self.burst:
-            return Response(
-                content=_json.dumps({"detail": "rate limited"}),
-                status_code=429,
-                media_type="application/json",
-                headers={"Retry-After": "10"},
-            )
+        if len(dq) >= self.burst:
+            await self._reject(send)
+            return
 
-        response = await call_next(request)
-        if response.status_code < 500:
-            for _ in range(cost):
-                dq.append(now)
-        return response
+        status = {"code": 200}
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+        if status["code"] < 500:
+            dq.append(now)
 
 
 app.add_middleware(RateLimitMiddleware)
