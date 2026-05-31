@@ -76,6 +76,25 @@ class PaperStore:
                 last_fetched REAL NOT NULL,
                 row_count INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS metric_snapshots (
+                paper_id TEXT NOT NULL,
+                primary_cat TEXT NOT NULL,
+                snapshot_date TEXT NOT NULL,
+                citation_count INTEGER,
+                hf_upvotes INTEGER,
+                published TEXT,
+                at REAL NOT NULL,
+                PRIMARY KEY (paper_id, primary_cat, snapshot_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_snap_cat_date ON metric_snapshots(primary_cat, snapshot_date);
+            CREATE TABLE IF NOT EXISTS topic_daily (
+                primary_cat TEXT NOT NULL,
+                snapshot_date TEXT NOT NULL,
+                paper_count INTEGER NOT NULL,
+                fresh_count INTEGER NOT NULL,
+                at REAL NOT NULL,
+                PRIMARY KEY (primary_cat, snapshot_date)
+            );
             """
         )
 
@@ -114,6 +133,137 @@ class PaperStore:
 
     def _cutoff(self, days: int) -> str:
         return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # ── time-series: daily metric snapshots + topic volume ──────────
+    def record_snapshots(self, papers: list[dict[str, Any]], primary_cat: str) -> int:
+        """Capture today's citation/hf reading per paper (idempotent per UTC day).
+
+        Same-day re-builds converge to the day's MAX observed value, so a later
+        build that carries fresh S2 citations upgrades an earlier zero/None.
+        Also records one topic_daily volume row per category per day.
+        """
+        if not papers or not primary_cat:
+            return 0
+        now = time.time()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        fresh_cutoff = self._cutoff(2)
+        snap_rows: list[tuple[str, str, str, int | None, int | None, str, float]] = []
+        fresh = 0
+        for p in papers:
+            pid = _paper_id(p)
+            cit = p.get("citation_count")
+            hf = p.get("hf_upvotes")
+            cit_i = int(cit) if isinstance(cit, (int, float)) and cit >= 0 else None
+            hf_i = int(hf) if isinstance(hf, (int, float)) and hf >= 0 else None
+            pub = _norm_published(p)
+            if pub and pub >= fresh_cutoff:
+                fresh += 1
+            snap_rows.append((pid, primary_cat, today, cit_i, hf_i, pub, now))
+        try:
+            with self._lock:
+                self._conn.execute("BEGIN")
+                self._conn.executemany(
+                    "INSERT INTO metric_snapshots"
+                    "(paper_id, primary_cat, snapshot_date, citation_count, hf_upvotes, published, at) "
+                    "VALUES(?,?,?,?,?,?,?) "
+                    "ON CONFLICT(paper_id, primary_cat, snapshot_date) DO UPDATE SET "
+                    " citation_count=MAX(COALESCE(citation_count,0), COALESCE(excluded.citation_count,0)), "
+                    " hf_upvotes=MAX(COALESCE(hf_upvotes,0), COALESCE(excluded.hf_upvotes,0)), "
+                    " at=excluded.at",
+                    snap_rows,
+                )
+                self._conn.execute(
+                    "INSERT INTO topic_daily(primary_cat, snapshot_date, paper_count, fresh_count, at) "
+                    "VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(primary_cat, snapshot_date) DO UPDATE SET "
+                    " paper_count=MAX(paper_count, excluded.paper_count), "
+                    " fresh_count=MAX(fresh_count, excluded.fresh_count), "
+                    " at=excluded.at",
+                    (primary_cat, today, len(snap_rows), fresh, now),
+                )
+                self._conn.execute("COMMIT")
+            return len(snap_rows)
+        except Exception as e:
+            try:
+                self._conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            logger.warning("paper_store: record_snapshots failed for %s: %s", primary_cat, e)
+            return 0
+
+    def metric_deltas(self, primary_cat: str, window_days: int = 7, limit: int = 300) -> list[dict[str, Any]]:
+        """Per-paper newest-vs-oldest snapshot within the window (for burst detection).
+
+        Returns rows with at least two distinct snapshot dates so a delta is meaningful.
+        """
+        if not primary_cat:
+            return []
+        cutoff = self._cutoff(window_days)
+        sql = (
+            "WITH ranked AS ("
+            "  SELECT paper_id, snapshot_date,"
+            "         COALESCE(citation_count,0) AS cit, COALESCE(hf_upvotes,0) AS hf,"
+            "         ROW_NUMBER() OVER (PARTITION BY paper_id ORDER BY snapshot_date DESC) AS rn_new,"
+            "         ROW_NUMBER() OVER (PARTITION BY paper_id ORDER BY snapshot_date ASC)  AS rn_old"
+            "  FROM metric_snapshots WHERE primary_cat=? AND snapshot_date>=?"
+            ") "
+            "SELECT n.paper_id, n.cit, o.cit, n.hf, o.hf, n.snapshot_date, o.snapshot_date "
+            "FROM ranked n JOIN ranked o USING(paper_id) "
+            "WHERE n.rn_new=1 AND o.rn_old=1 AND n.snapshot_date<>o.snapshot_date "
+            "LIMIT ?"
+        )
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, (primary_cat, cutoff, limit)).fetchall()
+            return [
+                {
+                    "paper_id": r[0],
+                    "cit_new": int(r[1]), "cit_old": int(r[2]),
+                    "hf_new": int(r[3]), "hf_old": int(r[4]),
+                    "date_new": r[5], "date_old": r[6],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("paper_store: metric_deltas failed for %s: %s", primary_cat, e)
+            return []
+
+    def topic_volume_series(self, primary_cat: str, days: int = 14) -> list[dict[str, Any]]:
+        """Daily (paper_count, fresh_count) series for a category, oldest→newest."""
+        if not primary_cat:
+            return []
+        cutoff = self._cutoff(days)
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT snapshot_date, paper_count, fresh_count FROM topic_daily "
+                    "WHERE primary_cat=? AND snapshot_date>=? ORDER BY snapshot_date ASC",
+                    (primary_cat, cutoff),
+                ).fetchall()
+            return [{"date": r[0], "paper_count": int(r[1]), "fresh_count": int(r[2])} for r in rows]
+        except Exception as e:
+            logger.warning("paper_store: topic_volume_series failed for %s: %s", primary_cat, e)
+            return []
+
+    def payloads_by_ids(self, paper_ids: list[str], primary_cat: str) -> dict[str, dict[str, Any]]:
+        """Fetch stored payloads for a set of paper_ids within one category."""
+        if not paper_ids or not primary_cat:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        try:
+            with self._lock:
+                for i in range(0, len(paper_ids), 400):
+                    chunk = paper_ids[i : i + 400]
+                    ph = ",".join("?" for _ in chunk)
+                    rows = self._conn.execute(
+                        f"SELECT paper_id, payload FROM papers WHERE primary_cat=? AND paper_id IN ({ph})",
+                        (primary_cat, *chunk),
+                    ).fetchall()
+                    for pid, payload in rows:
+                        out[pid] = json.loads(payload)
+        except Exception as e:
+            logger.warning("paper_store: payloads_by_ids failed: %s", e)
+        return out
 
     def query(self, primary_cat: str, days: int, limit: int = 500) -> list[dict[str, Any]]:
         if not primary_cat:
@@ -168,12 +318,15 @@ class PaperStore:
         except Exception:
             return None
 
-    def cleanup(self, max_age_days: int = 100) -> int:
+    def cleanup(self, max_age_days: int = 100, snapshot_age_days: int = 120) -> int:
         cutoff = self._cutoff(max_age_days)
+        snap_cutoff = self._cutoff(snapshot_age_days)
         try:
             with self._lock:
                 cur = self._conn.execute("DELETE FROM papers WHERE published<?", (cutoff,))
                 deleted = cur.rowcount or 0
+                self._conn.execute("DELETE FROM metric_snapshots WHERE snapshot_date<?", (snap_cutoff,))
+                self._conn.execute("DELETE FROM topic_daily WHERE snapshot_date<?", (snap_cutoff,))
             if deleted:
                 logger.info("paper_store: pruned %d rows older than %s", deleted, cutoff)
             return deleted
@@ -188,14 +341,16 @@ class PaperStore:
                 by_cat = self._conn.execute(
                     "SELECT primary_cat, COUNT(*) FROM papers GROUP BY primary_cat ORDER BY 2 DESC"
                 ).fetchall()
+                snapshots = int(self._conn.execute("SELECT COUNT(*) FROM metric_snapshots").fetchone()[0])
                 disk = self.db_path.stat().st_size if self.db_path.exists() else 0
             return {
                 "total": total,
+                "snapshots": snapshots,
                 "disk_bytes": disk,
                 "by_cat": {c: int(n) for c, n in by_cat},
             }
         except Exception:
-            return {"total": 0, "disk_bytes": 0, "by_cat": {}}
+            return {"total": 0, "snapshots": 0, "disk_bytes": 0, "by_cat": {}}
 
     def close(self) -> None:
         try:

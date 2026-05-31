@@ -731,6 +731,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
         if merged and primary_cat:
             try:
                 await asyncio.to_thread(_paper_store.upsert_many, merged, primary_cat)
+                await asyncio.to_thread(_paper_store.record_snapshots, merged, primary_cat)
             except Exception as e:
                 logger.warning("paper_store upsert failed for %s: %s", discipline_id, e)
 
