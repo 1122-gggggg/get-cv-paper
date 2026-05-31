@@ -16,6 +16,7 @@ CRITICAL_ROUTES = {
     "/api/health",
     "/api/papers",
     "/api/trending",
+    "/api/emerging",
     "/api/search",
     "/api/subtopics",
     "/api/metrics",

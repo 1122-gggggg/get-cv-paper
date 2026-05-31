@@ -24,7 +24,7 @@ from typing import Any
 # 來源優先級 (數字越小越優先,留主紀錄)
 SOURCE_PRIORITY = {
     "arxiv":    0,
-    "hf_daily": 0,   # HF Daily 本質是 arXiv 子集, 視為同等
+    "hf_daily": 0.5,  # arXiv 子集:arXiv metadata 優先,但仍勝過 openalex 等次級來源
     "openalex": 1,
     "crossref": 2,
     "pubmed":   3,
@@ -109,7 +109,7 @@ def _paper_keys(paper: dict[str, Any]) -> list[tuple[str, str]]:
     return keys
 
 
-def _src_priority(paper: dict[str, Any]) -> int:
+def _src_priority(paper: dict[str, Any]) -> float:
     src = paper.get("source")
     if isinstance(src, list):
         return min((SOURCE_PRIORITY.get(s, 99) for s in src), default=99)

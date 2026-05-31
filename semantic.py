@@ -16,6 +16,7 @@ import struct
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -547,7 +548,21 @@ async def cluster_papers(
         out.append({
             "label": label,
             "count": len(members),
+            "momentum": _recent_share(members),
             "sample_titles": [m.get("title", "")[:120] for m in members[:5]],
         })
     out.sort(key=lambda x: x["count"], reverse=True)
     return out
+
+
+def _recent_share(members: list[dict[str, Any]], days: int = 3) -> float:
+    """Fraction of a cluster published within the last `days` — a cheap heat proxy.
+
+    A subtopic dominated by brand-new papers is warming up; ISO date-prefix string
+    comparison avoids per-paper datetime parsing.
+    """
+    if not members:
+        return 0.0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    recent = sum(1 for m in members if str(m.get("published") or "")[:10] >= cutoff)
+    return round(recent / len(members), 3)

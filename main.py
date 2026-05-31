@@ -177,6 +177,8 @@ def _client() -> httpx.AsyncClient:
 # Server-side stale 6h,讓使用者永遠 < 50ms,刷新成本攤到背景。
 _papers_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=64)
 _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
+# 突發偵測:每 30 分新鮮、24h stale,讀 metric_snapshots delta(每日才變)
+_emerging_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=32)
 
 # 個別 ID-level 快取(citations / pwc):跨 request 共享、JSON 持久化
 _s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600, cache_dir=CACHE_DIR)
@@ -207,6 +209,14 @@ _PAPERS_MAX_RESULTS = 5000
 _PAPERS_DAYS_MAX = 90
 _TRENDING_DAYS_MAX = 30
 _SEARCH_MAX_RESULTS = 100
+_EMERGING_WINDOW_MAX = 30
+_EMERGING_LIMIT = 40
+# Poisson-style burst 評分:delta / sqrt(baseline + prior)。prior 當平滑常數,
+# 讓 0→5 的新秀(z≈1.79)勝過 100→105 的老牌(z≈0.49)。
+_EMERGE_CIT_PRIOR = 5.0
+_EMERGE_HF_PRIOR = 3.0
+_EMERGE_HF_WEIGHT = 0.6   # 引用是較持久的訊號,權重高於 HF 投票
+_EMERGE_MIN = 1.0         # z-score 門檻,過濾 50→51 這類噪音
 _CITATIONS_MAX = 200
 _PWC_IDS_MAX = 100
 _OPENREVIEW_DAYS_MAX = 365
@@ -574,6 +584,10 @@ def _slim_paper(p: dict) -> dict:
     ext = p.get("external_ids")
     if ext:
         out["external_ids"] = ext
+    # 跨來源佐證:同一篇被多個來源收錄 → 更值得關注(前端 hot-score / emerging 用)
+    src = p.get("source")
+    if isinstance(src, list) and len(src) > 1:
+        out["source_count"] = len(src)
     if p.get("venue"):
         out["venue"] = p["venue"]
     if p.get("hf_upvotes"):
@@ -837,6 +851,88 @@ async def get_trending(request: Request, source: str = "hf_daily", days: int = 7
     days = _bounded_int(days, default=7, min_value=1, max_value=_TRENDING_DAYS_MAX)
     cache_key = f"{source}:{days}"
     body, etag = await _trending_cache.get_or_build(cache_key, _trending_build_spec(days))
+    return etag_response(request, body, etag)
+
+
+def _emergence_score(d: dict) -> dict:
+    """Poisson-normalized burst score for one snapshot delta row.
+
+    delta / sqrt(baseline + prior) ≈ a z-score under a Poisson null (variance≈mean),
+    so a small fast-growing paper beats a large slow-growing one.
+    """
+    cit_delta = max(0, int(d["cit_new"]) - int(d["cit_old"]))
+    hf_delta = max(0, int(d["hf_new"]) - int(d["hf_old"]))
+    cit_z = cit_delta / ((int(d["cit_old"]) + _EMERGE_CIT_PRIOR) ** 0.5)
+    hf_z = hf_delta / ((int(d["hf_old"]) + _EMERGE_HF_PRIOR) ** 0.5)
+    return {
+        "cit_delta": cit_delta,
+        "hf_delta": hf_delta,
+        "cit_z": round(cit_z, 3),
+        "hf_z": round(hf_z, 3),
+        "emergence": round(cit_z + _EMERGE_HF_WEIGHT * hf_z, 3),
+    }
+
+
+@app.get("/api/emerging")
+async def get_emerging(
+    request: Request,
+    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    window: int = 7,
+    limit: int = _EMERGING_LIMIT,
+):
+    """突發偵測:窗內引用/HF 投票成長最快的論文(大家正在關注什麼)。
+
+    Poisson 正規化讓 0→5 的新秀勝過 100→105 的老牌。snapshot 表需 ≥2 個不同
+    日期才有 delta,首次部署 1-2 天內回 warming_up=true 的空清單。
+    """
+    window = _bounded_int(window, default=7, min_value=2, max_value=_EMERGING_WINDOW_MAX)
+    limit = _bounded_int(limit, default=_EMERGING_LIMIT, min_value=1, max_value=100)
+    disc = discipline(discipline_id)
+    primary_cat = disc.get("cat") or ""
+    cache_key = f"{primary_cat}:{window}:{limit}"
+
+    async def _build():
+        if not primary_cat:
+            return {"papers": [], "discipline": discipline_id, "warming_up": False}
+        deltas = await asyncio.to_thread(
+            _paper_store.metric_deltas, primary_cat, window, 300
+        )
+        scored: list[tuple[str, dict, dict]] = []
+        for d in deltas:
+            s = _emergence_score(d)
+            if (s["cit_delta"] or s["hf_delta"]) and s["emergence"] >= _EMERGE_MIN:
+                scored.append((d["paper_id"], s, d))
+        if not scored:
+            return {
+                "papers": [],
+                "discipline": discipline_id,
+                "warming_up": not deltas,
+                "window": window,
+            }
+        scored.sort(key=lambda t: t[1]["emergence"], reverse=True)
+        scored = scored[:limit]
+        payloads = await asyncio.to_thread(
+            _paper_store.payloads_by_ids, [pid for pid, _, _ in scored], primary_cat
+        )
+        papers: list[dict] = []
+        for pid, s, d in scored:
+            p = payloads.get(pid)
+            if not p:
+                continue
+            item = _slim_paper(p)
+            item["emergence"] = s
+            item["cit_new"] = d["cit_new"]
+            item["hf_now"] = d["hf_new"]
+            papers.append(item)
+        return {
+            "papers": papers,
+            "discipline": discipline_id,
+            "warming_up": False,
+            "window": window,
+            "pool": len(deltas),
+        }
+
+    body, etag = await _emerging_cache.get_or_build(cache_key, _build)
     return etag_response(request, body, etag)
 
 
