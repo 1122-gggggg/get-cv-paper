@@ -1,8 +1,10 @@
 """Query → paper semantic ranking via Hugging Face Inference embeddings.
 
 Embeddings are computed on demand and held in a memory LRU keyed by stable
-paper id (no DB). HF token comes from env (HF_TOKEN); model from HF_EMBED_MODEL
-(default: multilingual e5-small). All calls go through the shared httpx client.
+paper id, backed by an L2 SQLite cache. HF token comes from env (HF_TOKEN);
+model from HF_EMBED_MODEL (default: paraphrase-multilingual-MiniLM-L12-v2).
+e5-family models get "query:"/"passage:" prefixes; others are sent raw.
+All calls go through the shared httpx client.
 """
 from __future__ import annotations
 
@@ -23,11 +25,17 @@ logger = logging.getLogger(__name__)
 
 HF_TOKEN = (os.environ.get("HF_TOKEN") or "").strip()
 HF_EMBED_MODEL = (os.environ.get("HF_EMBED_MODEL") or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
+# e5/gte/bge-style models need instruction prefixes; generic ST models do not.
+_IS_E5 = any(t in HF_EMBED_MODEL.lower() for t in ("e5", "gte", "bge"))
+# Bump when the embedding text/prefix scheme changes so stale vectors are bypassed.
+_EMBED_VERSION = "v2"
+_EMBED_CACHE_MODEL = f"{HF_EMBED_MODEL}#{_EMBED_VERSION}"
 _HF_LEGACY = "https://api-inference.huggingface.co/models"
 _HF_ROUTER = "https://router.huggingface.co/hf-inference/models"
 _BATCH_SIZE = 16
 _HTTP_TIMEOUT = 45.0
 _DB_MAX_ROWS = 20000
+_PRUNE_EVERY = 1000
 
 
 def _resolve_db_path() -> Path | None:
@@ -55,6 +63,7 @@ class _EmbedCache:
         self._mem: "OrderedDict[str, list[float]]" = OrderedDict()
         self._max = maxsize
         self._lock = threading.Lock()
+        self._put_count = 0
         self._db_path = _resolve_db_path()
         self._conn: sqlite3.Connection | None = None
         if self._db_path is not None:
@@ -97,7 +106,7 @@ class _EmbedCache:
             with self._lock:
                 row = self._conn.execute(
                     "SELECT vec FROM embeddings WHERE key=? AND model=?",
-                    (key, HF_EMBED_MODEL),
+                    (key, _EMBED_CACHE_MODEL),
                 ).fetchone()
             if row is None:
                 return None
@@ -122,10 +131,15 @@ class _EmbedCache:
             with self._lock:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO embeddings(key, model, vec, at) VALUES(?,?,?,?)",
-                    (key, HF_EMBED_MODEL, self._encode(vec), time.time()),
+                    (key, _EMBED_CACHE_MODEL, self._encode(vec), time.time()),
                 )
+                self._put_count += 1
+                due = self._put_count % _PRUNE_EVERY == 0
         except Exception as e:
             logger.debug("semantic: SQLite put failed: %s", e)
+            return
+        if due:
+            self.prune()
 
     def prune(self) -> None:
         if self._conn is None:
@@ -173,14 +187,15 @@ def _passage_text(paper: dict[str, Any]) -> str:
     title = (paper.get("title") or "").strip()
     body = (paper.get("summary") or paper.get("abstract") or "").strip()
     body = body[:600]
-    prefix = "passage: "
+    prefix = "passage: " if _IS_E5 else ""
     if title and body:
         return f"{prefix}{title}\n{body}"
     return f"{prefix}{title or body}"
 
 
 def _query_text(q: str) -> str:
-    return f"query: {q.strip()}"
+    q = q.strip()
+    return f"query: {q}" if _IS_E5 else q
 
 
 def _mean_pool(token_vecs: list[list[float]]) -> list[float]:

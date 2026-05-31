@@ -17,11 +17,11 @@ const RANGE_MIGRATION = {
     citations: 'week',
     signal: 'week',
 };
-const SORT_VALUES = new Set(['latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m', 'personalized']);
+const SORT_VALUES = new Set(['hot', 'latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m', 'personalized']);
 const TIME_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter']);
-let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'latest';
+let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'hot';
 let currentTimeRange = localStorage.getItem('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
-if (!SORT_VALUES.has(currentSortValue)) currentSortValue = 'latest';
+if (!SORT_VALUES.has(currentSortValue)) currentSortValue = 'hot';
 if (!TIME_RANGE_VALUES.has(currentTimeRange)) currentTimeRange = 'week';
 const PAPERS_PER_PAGE = 9;
 let currentPage = 1;
@@ -36,6 +36,7 @@ const TIME_RANGE_META = {
 };
 
 const SORT_META = {
+    hot:        { label: '熱與新', title: '熱門 × 最新' },
     latest:     { label: '最新', title: '最新論文' },
     popularity: { label: '熱門度', title: '熱門論文' },
     citations:  { label: '引用度', title: '引用最多' },
@@ -117,7 +118,7 @@ function compareNewest(a, b) {
 }
 
 function getPopularityScore(paper) {
-    const citations = Math.max(0, getCitationCount(paper.url));
+    const citations = Math.max(0, getCitationCount(paper.url, paper));
     const influential = Math.max(0, getInfluentialCitations(paper.url));
     const hfUpvotes = Math.max(0, paper.hf_upvotes || 0);
     const velocity = Math.max(0, getCitationSpeed(paper));
@@ -135,9 +136,22 @@ function getValueScore(paper) {
     return computeSignal(paper).score || 0;
 }
 
+// ── Hot & New：新鮮度為主、社群/速度為輔 ─────────────────────────
+// 與 popularity/value 不同：那兩個都是滯後訊號(引用要時間累積),對「剛出爐」論文盲視。
+// 這裡讓 recency 主導(指數衰減,~半衰期 7 天),再用 HF buzz / 引用速度 / 有無 code 當加速器。
+function getHotScore(paper) {
+    const days = daysSincePublication(paper) || 30;
+    const recency = Math.exp(-days / 10);                          // 0..1
+    const hf = _logScale(Math.max(0, paper.hf_upvotes || 0), 200); // 社群熱度
+    const vel = _logScale(Math.max(0, getCitationSpeed(paper)), 50);
+    const cit = _logScale(Math.max(0, getCitationCount(paper.url, paper)), 500);
+    const code = paper.github_url ? 1 : 0;
+    return recency * 55 + hf * 22 + vel * 13 + cit * 7 + code * 3;
+}
+
 async function prepareMetricData(papers, sortValue = currentSortValue) {
     if (!papers?.length) return;
-    if (['popularity', 'citations', 'value', 'velocity'].includes(sortValue)) {
+    if (['hot', 'popularity', 'citations', 'value', 'velocity'].includes(sortValue)) {
         await fetchCitationCounts(papers);
     }
     if (sortValue === 'value') {
@@ -148,11 +162,13 @@ async function prepareMetricData(papers, sortValue = currentSortValue) {
 function sortPapersByMetric(papers, sortValue = currentSortValue) {
     const sorted = [...papers];
     const tie = (a, b) => compareNewest(a, b);
-    if (sortValue === 'popularity') {
+    if (sortValue === 'hot') {
+        sorted.sort((a, b) => (getHotScore(b) - getHotScore(a)) || tie(a, b));
+    } else if (sortValue === 'popularity') {
         sorted.sort((a, b) => (getPopularityScore(b) - getPopularityScore(a)) || tie(a, b));
     } else if (sortValue === 'citations' || sortValue === 'hot3m') {
         // hot3m = 90 天 pool 已在 papersForCurrentTimeRange 限縮,這裡只負責按引用排序
-        sorted.sort((a, b) => (Math.max(0, getCitationCount(b.url)) - Math.max(0, getCitationCount(a.url))) || tie(a, b));
+        sorted.sort((a, b) => (Math.max(0, getCitationCount(b.url, b)) - Math.max(0, getCitationCount(a.url, a))) || tie(a, b));
     } else if (sortValue === 'value') {
         sorted.sort((a, b) => (getValueScore(b) - getValueScore(a)) || tie(a, b));
     } else if (sortValue === 'velocity') {
@@ -1186,7 +1202,7 @@ function _getFavAuthorSet() {
 function populateBadgeSlot(badgeSlot, paper) {
     if (!badgeSlot) return;
     badgeSlot.innerHTML = '';
-    const citCount = getCitationCount(paper.url);
+    const citCount = getCitationCount(paper.url, paper);
     const inflCount = getInfluentialCitations(paper.url);
     const refCount = getRefCount(paper.url);
     const speed = getCitationSpeed(paper);
@@ -1651,9 +1667,15 @@ function getArxivId(url) {
     return m ? m[1] : null;
 }
 
-function getCitationCount(url) {
+function getCitationCount(url, paper = null) {
     const id = getArxivId(url);
-    return (id && s2Cache[id] !== undefined) ? s2Cache[id].count : -1;
+    if (id && s2Cache[id] !== undefined) return s2Cache[id].count;
+    // backend payload fallback: OpenAlex/Crossref/S2 已在 merge 階段帶 citation_count,
+    // 但前端 s2Cache 只認 arXiv id。非 arXiv 來源(或尚未 fetch S2)時改讀後端值。
+    if (paper && Number.isFinite(paper.citation_count) && paper.citation_count >= 0) {
+        return paper.citation_count;
+    }
+    return -1;
 }
 
 function getS2Venue(url) {
@@ -1694,7 +1716,7 @@ function daysSincePublication(paper) {
 
 // 引用速度：每 30 天引用數。越大越熱。
 function getCitationSpeed(paper) {
-    const cit = getCitationCount(paper.url);
+    const cit = getCitationCount(paper.url, paper);
     if (cit <= 0) return 0;
     const days = daysSincePublication(paper);
     if (!days || days < 3) return 0;          // 太新 → 數據噪音
@@ -1807,7 +1829,7 @@ function renderSignalBlock(card, paper) {
 }
 
 function computeSignal(paper) {
-    const cit = Math.max(0, getCitationCount(paper.url));
+    const cit = Math.max(0, getCitationCount(paper.url, paper));
     const influential = Math.max(0, getInfluentialCitations(paper.url));
     const pwc = getPwcData(paper.url) || {};
     const hasCode = !!pwc.github_url || /https?:\/\/github\.com\//i.test(paper.summary || '');

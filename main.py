@@ -6,11 +6,13 @@ adapters in clients.py, discipline map in disciplines.py.
 from __future__ import annotations
 
 import asyncio
+import gc
 import html as _html
 import json as _json
 import logging
 import os
 import re
+import secrets
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -1063,14 +1065,48 @@ async def get_pwc(request: Request, arxiv_ids: str):
 
 # ── Cache + RL observability ─────────────────────────────────────
 _METRICS_KEY = os.environ.get("METRICS_KEY", "")
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _metrics_guard(request: Request, key: str) -> None:
+    """Fail-closed metrics auth.
+
+    With METRICS_KEY set → require an exact (constant-time) match.
+    Without a key configured → allow loopback only, so a misconfigured prod
+    deploy never exposes internals to the public edge.
+    """
+    if _METRICS_KEY:
+        if not secrets.compare_digest(key, _METRICS_KEY):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return
+    client = request.client
+    host = client.host if client else ""
+    if host not in _LOOPBACK_HOSTS:
+        raise HTTPException(status_code=403, detail="metrics key not configured")
+
+
+def _process_rss_bytes() -> int:
+    """Resident set size in bytes; 0 when unavailable (e.g. Windows dev)."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    try:
+        import resource
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+    except Exception:
+        return 0
 
 
 @app.get("/api/metrics")
-def get_metrics(key: str = ""):
+def get_metrics(request: Request, key: str = ""):
     """供 dashboard / 自我觀測用。設定 METRICS_KEY 環境變數後需帶 ?key=..."""
-    if _METRICS_KEY and key != _METRICS_KEY:
-        raise HTTPException(status_code=403, detail="forbidden")
+    _metrics_guard(request, key)
     return {
+        "process_rss_bytes": _process_rss_bytes(),
         "papers_cache": _papers_cache.stats(),
         "trending_cache": _trending_cache.stats(),
         "s2_store": {"entries": len(_s2_store._data)},
@@ -1090,16 +1126,26 @@ def _prom_format(metric: str, value: float, labels: dict[str, str] | None = None
 
 
 @app.get("/metrics")
-def prometheus_metrics(key: str = ""):
+def prometheus_metrics(request: Request, key: str = ""):
     """Prometheus exposition format。受 METRICS_KEY 保護。
 
-    暴露 cache hit/miss、store 大小、warmup 結果、build error 計數。
+    暴露 cache hit/miss、store 大小、warmup 結果、build error 計數、RSS。
     用法:scrape /metrics?key=$METRICS_KEY 進 Grafana / Prometheus。
     """
-    if _METRICS_KEY and key != _METRICS_KEY:
-        raise HTTPException(status_code=403, detail="forbidden")
+    _metrics_guard(request, key)
 
     lines: list[str] = []
+    # process memory (key signal on the 512MB machine)
+    rss = _process_rss_bytes()
+    if rss > 0:
+        lines.append(_prom_format(
+            "cv_process_rss_bytes", rss,
+            help_text="Resident set size in bytes",
+        ))
+    lines.append(_prom_format(
+        "cv_gc_objects", len(gc.get_objects()),
+        help_text="Live Python objects tracked by gc",
+    ))
     # cache hit/miss counters
     for cname, cobj in (
         ("papers", _papers_cache),
