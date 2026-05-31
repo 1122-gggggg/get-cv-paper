@@ -213,7 +213,7 @@ function applyDiscipline(disciplineId) {
 
     // 建構 CONF_FILTERS：data-filter="conf_<key>"
     CONF_FILTERS = new Map(d.confs.map(c => [`conf_${c.key.replace(/\s+/g, '_')}`, c.key.toLowerCase()]));
-    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', ...CONF_FILTERS.keys()]);
+    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', ...CONF_FILTERS.keys()]);
 
     // VENUE_PATTERNS：顯示在卡片上的 venue 徽章
     VENUE_PATTERNS = d.confs.map(c => ({
@@ -405,8 +405,12 @@ async function loadDynamicSubtopics(disciplineId, filtersDiv, openSet, persistOp
         btn.dataset.filter = label.toLowerCase();
         btn.dataset.disciplineTopic = 'true';
         btn.dataset.dynamic = 'true';
-        btn.title = `${label} (${c.count} papers)`;
-        btn.textContent = `${label} · ${c.count}`;
+        // momentum = 該子題近 3 天論文佔比;≥0.4 視為上升中,標 ▲
+        const mom = Number(c.momentum) || 0;
+        const rising = mom >= 0.4;
+        btn.title = `${label}（${c.count} 篇 · 近 3 天佔 ${Math.round(mom * 100)}%）`;
+        btn.textContent = `${label} · ${c.count}${rising ? ' ▲' : ''}`;
+        if (rising) btn.classList.add('topic-rising');
         submenu.appendChild(btn);
     }
     if (!submenu.children.length) return;
@@ -1208,6 +1212,15 @@ function populateBadgeSlot(badgeSlot, paper) {
     const speed = getCitationSpeed(paper);
     const localViews = getPaperClicks(paper.url);
     const items = [];
+    // 爆發指數:僅 /api/emerging 回傳的論文帶 emergence 物件,放最前面突顯
+    const em = paper.emergence;
+    if (em && typeof em === 'object') {
+        const parts = [];
+        if (em.cit_delta > 0) parts.push(`+${em.cit_delta} 引用`);
+        if (em.hf_delta > 0)  parts.push(`+${em.hf_delta} upvote`);
+        const detail = parts.length ? parts.join(' · ') : `分數 ${em.emergence}`;
+        items.push(['emerge-badge', `🚀 爆發 ${detail}`, '近期引用／社群熱度爆發指數（citation + HF velocity z-score 融合）']);
+    }
     if (citCount >= 0)         items.push(['citation-badge', `📈 ${citCount} 引用`, null]);
     if (inflCount > 0)         items.push(['influential-badge', `💡 ${inflCount} 高影響`, '高影響引用：被後續研究大量採用']);
     if (refCount > 100)        items.push(['survey-badge', '📚 綜述', `引用文獻數 ${refCount}，可能為綜述論文`]);
@@ -1967,7 +1980,7 @@ function _matchCatTerm(term, tLc, sLc) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -2005,6 +2018,7 @@ function currentCategoryLabel() {
     if (currentCategory === 'favorites') return '收藏論文';
     if (currentCategory === 'top_conf') return `${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊`;
     if (currentCategory === 'hf_daily') return 'HuggingFace 每日精選';
+    if (currentCategory === 'emerging') return '爆發中論文';
     if (CONF_FILTERS.has(currentCategory)) {
         return document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim()
             || CONF_FILTERS.get(currentCategory)?.toUpperCase()
@@ -2081,6 +2095,20 @@ async function ensureHfDaily() {
     if (_hfDailyFiltered) return _hfDailyFiltered;
     _hfDailyFiltered = filterHfDailyByDiscipline(_hfDailyCache);
     return _hfDailyFiltered;
+}
+
+// 爆發中:/api/emerging 依 discipline 回傳 citation+HF velocity 融合排序的論文。
+// 後端已排序+附 emergence,前端只負責渲染。cache 依 discipline 失效。
+let _emergingCache = null;        // { disc, papers, warming_up }
+async function ensureEmerging() {
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    if (_emergingCache && _emergingCache.disc === disc) return _emergingCache;
+    const res = await fetch(`/api/emerging?discipline=${encodeURIComponent(disc)}&window=7&limit=40`);
+    if (!res.ok) throw new Error('Emerging fetch failed');
+    const data = await res.json();
+    if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return _emergingCache || { disc, papers: [], warming_up: false };
+    _emergingCache = { disc, papers: indexPapers(data.papers || []), warming_up: !!data.warming_up };
+    return _emergingCache;
 }
 
 // 依當前 discipline 的 conf 關鍵字 + 主題關鍵字做 substring 匹配
@@ -2177,6 +2205,37 @@ async function filterPapers() {
         } catch (e) {
             loader.classList.add('hidden');
             alert('HF Daily 載入失敗：' + e.message);
+        }
+        return;
+    }
+
+    // 爆發中:後端 /api/emerging 已依 emergence 排序;預設不再前端重排(latest=保留後端爆發序)
+    if (currentCategory === 'emerging') {
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            const res = await ensureEmerging();
+            let papers = res.papers;
+            if (query) papers = applyFilter(papers, query);
+            if (!papers.length) {
+                const why = res.warming_up
+                    ? '🌱 資料累積中:爆發偵測需要至少兩天的每日快照,過幾天再回來看'
+                    : '目前此領域沒有明顯爆發的論文,可切換排序或稍後再試';
+                showToast(why);
+                renderPapers([], `🚀 爆發中（${ACTIVE_DISCIPLINE?.name || ''}）`);
+                return;
+            }
+            // 非 latest 才依使用者選的指標重排;latest 保留後端爆發序
+            if (sortValue !== 'latest') {
+                await prepareMetricData(papers, sortValue);
+                papers = sortPapersByMetric(papers, sortValue);
+            }
+            const sortLabel = sortValue === 'latest' ? '依爆發指數' : `依${getSortMeta().label}`;
+            renderPapers(papers, `🚀 爆發中（${ACTIVE_DISCIPLINE?.name || ''} · 近 7 天 · ${sortLabel} · ${papers.length} 篇）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('爆發中載入失敗：' + e.message);
         }
         return;
     }
@@ -2706,7 +2765,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 恢復上次的分類（找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
     const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
-        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || CONF_FILTERS.has(savedCategory);
+        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || CONF_FILTERS.has(savedCategory);
         const targetBtn = document.querySelector(
             `.category-btn[data-filter="${CSS.escape(savedCategory)}"], .topic-item[data-filter="${CSS.escape(savedCategory)}"], .conf-item[data-filter="${CSS.escape(savedCategory)}"]`
         );

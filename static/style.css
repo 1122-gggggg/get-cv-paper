@@ -915,6 +915,31 @@ header {
     font-weight: 600;
     cursor: default;
 }
+.emerge-badge {
+    font-size: 0.8rem;
+    color: #fb923c;
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.16), rgba(244, 63, 94, 0.16));
+    border: 1px solid rgba(251, 146, 60, 0.45);
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    cursor: default;
+    box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.45);
+    animation: emergePulse 2.4s ease-out infinite;
+}
+@keyframes emergePulse {
+    0%   { box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.4); }
+    70%  { box-shadow: 0 0 0 6px rgba(251, 146, 60, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(251, 146, 60, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .emerge-badge { animation: none; }
+}
+.side-nav .topic-item.topic-rising {
+    color: #fb923c;
+    font-weight: 600;
+}
 .similar-fav-badge {
     font-size: 0.78rem;
     color: #a855f7;
@@ -944,6 +969,14 @@ body.light-mode .hf-badge {
     background: rgba(202, 138, 4, 0.1);
     color: #854d0e;
     border-color: rgba(202, 138, 4, 0.25);
+}
+body.light-mode .emerge-badge {
+    background: linear-gradient(135deg, rgba(234, 88, 12, 0.12), rgba(225, 29, 72, 0.12));
+    color: #c2410c;
+    border-color: rgba(234, 88, 12, 0.4);
+}
+body.light-mode .side-nav .topic-item.topic-rising {
+    color: #c2410c;
 }
 body.light-mode .influential-badge {
     background: rgba(217, 119, 6, 0.08);
