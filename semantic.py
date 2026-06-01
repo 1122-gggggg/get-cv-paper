@@ -227,11 +227,21 @@ async def _hf_embed(client: httpx.AsyncClient, texts: list[str]) -> list[list[fl
     if not HF_TOKEN:
         raise RuntimeError("HF_TOKEN not configured")
     payload = {"inputs": texts, "options": {"wait_for_model": True}}
+    # router is the current HF inference host; legacy api-inference.huggingface.co was
+    # retired (DNS now returns no records), so try router first and keep legacy only as a
+    # transport-error-tolerant fallback — a DNS failure raises rather than returning a
+    # status code, so status-based fallback alone would never recover.
+    router_url = f"{_HF_ROUTER}/{HF_EMBED_MODEL}/pipeline/feature-extraction"
     legacy_url = f"{_HF_LEGACY}/{HF_EMBED_MODEL}"
-    r = await _hf_post(client, legacy_url, payload)
-    if r.status_code in (401, 403, 404):
-        router_url = f"{_HF_ROUTER}/{HF_EMBED_MODEL}/pipeline/feature-extraction"
+    try:
         r = await _hf_post(client, router_url, payload)
+    except httpx.HTTPError:
+        r = await _hf_post(client, legacy_url, payload)
+    if r.status_code in (401, 403, 404):
+        try:
+            r = await _hf_post(client, legacy_url, payload)
+        except httpx.HTTPError:
+            pass
     if r.status_code != 200:
         raise RuntimeError(f"HF embed {r.status_code}: {r.text[:200]}")
     data = r.json()
