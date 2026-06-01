@@ -1549,7 +1549,7 @@ function buildCard(paper, index) {
     const _srcLabel = {
         arxiv: 'arXiv', hf_daily: 'HuggingFace Daily', openalex: 'OpenAlex',
         crossref: 'Crossref', pubmed: 'PubMed', biorxiv: 'bioRxiv',
-        medrxiv: 'medRxiv', dblp: 'DBLP'
+        medrxiv: 'medRxiv', dblp: 'DBLP', chemrxiv: 'ChemRxiv'
     };
     card.title = `來源:${_srcArr.map(s => _srcLabel[s] || s).join(' · ')}`;
 

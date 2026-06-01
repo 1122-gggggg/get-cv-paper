@@ -530,6 +530,81 @@ async def fetch_crossref_listing(
     return out
 
 
+# ── ChemRxiv (化學預印本) ─────────────────────────────────────
+# ChemRxiv 本站擋 Cloudflare,改用 CrossRef prefix 10.26434 (Cambridge Open
+# Engage / ChemRxiv) 撈 posted-content 預印本。免註冊、走 polite pool。
+_CHEMRXIV_PREFIX_BASE = "https://api.crossref.org/prefixes/10.26434/works"
+
+
+async def fetch_chemrxiv_listing(
+    client: httpx.AsyncClient,
+    days: int,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    """從 CrossRef 撈 ChemRxiv (prefix 10.26434) 最近 days 內的預印本。"""
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    params: dict[str, Any] = {
+        "filter": f"from-posted-date:{cutoff},type:posted-content",
+        "rows": min(max_results, 200),
+        "sort": "published",
+        "order": "desc",
+        "mailto": "scholarly-dashboard@example.com",
+    }
+    try:
+        r = await client.get(_CHEMRXIV_PREFIX_BASE, params=params, timeout=20.0)
+        if r.status_code != 200:
+            logger.warning("ChemRxiv %s: %s", r.status_code, r.text[:200])
+            return []
+        data = r.json()
+    except Exception as e:
+        logger.warning("ChemRxiv fetch failed: %s", e)
+        return []
+
+    out: list[dict[str, Any]] = []
+    for w in (data.get("message") or {}).get("items", []) or []:
+        title_list = w.get("title") or []
+        title = (title_list[0] if title_list else "").strip()
+        if not title:
+            continue
+        doi = (w.get("DOI") or "").strip().lower()
+        date_parts = None
+        for k in ("posted", "published-online", "issued"):
+            v = w.get(k)
+            if v and v.get("date-parts"):
+                date_parts = v["date-parts"][0]
+                break
+        if date_parts and len(date_parts) >= 1:
+            y = date_parts[0]
+            m = date_parts[1] if len(date_parts) > 1 else 1
+            d = date_parts[2] if len(date_parts) > 2 else 1
+            published_str = f"{y:04d}-{m:02d}-{d:02d} 00:00"
+        else:
+            published_str = ""
+        authors = []
+        for a in (w.get("author") or []):
+            name = ((a.get("given") or "") + " " + (a.get("family") or "")).strip()
+            if name:
+                authors.append(name)
+        summary = (w.get("abstract") or "").strip()
+        if summary:
+            summary = re.sub(r"<[^>]+>", "", summary)
+        ext: dict[str, str] = {}
+        if doi:
+            ext["doi"] = doi
+        out.append({
+            "title": title,
+            "summary": summary,
+            "url": f"https://doi.org/{doi}" if doi else (w.get("URL") or ""),
+            "published": published_str,
+            "authors": authors,
+            "source": "chemrxiv",
+            "external_ids": ext,
+            "venue": "ChemRxiv",
+            "citation_count": w.get("is-referenced-by-count") or 0,
+        })
+    return out
+
+
 # ── bioRxiv / medRxiv (生命科學 / 醫學預印本) ──────────────────
 # Docs: https://api.biorxiv.org/  (免註冊)
 # Endpoint: /details/{server}/{interval}/{cursor}

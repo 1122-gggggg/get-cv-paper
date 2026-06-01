@@ -34,6 +34,7 @@ from clients import (
     fetch_arxiv_listing,
     fetch_arxiv_search,
     fetch_biorxiv_listing,
+    fetch_chemrxiv_listing,
     fetch_crossref_listing,
     fetch_dblp_venues_many,
     fetch_github_stars,
@@ -921,11 +922,12 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     pubmed_mesh = disc.get("pubmed_mesh")
     use_biorxiv = bool(disc.get("biorxiv"))
     use_medrxiv = bool(disc.get("medrxiv"))
+    use_chemrxiv = bool(disc.get("chemrxiv"))
     disc_cats = [c for c in (disc.get("cats") or []) if c]
     cats_key = "+".join(disc_cats)
     cache_key = (
         f"{disc.get('cat','')}:{cats_key}:{openalex_concept or ''}:{crossref_subject or ''}:"
-        f"{pubmed_mesh or ''}:{int(use_biorxiv)}:{int(use_medrxiv)}:"
+        f"{pubmed_mesh or ''}:{int(use_biorxiv)}:{int(use_medrxiv)}:{int(use_chemrxiv)}:"
         f"{int(arxiv_native)}:{days}:{max_results}"
     )
 
@@ -934,6 +936,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     crossref_max = 0 if arxiv_native and not crossref_subject else min(max_results, 200)
     biorxiv_max = min(max_results, 150) if use_biorxiv else 0
     medrxiv_max = min(max_results, 150) if use_medrxiv else 0
+    chemrxiv_max = min(max_results, 150) if use_chemrxiv else 0
     pubmed_max = min(max_results, 200) if pubmed_mesh else 0
     # S2 search 作為 arXiv 限流時的補強:只對 arxiv_native 領域開啟
     s2_max = min(max_results, 100) if arxiv_native else 0
@@ -971,6 +974,8 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
             tasks.append(_safe("biorxiv", fetch_biorxiv_listing(c, "biorxiv", days, biorxiv_max)))
         if medrxiv_max > 0:
             tasks.append(_safe("medrxiv", fetch_biorxiv_listing(c, "medrxiv", days, medrxiv_max)))
+        if chemrxiv_max > 0:
+            tasks.append(_safe("chemrxiv", fetch_chemrxiv_listing(c, days, chemrxiv_max)))
         if pubmed_max > 0:
             tasks.append(_safe("pubmed", fetch_pubmed_listing(c, pubmed_mesh, days, pubmed_max)))
 

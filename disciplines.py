@@ -74,7 +74,7 @@ DISCIPLINES: dict[str, dict] = {
     "plasma":      {"cat": "physics.plasm-ph",     "name": "電漿物理",     "role": "電漿物理研究助理",   "arxiv_native": True},
     "optics":      {"cat": "physics.optics",       "name": "光學",         "role": "光學研究助理",       "arxiv_native": True},
     "biophysics":  {"cat": "physics.bio-ph",       "name": "生物物理",     "role": "生物物理研究助理",   "arxiv_native": True},
-    "chem":        {"cat": "physics.chem-ph",      "name": "化學",         "role": "化學研究助理",       "arxiv_native": True},
+    "chem":        {"cat": "physics.chem-ph",      "name": "化學",         "role": "化學研究助理",       "arxiv_native": True,  "chemrxiv": True},
     "medphys":     {"cat": "physics.med-ph",       "name": "醫學物理",     "role": "醫學物理研究助理",   "arxiv_native": True},
     "earth":       {"cat": "physics.geo-ph",       "name": "地球科學",     "role": "地球科學研究助理",   "arxiv_native": True},
     "climate":     {"cat": "physics.ao-ph",        "name": "氣候與大氣",   "role": "氣候科學研究助理",   "arxiv_native": True},
@@ -126,7 +126,7 @@ DISCIPLINES: dict[str, dict] = {
     "control":       {"cat": "eess.SY", "name": "控制與系統工程","role": "控制工程研究助理","arxiv_native": True},
     "civil":         {"cat": "eess.SY", "name": "土木與結構",   "role": "土木工程研究助理", "arxiv_native": False},
     "indus":         {"cat": "math.OC", "name": "工業工程",     "role": "工業工程研究助理", "arxiv_native": False},
-    "chemeng":       {"cat": "physics.chem-ph", "name": "化學工程", "role": "化工研究助理", "arxiv_native": False},
+    "chemeng":       {"cat": "physics.chem-ph", "name": "化學工程", "role": "化工研究助理", "arxiv_native": False, "chemrxiv": True},
 
     # ── 人文社科 (arXiv 沒涵蓋, 主要靠 OpenAlex/Crossref) ──────
     # 這些 cat 只是「最相近的 arXiv 分類」, 主要資料源在 P2 OpenAlex
