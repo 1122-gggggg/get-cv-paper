@@ -232,11 +232,13 @@ _GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")  # 有 token → 5000 req/hr,
 # 無 token 時 GitHub 限 60 req/hr,故每輪上限壓低、間隔拉長以免被限流。
 _STARS_INTERVAL = 30 * 60
 _STARS_MAX_REPOS = 300 if _GITHUB_TOKEN else 40
-# OpenReview 評審分數索引:背景把 ICLR/NeurIPS/ICML/COLM 的 review_avg 依 arxiv_id
-# 建表,再於 /api/papers build 時蓋到對應 arXiv 論文上(會議論文在主 feed 顯示評審徽章)。
-_OR_INDEX_VENUES = ("iclr", "neurips", "icml", "colm")
-_OR_INDEX_INTERVAL = 6 * 3600
-_OR_INDEX_DAYS = 3650  # 內部呼叫抓整年度投稿,不受 endpoint 365 上限
+# 評審熱度(/api/reviews):聚合 ICLR/NeurIPS/ICML/COLM 當年+前一年的投稿,
+# 過濾出已有評審分數者,依 review_avg 排序 → 前端「評審熱度」視圖。
+# 會議投稿在審查期不掛 arXiv id(雙盲),故無法併進主 feed,獨立視圖呈現。
+_REVIEWS_VENUES = ("iclr", "neurips", "icml", "colm")
+_REVIEWS_CYCLE_DAYS = 3650  # 內部呼叫抓整個年度投稿,不受 endpoint 365 上限
+_REVIEWS_PER_VENUE = 1000
+_REVIEWS_LIMIT = 300        # 聚合後回傳上限
 _OPENREVIEW_DAYS_MAX = 365
 _OPENREVIEW_MAX_RESULTS = 1000
 _BIBTEX_IDS_MAX = 50
@@ -452,61 +454,29 @@ async def _stars_loop() -> None:
         await asyncio.sleep(_STARS_INTERVAL)
 
 
-# arxiv_id → {review_avg, review_count};由 _or_index_loop 週期重建,build 時讀取。
-_or_ratings_index: dict[str, dict[str, float | int]] = {}
+async def _reviews_aggregate() -> list[dict]:
+    """聚合四大會議當年+前一年已評審的投稿,依 review_avg 排序。
 
-
-def _stamp_or_ratings(papers: list[dict], index: dict[str, dict[str, float | int]]) -> None:
-    """把評審分數索引蓋到帶 arxiv_id 的論文上(in-place)。"""
-    if not index:
-        return
-    for p in papers:
-        aid = (p.get("external_ids") or {}).get("arxiv")
-        rating = index.get(aid) if aid else None
-        if rating:
-            p["review_avg"] = rating["review_avg"]
-            p["review_count"] = rating["review_count"]
-            p["or_rating"] = rating["review_avg"]
-
-
-async def _or_index_build_once() -> None:
-    """重建 OpenReview 評審分數索引(當年 + 前一年的四大會議)。"""
-    global _or_ratings_index
+    會議投稿審查期不掛 arXiv id,無法併進主 feed;此處獨立聚合給「評審熱度」視圖。
+    各 venue-year 平行抓取,單一失敗 soft-fail。
+    """
     year = time.gmtime().tm_year
-    new_index: dict[str, dict[str, float | int]] = {}
-    for venue in _OR_INDEX_VENUES:
-        for yr in (year, year - 1):
-            try:
-                papers = await fetch_openreview_listing(
-                    _client(), venue, year=yr, days=_OR_INDEX_DAYS, max_results=1000,
-                )
-            except Exception as e:
-                logger.warning("or-index %s/%s failed: %s", venue, yr, e)
-                continue
-            for p in papers:
-                aid = (p.get("external_ids") or {}).get("arxiv")
-                avg = p.get("review_avg")
-                if aid and avg:
-                    new_index[aid] = {
-                        "review_avg": avg,
-                        "review_count": p.get("review_count", 0),
-                    }
-    if new_index:
-        _or_ratings_index = new_index
-        logger.info("or-index: %d arxiv papers with review scores", len(new_index))
-
-
-async def _or_index_loop() -> None:
-    """背景重建 OpenReview 評審索引;reviews 變動慢,6 小時一輪即可。"""
-    await asyncio.sleep(30)
-    while True:
-        try:
-            await _or_index_build_once()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning("or-index loop error: %s", e)
-        await asyncio.sleep(_OR_INDEX_INTERVAL)
+    tasks = [
+        fetch_openreview_listing(
+            _client(), venue, year=yr,
+            days=_REVIEWS_CYCLE_DAYS, max_results=_REVIEWS_PER_VENUE,
+        )
+        for venue in _REVIEWS_VENUES
+        for yr in (year, year - 1)
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    rated: list[dict] = []
+    for res in results:
+        if isinstance(res, Exception):
+            continue
+        rated.extend(p for p in res if p.get("review_avg"))
+    rated.sort(key=lambda p: p.get("review_avg") or 0, reverse=True)
+    return rated[:_REVIEWS_LIMIT]
 
 
 _INDEX_HTML: str = ""
@@ -524,7 +494,6 @@ async def lifespan(app: FastAPI):
     warm_t2 = asyncio.create_task(_warmup_loop_tier2())
     cleanup = asyncio.create_task(_paper_cleanup_task())
     stars = asyncio.create_task(_stars_loop())
-    or_index = asyncio.create_task(_or_index_loop())
     try:
         yield
     finally:
@@ -533,7 +502,6 @@ async def lifespan(app: FastAPI):
         warm_t2.cancel()
         cleanup.cancel()
         stars.cancel()
-        or_index.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
         _paper_store.close()
@@ -970,7 +938,6 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
         sources = await asyncio.gather(*tasks)
         merged = merge_sources(*sources)
         merged = [_slim_paper(p) for p in merged]
-        _stamp_or_ratings(merged, _or_ratings_index)
 
         primary_cat = disc.get("cat") or ""
         if merged and primary_cat:
@@ -1566,7 +1533,7 @@ async def get_openreview(
     request: Request,
     venue: str = Query("iclr"),
     year: int | None = None,
-    days: int = 30,
+    days: int = _OPENREVIEW_DAYS_MAX,
     max_results: int = 200,
 ):
     venue = venue.lower()
@@ -1574,7 +1541,7 @@ async def get_openreview(
         raise HTTPException(
             status_code=400, detail=f"unknown venue: {venue}; expected one of {_OPENREVIEW_VENUES}"
         )
-    days = _bounded_int(days, default=30, min_value=1, max_value=_OPENREVIEW_DAYS_MAX)
+    days = _bounded_int(days, default=_OPENREVIEW_DAYS_MAX, min_value=1, max_value=_OPENREVIEW_DAYS_MAX)
     max_results = _bounded_int(
         max_results,
         default=200,
@@ -1600,6 +1567,20 @@ async def get_openreview(
         }
 
     body, etag = await _openreview_cache.get_or_build(cache_key, build)
+    return etag_response(request, body, etag)
+
+
+_reviews_cache = CachedJSON(ttl=6 * 3600, stale_ttl=24 * 3600, max_keys=2)
+
+
+@app.get("/api/reviews")
+async def get_reviews(request: Request):
+    """評審熱度:四大會議當前審查週期評分最高的投稿(跨 venue 聚合、依 review_avg 排序)。"""
+    async def build():
+        papers = await _reviews_aggregate()
+        return {"papers": papers, "count": len(papers)}
+
+    body, etag = await _reviews_cache.get_or_build("reviews", build)
     return etag_response(request, body, etag)
 
 

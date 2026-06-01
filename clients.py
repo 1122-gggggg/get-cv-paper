@@ -909,6 +909,8 @@ async def fetch_openreview_listing(
         out.append(paper)
         if len(out) >= max_results:
             break
+    # 已評審的排前面、分數高的優先;未評審投稿維持其後
+    out.sort(key=lambda p: p.get("review_avg") or -1.0, reverse=True)
     return out
 
 

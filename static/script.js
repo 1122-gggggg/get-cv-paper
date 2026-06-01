@@ -213,7 +213,7 @@ function applyDiscipline(disciplineId) {
 
     // 建構 CONF_FILTERS：data-filter="conf_<key>"
     CONF_FILTERS = new Map(d.confs.map(c => [`conf_${c.key.replace(/\s+/g, '_')}`, c.key.toLowerCase()]));
-    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', ...CONF_FILTERS.keys()]);
+    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'reviews', ...CONF_FILTERS.keys()]);
 
     // VENUE_PATTERNS：顯示在卡片上的 venue 徽章
     VENUE_PATTERNS = d.confs.map(c => ({
@@ -1986,7 +1986,7 @@ function _matchCatTerm(term, tLc, sLc) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'reviews' || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -2025,6 +2025,7 @@ function currentCategoryLabel() {
     if (currentCategory === 'top_conf') return `${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊`;
     if (currentCategory === 'hf_daily') return 'HuggingFace 每日精選';
     if (currentCategory === 'emerging') return '爆發中論文';
+    if (currentCategory === 'reviews') return '評審熱度';
     if (CONF_FILTERS.has(currentCategory)) {
         return document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim()
             || CONF_FILTERS.get(currentCategory)?.toUpperCase()
@@ -2115,6 +2116,18 @@ async function ensureEmerging() {
     if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return _emergingCache || { disc, papers: [], warming_up: false };
     _emergingCache = { disc, papers: indexPapers(data.papers || []), warming_up: !!data.warming_up };
     return _emergingCache;
+}
+
+// 評審熱度:/api/reviews 跨四大會議聚合、依 review_avg 排序的已評審投稿。
+// 與 discipline 無關（全領域會議），快取一份即可。
+let _reviewsCache = null;
+async function ensureReviews() {
+    if (_reviewsCache) return _reviewsCache;
+    const res = await fetch('/api/reviews');
+    if (!res.ok) throw new Error('Reviews fetch failed');
+    const data = await res.json();
+    _reviewsCache = indexPapers(data.papers || []);
+    return _reviewsCache;
 }
 
 // 依當前 discipline 的 conf 關鍵字 + 主題關鍵字做 substring 匹配
@@ -2242,6 +2255,33 @@ async function filterPapers() {
         } catch (e) {
             loader.classList.add('hidden');
             alert('爆發中載入失敗：' + e.message);
+        }
+        return;
+    }
+
+    // 評審熱度:四大會議當前審查週期已評審投稿,後端依 review_avg 排序
+    if (currentCategory === 'reviews') {
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            let papers = await ensureReviews();
+            if (query) papers = applyFilter(papers, query);
+            // 後端已依 review_avg 排序;非 latest 才依使用者指標重排
+            if (sortValue !== 'latest') {
+                await prepareMetricData(papers, sortValue);
+                papers = sortPapersByMetric(papers, sortValue);
+            }
+            if (!papers.length) {
+                showToast('目前四大會議審查週期尚無公開評分,審稿開放後會自動出現');
+                renderPapers([], '📊 評審熱度');
+                return;
+            }
+            const sortLabel = sortValue === 'latest' ? '依評審均分' : `依${getSortMeta().label}`;
+            renderPapers(papers, `📊 評審熱度（ICLR/NeurIPS/ICML/COLM · ${sortLabel} · ${papers.length} 篇）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('評審熱度載入失敗：' + e.message);
         }
         return;
     }
@@ -2771,7 +2811,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 恢復上次的分類（找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
     const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
-        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || CONF_FILTERS.has(savedCategory);
+        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || savedCategory === 'reviews' || CONF_FILTERS.has(savedCategory);
         const targetBtn = document.querySelector(
             `.category-btn[data-filter="${CSS.escape(savedCategory)}"], .topic-item[data-filter="${CSS.escape(savedCategory)}"], .conf-item[data-filter="${CSS.escape(savedCategory)}"]`
         );

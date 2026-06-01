@@ -156,27 +156,6 @@ class OpenReviewRatingTests(unittest.TestCase):
         self.assertEqual(clients._openreview_ratings({"details": {}}), [])
 
 
-class StampOrRatingsTests(unittest.TestCase):
-    def test_stamps_matching_arxiv_papers(self):
-        papers = [
-            {"title": "A", "external_ids": {"arxiv": "2401.111"}},
-            {"title": "B", "external_ids": {"arxiv": "2401.999"}},
-            {"title": "C"},  # 無 arxiv id
-        ]
-        index = {"2401.111": {"review_avg": 7.5, "review_count": 4}}
-        main._stamp_or_ratings(papers, index)
-        self.assertEqual(papers[0]["review_avg"], 7.5)
-        self.assertEqual(papers[0]["review_count"], 4)
-        self.assertEqual(papers[0]["or_rating"], 7.5)
-        self.assertNotIn("review_avg", papers[1])
-        self.assertNotIn("review_avg", papers[2])
-
-    def test_empty_index_is_noop(self):
-        papers = [{"title": "A", "external_ids": {"arxiv": "2401.111"}}]
-        main._stamp_or_ratings(papers, {})
-        self.assertNotIn("review_avg", papers[0])
-
-
 class ProbeTests(unittest.TestCase):
     # Plain TestClient (no `with`) skips lifespan → no warmup / no network.
     def test_health_always_ok(self):
