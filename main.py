@@ -51,7 +51,7 @@ from clients import (
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
-from paper_store import PaperStore
+from paper_store import PaperStore, _paper_id as _derive_paper_id
 from semantic import (
     HF_EMBED_MODEL,
     HF_TOKEN,
@@ -243,6 +243,11 @@ _REVIEWS_LIMIT = 300        # 聚合後回傳上限
 _OPENREVIEW_DAYS_MAX = 365
 _OPENREVIEW_MAX_RESULTS = 1000
 _BIBTEX_IDS_MAX = 50
+# 熱門度(/api/popular):匿名開啟次數的滾動視窗排行,/api/view beacon 累計。
+_POPULAR_DAYS_MAX = 30
+_POPULAR_LIMIT_MAX = 100
+_VIEW_URL_MAX = 600        # beacon url 長度上限,過濾異常負載
+_VIEW_TITLE_MAX = 400
 
 
 def _bounded_int(
@@ -1634,6 +1639,59 @@ async def get_reviews(request: Request):
         return {"papers": papers, "count": len(papers)}
 
     body, etag = await _reviews_cache.get_or_build("reviews", build)
+    return etag_response(request, body, etag)
+
+
+# ── 熱門度:匿名開啟次數遙測 ────────────────────────────────────
+_popular_cache = CachedJSON(ttl=120, stale_ttl=600, max_keys=8)
+
+
+def _beacon_paper_id(arxiv_id: str, url: str, title: str) -> str:
+    """Derive the same stable paper_id the store uses, from beacon fields."""
+    stub: dict[str, Any] = {}
+    if arxiv_id:
+        stub["external_ids"] = {"arxiv": arxiv_id}
+    if url:
+        stub["url"] = url
+    if title:
+        stub["title"] = title
+    return _derive_paper_id(stub)
+
+
+@app.post("/api/view")
+async def record_view(request: Request):
+    """Anonymous open-count beacon. Body: {url?, arxiv_id?, title?}. Returns 204."""
+    try:
+        raw = await request.body()
+        data = _json.loads(raw) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="invalid body")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="invalid body")
+    arxiv_id = str(data.get("arxiv_id") or "").strip()[:40]
+    url = str(data.get("url") or "").strip()[:_VIEW_URL_MAX]
+    title = str(data.get("title") or "").strip()[:_VIEW_TITLE_MAX]
+    if url and not url.startswith(("http://", "https://")):
+        url = ""
+    if not (arxiv_id or url or title):
+        raise HTTPException(status_code=400, detail="empty beacon")
+    pid = _beacon_paper_id(arxiv_id, url, title)
+    await asyncio.to_thread(_paper_store.record_view, pid, url, title)
+    return Response(status_code=204)
+
+
+@app.get("/api/popular")
+async def get_popular(request: Request, days: int = 7, limit: int = 40):
+    """Most-opened papers in the trailing window (anonymous view counts)."""
+    days = _bounded_int(days, default=7, min_value=1, max_value=_POPULAR_DAYS_MAX)
+    limit = _bounded_int(limit, default=40, min_value=1, max_value=_POPULAR_LIMIT_MAX)
+    cache_key = f"{days}:{limit}"
+
+    async def build():
+        papers = await asyncio.to_thread(_paper_store.top_viewed, days, limit)
+        return {"papers": papers, "count": len(papers), "days": days}
+
+    body, etag = await _popular_cache.get_or_build(cache_key, build)
     return etag_response(request, body, etag)
 
 

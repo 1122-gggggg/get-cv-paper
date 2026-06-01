@@ -194,6 +194,65 @@ class PapersSortFilterTests(unittest.TestCase):
         self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "zzz")), 0)
 
 
+class ViewBeaconTests(unittest.TestCase):
+    def test_beacon_paper_id_prefers_arxiv(self):
+        self.assertEqual(main._beacon_paper_id("2401.123", "https://x/1", "T"),
+                         "arxiv:2401.123")
+
+    def test_beacon_paper_id_url_fallback(self):
+        pid = main._beacon_paper_id("", "https://arxiv.org/abs/2401.5", "T")
+        self.assertEqual(pid, "url:https://arxiv.org/abs/2401.5")
+
+    def test_beacon_paper_id_title_fallback(self):
+        self.assertTrue(main._beacon_paper_id("", "", "Some Title").startswith("title:"))
+
+    def _client_with_fake_store(self):
+        from fastapi.testclient import TestClient
+
+        class _FakeStore:
+            def __init__(self):
+                self.recorded = []
+
+            def record_view(self, pid, url="", title=""):
+                self.recorded.append((pid, url, title))
+
+            def top_viewed(self, days=7, limit=40):
+                return [{"title": "Hot", "url": "https://a/1", "view_count": 9}]
+
+        fake = _FakeStore()
+        self._orig_store = main._paper_store
+        main._paper_store = fake
+        main._popular_cache._entries.clear()
+        return TestClient(main.app), fake
+
+    def tearDown(self):
+        if hasattr(self, "_orig_store"):
+            main._paper_store = self._orig_store
+
+    def test_view_beacon_records_and_returns_204(self):
+        c, fake = self._client_with_fake_store()
+        r = c.post("/api/view", json={"arxiv_id": "2401.7", "url": "https://a/7", "title": "P"})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(fake.recorded[0][0], "arxiv:2401.7")
+
+    def test_view_beacon_rejects_empty(self):
+        c, _ = self._client_with_fake_store()
+        r = c.post("/api/view", json={})
+        self.assertEqual(r.status_code, 400)
+
+    def test_view_beacon_rejects_non_http_url(self):
+        c, fake = self._client_with_fake_store()
+        r = c.post("/api/view", json={"url": "javascript:alert(1)"})
+        self.assertEqual(r.status_code, 400)  # url stripped → empty beacon
+        self.assertEqual(fake.recorded, [])
+
+    def test_popular_returns_papers(self):
+        c, _ = self._client_with_fake_store()
+        r = c.get("/api/popular?days=7&limit=10")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["papers"][0]["view_count"], 9)
+
+
 class ProbeTests(unittest.TestCase):
     # Plain TestClient (no `with`) skips lifespan → no warmup / no network.
     def test_health_always_ok(self):

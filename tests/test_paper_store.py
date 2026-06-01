@@ -93,5 +93,49 @@ class PaperStoreSnapshotTests(unittest.TestCase):
         self.assertEqual(got, {"2401.8": "https://github.com/foo/bar"})
 
 
+class PaperStoreViewTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = PaperStore(Path(self._tmp.name) / "v.sqlite")
+
+    def tearDown(self):
+        self.store.close()
+        self._tmp.cleanup()
+
+    def test_record_view_accumulates_and_ranks(self):
+        self.store.record_view("arxiv:2401.1", "https://a/1", "P1")
+        self.store.record_view("arxiv:2401.1", "https://a/1", "P1")
+        self.store.record_view("arxiv:2401.2", "https://a/2", "P2")
+        top = self.store.top_viewed(days=7, limit=10)
+        self.assertEqual(top[0]["view_count"], 2)
+        self.assertEqual(top[0]["url"], "https://a/1")
+        self.assertEqual([p["view_count"] for p in top], [2, 1])
+
+    def test_top_viewed_enriches_from_payload(self):
+        p = {"title": "Real", "url": "https://arxiv.org/abs/2401.5",
+             "summary": "full abstract", "external_ids": {"arxiv": "2401.5"}}
+        self.store.upsert_many([p], "ml")
+        self.store.record_view(_paper_id(p), p["url"], p["title"])
+        top = self.store.top_viewed(days=7, limit=10)
+        self.assertEqual(top[0]["summary"], "full abstract")  # payload, not stub
+        self.assertEqual(top[0]["view_count"], 1)
+
+    def test_top_viewed_falls_back_to_stub_when_payload_pruned(self):
+        self.store.record_view("arxiv:2401.9", "https://a/9", "Stub Title")
+        top = self.store.top_viewed(days=7, limit=10)
+        self.assertEqual(top[0]["title"], "Stub Title")
+        self.assertEqual(top[0]["url"], "https://a/9")
+        self.assertEqual(top[0]["summary"], "")
+
+    def test_record_view_ignores_empty_id(self):
+        self.store.record_view("", "https://a/x", "x")
+        self.assertEqual(self.store.top_viewed(days=7), [])
+
+    def test_stats_reports_view_total(self):
+        self.store.record_view("arxiv:2401.1")
+        self.store.record_view("arxiv:2401.1")
+        self.assertEqual(self.store.stats()["views"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

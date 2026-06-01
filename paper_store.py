@@ -107,6 +107,16 @@ class PaperStore:
                 at REAL NOT NULL,
                 PRIMARY KEY (primary_cat, snapshot_date)
             );
+            CREATE TABLE IF NOT EXISTS paper_views (
+                paper_id TEXT NOT NULL,
+                view_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                url TEXT,
+                title TEXT,
+                last_at REAL NOT NULL,
+                PRIMARY KEY (paper_id, view_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_views_date ON paper_views(view_date);
             """
         )
 
@@ -361,6 +371,67 @@ class PaperStore:
         except Exception:
             return None
 
+    # ── view telemetry: anonymous per-paper open counts (no PII) ─────
+    def record_view(self, paper_id: str, url: str = "", title: str = "") -> None:
+        """Increment today's open-count for a paper (idempotent per UTC day bucket).
+
+        url/title are denormalised so /api/popular can render even when the
+        paper has aged out of the papers table; first non-empty value wins.
+        """
+        if not paper_id:
+            return
+        now = time.time()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO paper_views(paper_id, view_date, count, url, title, last_at) "
+                    "VALUES(?,?,1,?,?,?) "
+                    "ON CONFLICT(paper_id, view_date) DO UPDATE SET "
+                    " count=count+1, last_at=excluded.last_at, "
+                    " url=COALESCE(NULLIF(paper_views.url,''), excluded.url), "
+                    " title=COALESCE(NULLIF(paper_views.title,''), excluded.title)",
+                    (paper_id, today, url or "", title or "", now),
+                )
+        except Exception as e:
+            logger.warning("paper_store: record_view failed for %s: %s", paper_id, e)
+
+    def top_viewed(self, days: int = 7, limit: int = 40) -> list[dict[str, Any]]:
+        """Most-opened papers in the trailing window, enriched from papers.payload.
+
+        Falls back to the denormalised url/title stub when the payload was pruned.
+        Stamps view_count so the frontend can sort/badge consistently.
+        """
+        cutoff = self._cutoff(days)
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "SELECT v.paper_id, SUM(v.count) AS views, MAX(v.url), MAX(v.title), "
+                    " (SELECT payload FROM papers p WHERE p.paper_id=v.paper_id LIMIT 1) "
+                    "FROM paper_views v WHERE v.view_date>=? "
+                    "GROUP BY v.paper_id ORDER BY views DESC LIMIT ?",
+                    (cutoff, limit),
+                )
+                rows = cur.fetchall()
+        except Exception as e:
+            logger.warning("paper_store: top_viewed failed: %s", e)
+            return []
+        out: list[dict[str, Any]] = []
+        for pid, views, url, title, payload in rows:
+            if payload:
+                try:
+                    p = json.loads(payload)
+                except Exception:
+                    p = None
+            else:
+                p = None
+            if p is None:
+                p = {"title": title or pid, "url": url or "", "authors": [],
+                     "summary": "", "published": ""}
+            p["view_count"] = int(views)
+            out.append(p)
+        return out
+
     def cleanup(self, max_age_days: int = 100, snapshot_age_days: int = 120) -> int:
         cutoff = self._cutoff(max_age_days)
         snap_cutoff = self._cutoff(snapshot_age_days)
@@ -370,6 +441,7 @@ class PaperStore:
                 deleted = cur.rowcount or 0
                 self._conn.execute("DELETE FROM metric_snapshots WHERE snapshot_date<?", (snap_cutoff,))
                 self._conn.execute("DELETE FROM topic_daily WHERE snapshot_date<?", (snap_cutoff,))
+                self._conn.execute("DELETE FROM paper_views WHERE view_date<?", (snap_cutoff,))
                 # papers prune by published-date but snapshots by snapshot-date — different
                 # axes leave snapshots whose payload was pruned; drop those orphans so
                 # get_emerging never silently skips paper_ids it can't resolve a payload for
@@ -392,15 +464,17 @@ class PaperStore:
                     "SELECT primary_cat, COUNT(*) FROM papers GROUP BY primary_cat ORDER BY 2 DESC"
                 ).fetchall()
                 snapshots = int(self._conn.execute("SELECT COUNT(*) FROM metric_snapshots").fetchone()[0])
+                views = int(self._conn.execute("SELECT COALESCE(SUM(count),0) FROM paper_views").fetchone()[0])
                 disk = self.db_path.stat().st_size if self.db_path.exists() else 0
             return {
                 "total": total,
                 "snapshots": snapshots,
+                "views": views,
                 "disk_bytes": disk,
                 "by_cat": {c: int(n) for c, n in by_cat},
             }
         except Exception:
-            return {"total": 0, "snapshots": 0, "disk_bytes": 0, "by_cat": {}}
+            return {"total": 0, "snapshots": 0, "views": 0, "disk_bytes": 0, "by_cat": {}}
 
     def close(self) -> None:
         try:

@@ -213,7 +213,7 @@ function applyDiscipline(disciplineId) {
 
     // 建構 CONF_FILTERS：data-filter="conf_<key>"
     CONF_FILTERS = new Map(d.confs.map(c => [`conf_${c.key.replace(/\s+/g, '_')}`, c.key.toLowerCase()]));
-    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'reviews', ...CONF_FILTERS.keys()]);
+    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'popular', 'reviews', ...CONF_FILTERS.keys()]);
 
     // VENUE_PATTERNS：顯示在卡片上的 venue 徽章
     VENUE_PATTERNS = d.confs.map(c => ({
@@ -928,6 +928,28 @@ function recordPaperClick(url) {
     savePaperClicks();
 }
 
+// 匿名開啟遙測:每篇每個 session 只送一次,累計到 /api/popular 全站熱門排行。
+const _viewedThisSession = new Set();
+function sendViewBeacon(url, paper) {
+    if (!url || _viewedThisSession.has(url)) return;
+    _viewedThisSession.add(url);
+    const payload = {
+        url,
+        arxiv_id: getArxivId(url) || '',
+        title: (paper && paper.title) || '',
+    };
+    try {
+        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+        if (navigator.sendBeacon && navigator.sendBeacon('/api/view', blob)) return;
+    } catch (e) { /* fall through to fetch */ }
+    fetch('/api/view', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+    }).catch(() => {});
+}
+
 function renderCardTags(card, url) {
     const chips = card.querySelector('.tag-chips');
     if (!chips) return;
@@ -1370,6 +1392,7 @@ function _bindPapersGridDelegation() {
         if (paperNavLink && card.contains(paperNavLink)) {
             recordPaperClick(url);
             const paper = currentFilteredPapers.find(p => p.url === url);
+            sendViewBeacon(url, paper);
             if (paper) updateCardBadgesInPlace(card, paper);
             return;
         }
@@ -1986,7 +2009,7 @@ function _matchCatTerm(term, tLc, sLc) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'reviews' || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -2025,6 +2048,7 @@ function currentCategoryLabel() {
     if (currentCategory === 'top_conf') return `${ACTIVE_DISCIPLINE?.name || ''} 頂尖會議／期刊`;
     if (currentCategory === 'hf_daily') return 'HuggingFace 每日精選';
     if (currentCategory === 'emerging') return '爆發中論文';
+    if (currentCategory === 'popular') return '熱門論文';
     if (currentCategory === 'reviews') return '評審熱度';
     if (CONF_FILTERS.has(currentCategory)) {
         return document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim()
@@ -2128,6 +2152,14 @@ async function ensureReviews() {
     const data = await res.json();
     _reviewsCache = indexPapers(data.papers || []);
     return _reviewsCache;
+}
+
+// 熱門:/api/popular 全站匿名開啟次數排行(近 7 天)。內容隨點擊變動,每次開啟視圖即時抓取。
+async function fetchPopular() {
+    const res = await fetch('/api/popular?days=7&limit=40');
+    if (!res.ok) throw new Error('Popular fetch failed');
+    const data = await res.json();
+    return indexPapers(data.papers || []);
 }
 
 // 依當前 discipline 的 conf 關鍵字 + 主題關鍵字做 substring 匹配
@@ -2255,6 +2287,33 @@ async function filterPapers() {
         } catch (e) {
             loader.classList.add('hidden');
             alert('爆發中載入失敗：' + e.message);
+        }
+        return;
+    }
+
+    // 熱門:全站使用者近 7 天開啟最多的論文(/api/popular,匿名點擊熱度)
+    if (currentCategory === 'popular') {
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            let papers = await fetchPopular();
+            if (query) papers = applyFilter(papers, query);
+            // 後端已依開啟次數排序;非 latest 才依使用者指標重排
+            if (sortValue !== 'latest') {
+                await prepareMetricData(papers, sortValue);
+                papers = sortPapersByMetric(papers, sortValue);
+            }
+            if (!papers.length) {
+                showToast('還沒有足夠的開啟紀錄,點開幾篇論文後熱門榜就會出現');
+                renderPapers([], '🔥 熱門');
+                return;
+            }
+            const sortLabel = sortValue === 'latest' ? '依開啟次數' : `依${getSortMeta().label}`;
+            renderPapers(papers, `🔥 熱門（近 7 天 · ${sortLabel} · ${papers.length} 篇）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('熱門載入失敗：' + e.message);
         }
         return;
     }
@@ -2811,7 +2870,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 恢復上次的分類（找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
     const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
-        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || savedCategory === 'reviews' || CONF_FILTERS.has(savedCategory);
+        const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || savedCategory === 'popular' || savedCategory === 'reviews' || CONF_FILTERS.has(savedCategory);
         const targetBtn = document.querySelector(
             `.category-btn[data-filter="${CSS.escape(savedCategory)}"], .topic-item[data-filter="${CSS.escape(savedCategory)}"], .conf-item[data-filter="${CSS.escape(savedCategory)}"]`
         );
