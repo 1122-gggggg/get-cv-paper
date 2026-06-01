@@ -1,4 +1,5 @@
 let allPapers = [];      // 7 天
+let lastDataAsOf = 0;    // 主題論文資料建構時間（毫秒），供新鮮度標記使用
 let monthPapers = [];    // 30 天（懶加載）
 let quarterPapers = [];  // 90 天（懶加載,用於近三月熱門）
 let currentCategory = 'all';
@@ -91,6 +92,32 @@ function paperTimestamp(paper) {
     const ts = Date.parse(paper?.published || '');
     return Number.isFinite(ts) ? ts : 0;
 }
+
+// 相對時間：毫秒時間戳 → 「剛剛 / X 分鐘前 / X 小時前 / X 天前 …」
+function relativeTime(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '';
+    const diff = Date.now() - ms;
+    if (diff < 60000) return '剛剛';
+    const min = Math.floor(diff / 60000);
+    if (min < 60) return `${min} 分鐘前`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr} 小時前`;
+    const day = Math.floor(hr / 24);
+    if (day < 30) return `${day} 天前`;
+    const mo = Math.floor(day / 30);
+    if (mo < 12) return `${mo} 個月前`;
+    return `${Math.floor(mo / 12)} 年前`;
+}
+
+// 絕對日期（卡片日期 tooltip 用）
+function absoluteDate(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '';
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const NEW_PAPER_WINDOW_MS = 24 * 3600 * 1000;  // 近 24h 視為「新」
 
 function startOfTodayMs() {
     const now = new Date();
@@ -1226,6 +1253,7 @@ async function _fetchAndApply(disc) {
     if (!res.ok) throw new Error('Failed to fetch data');
     const data = await res.json();
     if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return; // 切過 disc 後丟掉舊回應
+    lastDataAsOf = Number.isFinite(data.as_of) ? data.as_of * 1000 : Date.now();
     allPapers = indexPapers(data.papers);
     await filterPapers();
     scheduleBadgeUpdate();
@@ -1698,8 +1726,22 @@ function buildCard(paper, index) {
     // Summary
     card.querySelector('.paper-summary').textContent = paper.summary;
 
-    // Footer
-    card.querySelector('.paper-date').textContent = paper.published;
+    // Footer：相對時間 + 絕對時間 tooltip + NEW 標記（近 24h）
+    const dateEl = card.querySelector('.paper-date');
+    const pubMs = paperTimestamp(paper);
+    if (pubMs > 0) {
+        dateEl.textContent = relativeTime(pubMs) || paper.published;
+        dateEl.title = absoluteDate(pubMs);
+        if (Date.now() - pubMs <= NEW_PAPER_WINDOW_MS) {
+            card.classList.add('is-new');
+            const flag = document.createElement('span');
+            flag.className = 'new-flag';
+            flag.textContent = 'NEW';
+            dateEl.insertAdjacentElement('beforebegin', flag);
+        }
+    } else {
+        dateEl.textContent = paper.published;
+    }
 
     // Badges（引用、高影響、綜述、引用速度、h5、HF）
     populateBadgeSlot(card.querySelector('.badge-slot'), paper);
@@ -1793,7 +1835,13 @@ function renderPapers(papers, customTitle) {
     }
 
     if (themeEl) themeEl.textContent = themeTitle;
-    if (metaEl) metaEl.textContent = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
+    if (metaEl) {
+        let metaText = `共 ${papers.length} 篇　第 ${currentPage} / ${totalPages} 頁`;
+        if (!customTitle && lastDataAsOf > 0) {
+            metaText += `　· 資料更新於 ${relativeTime(lastDataAsOf)}`;
+        }
+        metaEl.textContent = metaText;
+    }
 
     const start = (currentPage - 1) * PAPERS_PER_PAGE;
     const pagePapers = papers.slice(start, start + PAPERS_PER_PAGE);

@@ -1065,6 +1065,28 @@ body.light-mode .survey-badge {
     padding: 4px 12px;
     border-radius: 999px;
     letter-spacing: 0.01em;
+    cursor: default;
+}
+
+/* ── 新鮮度：近 24h 論文的 NEW 標記 ── */
+.new-flag {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: #fff;
+    background: linear-gradient(135deg, #f43f5e, #ec4899);
+    padding: 2px 7px;
+    border-radius: 999px;
+    margin-right: 4px;
+    box-shadow: 0 2px 8px rgba(244, 63, 94, 0.35);
+    animation: newFlagPulse 2.2s ease-in-out infinite;
+}
+@keyframes newFlagPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+.paper-card.is-new {
+    border-color: rgba(244, 63, 94, 0.4);
 }
 
 .paper-link {

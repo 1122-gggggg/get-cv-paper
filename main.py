@@ -1150,6 +1150,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
                         "papers": l2[:_PAPERS_RESPONSE_CAP],
                         "arxiv_native": arxiv_native,
                         "from_l2": True,
+                        "as_of": int(time.time()),
                     }
             raise RuntimeError(f"all sources empty for {discipline_id}")
         # rank-before-truncate:跨來源以最新日期全域排序後才截斷,避免「先接進來的
@@ -1157,7 +1158,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
         merged = _sort_papers(merged, "latest")
         if len(merged) > _PAPERS_RESPONSE_CAP:
             merged = merged[:_PAPERS_RESPONSE_CAP]
-        result = {"papers": merged, "arxiv_native": arxiv_native}
+        result = {"papers": merged, "arxiv_native": arxiv_native, "as_of": int(time.time())}
         if topic:
             result["topic"] = topic
         return result
