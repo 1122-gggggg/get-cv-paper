@@ -966,12 +966,14 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
 
     async def build():
         c = _client()
+        failures: list[str] = []
 
         async def _safe(name: str, coro):
             try:
                 return await coro
             except Exception as e:
                 logger.warning("%s listing failed for %s: %s", name, discipline_id, e)
+                failures.append(name)
                 return []
 
         arxiv_terms = _arxiv_terms_for_topic(topic) or None
@@ -1017,9 +1019,14 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
                 logger.warning("paper_store upsert failed for %s: %s", discipline_id, e)
 
         if not merged:
-            # topic 收窄查無結果是合法狀態(該子主題近期無新論文),直接回空集,
-            # 不走廣域 L2 fallback(否則會回傳未收窄的論文,誤導使用者)。
+            # topic 收窄查無結果:若有上游失敗(如 arXiv 冷啟限流),拋錯不快取,
+            # 讓下次請求重抓;若全部成功仍為空才視為「該子主題近期無新論文」,
+            # 回空集(不走廣域 L2 fallback,否則回傳未收窄論文誤導使用者)。
             if topic:
+                if failures:
+                    raise RuntimeError(
+                        f"topic feed sources failed for {discipline_id}/{topic}: {failures}"
+                    )
                 return {"papers": [], "arxiv_native": arxiv_native, "topic": topic}
             # L2 fallback: upstream 全掛時,改從 SQLite 撈最近 days 內的歷史紀錄
             if primary_cat:
