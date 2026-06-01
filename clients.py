@@ -149,6 +149,84 @@ async def fetch_arxiv_search(
     return _parse_arxiv_entries(r.content, cutoff=None)
 
 
+async def _arxiv_fetch_raw(
+    client: httpx.AsyncClient, params: dict[str, Any], label: str,
+) -> bytes:
+    """共用的 arXiv GET + 429/503 退避重試,回傳原始 XML bytes(失敗拋 502)。"""
+    delays = (3.0, 8.0, 0.0)  # 最後一次不再 sleep
+    for attempt, sleep_s in enumerate(delays):
+        try:
+            r = await client.get(ARXIV_BASE, params=params, timeout=30.0)
+            if r.status_code in (429, 503):
+                if sleep_s > 0:
+                    logger.info("arXiv %d on %s, retrying in %ss", r.status_code, label, sleep_s)
+                    await asyncio.sleep(sleep_s)
+                    continue
+                raise HTTPException(status_code=502, detail="arXiv rate-limited")
+            r.raise_for_status()
+            return r.content
+        except HTTPException:
+            raise
+        except Exception as e:
+            if attempt < len(delays) - 1:
+                await asyncio.sleep(sleep_s or 2.0)
+                continue
+            logger.error("arXiv fetch failed (%s): %s", label, e)
+            raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
+    raise HTTPException(status_code=502, detail="arXiv upstream unavailable")
+
+
+def _arxiv_phrase(s: str) -> str:
+    """清掉會破壞 arXiv 查詢的引號,回傳可內插為片語的字串。"""
+    return s.replace('"', "").strip()
+
+
+async def fetch_arxiv_custom(
+    client: httpx.AsyncClient,
+    *,
+    cats: list[str] | None = None,
+    keywords: list[str] | None = None,
+    authors: list[str] | None = None,
+    ids: list[str] | None = None,
+    days: int = 30,
+    max_results: int = 100,
+) -> list[dict[str, Any]]:
+    """使用者自訂 feed:把 cats/keywords/authors 以 AND 組合查詢(各組內 OR),
+    另以 id_list 精確補抓指定論文。各區塊軟失敗,合併去重交由上層處理。"""
+    cats = [c.strip() for c in (cats or []) if c.strip()]
+    keywords = [k for k in (_arxiv_phrase(x) for x in (keywords or [])) if k]
+    authors = [a for a in (_arxiv_phrase(x) for x in (authors or [])) if a]
+    ids = [i.strip() for i in (ids or []) if i.strip()]
+    results: list[dict[str, Any]] = []
+    cutoff = datetime.now() - timedelta(days=days)
+
+    # 1) 指定 id_list(精確抓某幾篇,不套 days cutoff)
+    if ids:
+        content = await _arxiv_fetch_raw(
+            client, {"id_list": ",".join(ids[:50]), "max_results": min(len(ids), 50)},
+            label="id_list",
+        )
+        results.extend(_parse_arxiv_entries(content, cutoff=None))
+
+    # 2) cats/keywords/authors 組合查詢
+    clauses: list[str] = []
+    if cats:
+        clauses.append("(" + " OR ".join(f"cat:{c}" for c in cats) + ")")
+    if keywords:
+        clauses.append("(" + " OR ".join(f'all:"{k}"' for k in keywords) + ")")
+    if authors:
+        clauses.append("(" + " OR ".join(f'au:"{a}"' for a in authors) + ")")
+    if clauses:
+        content = await _arxiv_fetch_raw(client, {
+            "search_query": " AND ".join(clauses),
+            "sortBy": "submittedDate",
+            "sortOrder": "descending",
+            "max_results": max_results,
+        }, label="custom")
+        results.extend(_parse_arxiv_entries(content, cutoff))
+    return results
+
+
 # ── HuggingFace daily papers ─────────────────────────────────────
 async def fetch_hf_daily(client: httpx.AsyncClient, days: int = 7) -> list[dict[str, Any]]:
     try:

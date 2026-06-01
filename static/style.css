@@ -3202,3 +3202,151 @@ body.light-mode .bridge-badge {
     color: #94a3b8;
     border-color: rgba(148, 163, 184, 0.25);
 }
+
+/* ── 自訂訂閱(#17):chips + 建立按鈕 + modal ───────────────────── */
+.custom-feed-btn { display: inline-flex; align-items: center; gap: 0.3rem; }
+.custom-feed-btn .pin-icon { font-size: 0.78em; opacity: 0.8; flex-shrink: 0; }
+.side-nav .custom-feed-btn.active {
+    background: rgba(56, 189, 248, 0.14) !important;
+    color: #38bdf8 !important;
+}
+.add-custom-feed-btn {
+    border-style: dashed !important;
+    border-color: rgba(56, 189, 248, 0.45) !important;
+    color: #38bdf8 !important;
+    opacity: 0.92;
+}
+.add-custom-feed-btn:hover {
+    background: rgba(56, 189, 248, 0.12) !important;
+    color: #7dd3fc !important;
+    opacity: 1;
+}
+
+.cf-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1120;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.cf-modal.hidden { display: none; }
+.cf-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(7, 12, 23, 0.72);
+    backdrop-filter: blur(6px);
+}
+.cf-panel {
+    position: relative;
+    width: min(520px, 92vw);
+    max-height: 88vh;
+    overflow-y: auto;
+    background: var(--side-bg, #0f172a);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    border-radius: 16px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+    padding: 0 22px 22px;
+}
+.cf-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 0 8px;
+    position: sticky;
+    top: 0;
+    background: var(--side-bg, #0f172a);
+    z-index: 1;
+}
+.cf-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    letter-spacing: 0.01em;
+}
+.cf-close {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+}
+.cf-close:hover { background: rgba(148, 163, 184, 0.15); color: #fff; }
+.cf-hint {
+    margin: 0 0 16px;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: #94a3b8;
+}
+.cf-form { display: flex; flex-direction: column; gap: 13px; }
+.cf-field { display: flex; flex-direction: column; gap: 5px; }
+.cf-field > span {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+}
+.cf-field > span em {
+    font-style: normal;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: #64748b;
+}
+.cf-field input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 9px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(15, 23, 42, 0.6);
+    color: #e2e8f0;
+    font-size: 0.9rem;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.cf-field input::placeholder { color: #475569; }
+.cf-field input:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.6);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+}
+.cf-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 8px;
+}
+.cf-btn {
+    padding: 10px 18px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: filter 0.15s, background 0.15s;
+}
+.cf-btn-primary {
+    background: linear-gradient(135deg, #38bdf8, #6366f1);
+    color: #fff;
+}
+.cf-btn-primary:hover { filter: brightness(1.1); }
+.cf-btn-danger {
+    background: transparent;
+    border-color: rgba(248, 113, 113, 0.4);
+    color: #f87171;
+    margin-right: auto;
+}
+.cf-btn-danger:hover { background: rgba(248, 113, 113, 0.12); }
+
+body.light-mode .cf-panel { background: #fff; border-color: rgba(56, 189, 248, 0.3); }
+body.light-mode .cf-head { background: #fff; }
+body.light-mode .cf-title { color: #0f172a; }
+body.light-mode .cf-field > span { color: #334155; }
+body.light-mode .cf-field input { background: #f8fafc; color: #0f172a; border-color: #cbd5e1; }
+body.light-mode .cf-hint { color: #64748b; }

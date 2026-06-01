@@ -136,7 +136,8 @@
                                 <!-- Conf items injected dynamically per discipline -->
                             </div>
                         </div>
-                        <!-- Topic buttons injected dynamically per discipline -->
+                        <button class="category-btn add-custom-feed-btn" id="addCustomFeedBtn" title="建立自訂訂閱：組合 arXiv 分類 / 關鍵字 / 作者 / 論文 ID">➕ 自訂訂閱</button>
+                        <!-- Custom feed chips (#17) + Topic buttons injected dynamically -->
                     </div>
                     <button class="filter-arrow filter-arrow-right" id="filterArrowRight" aria-label="向右捲動" hidden>&#8250;</button>
                 </div>
@@ -344,6 +345,44 @@
             <div class="similar-body" id="similarBody">
                 <div class="similar-loading">載入中…</div>
             </div>
+        </div>
+    </div>
+
+    <!-- 自訂訂閱 modal (#17) -->
+    <div id="customFeedModal" class="cf-modal hidden">
+        <div class="cf-backdrop"></div>
+        <div class="cf-panel" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
+            <div class="cf-head">
+                <h3 class="cf-title" id="cfTitle">建立自訂訂閱</h3>
+                <button id="cfClose" class="cf-close" title="關閉" aria-label="關閉">×</button>
+            </div>
+            <p class="cf-hint">直接組合 arXiv 查詢，填任一欄即可。多個值用逗號分隔；同欄位用 OR、跨欄位用 AND。</p>
+            <form id="cfForm" class="cf-form">
+                <label class="cf-field">
+                    <span>名稱</span>
+                    <input id="cfName" type="text" maxlength="40" placeholder="例如：我的擴散模型雷達" autocomplete="off" required>
+                </label>
+                <label class="cf-field">
+                    <span>arXiv 分類 <em>cat</em></span>
+                    <input id="cfCats" type="text" placeholder="cs.CV, cs.LG, stat.ML" autocomplete="off">
+                </label>
+                <label class="cf-field">
+                    <span>關鍵字 <em>全文片語</em></span>
+                    <input id="cfKeywords" type="text" placeholder="diffusion model, flow matching" autocomplete="off">
+                </label>
+                <label class="cf-field">
+                    <span>作者 <em>au</em></span>
+                    <input id="cfAuthors" type="text" placeholder="Kaiming He, Yann LeCun" autocomplete="off">
+                </label>
+                <label class="cf-field">
+                    <span>arXiv ID</span>
+                    <input id="cfIds" type="text" placeholder="2401.00001, 2312.12345" autocomplete="off">
+                </label>
+                <div class="cf-actions">
+                    <button type="button" id="cfDelete" class="cf-btn cf-btn-danger" hidden>刪除此訂閱</button>
+                    <button type="submit" class="cf-btn cf-btn-primary">儲存並查看</button>
+                </div>
+            </form>
         </div>
     </div>
 </body>

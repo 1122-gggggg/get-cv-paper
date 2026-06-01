@@ -31,6 +31,7 @@ from cache import CachedJSON, LRUStore, etag_response, make_etag
 from clients import (
     ARXIV_UA,
     extract_github_url,
+    fetch_arxiv_custom,
     fetch_arxiv_listing,
     fetch_arxiv_search,
     fetch_biorxiv_listing,
@@ -180,6 +181,8 @@ def _client() -> httpx.AsyncClient:
 # Server-side stale 6h,讓使用者永遠 < 50ms,刷新成本攤到背景。
 _papers_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=64)
 _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
+# 使用者自訂 feed:每組 cats/keywords/authors/ids 一個 key,共享 SWR
+_custom_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=128)
 # 突發偵測:每 30 分新鮮、24h stale,讀 metric_snapshots delta(每日才變)
 _emerging_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=32)
 
@@ -1089,6 +1092,81 @@ async def get_papers(
     q = (q or "").strip()
     needs_transform = q or (sort in _PAPERS_SORT_KEYS and sort != "latest")
     if needs_transform:
+        payload = _json.loads(body)
+        papers = payload.get("papers", [])
+        if q:
+            papers = _filter_papers_by_query(papers, q)
+        papers = _sort_papers(papers, sort if sort in _PAPERS_SORT_KEYS else "latest")
+        payload = {**payload, "papers": papers, "count": len(papers)}
+        body = _json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        etag = make_etag(body)
+    return etag_response(request, body, etag)
+
+
+_CUSTOM_FEED_MAX_ITEMS = 12   # cats/keywords/authors 各自上限
+_CUSTOM_FEED_MAX_IDS = 50
+
+
+def _custom_feed_build_spec(
+    cats: list[str], keywords: list[str], authors: list[str],
+    ids: list[str], days: int, max_results: int,
+):
+    """回傳 (cache_key, builder) — 使用者自訂 feed。"""
+    cache_key = (
+        "custom:" + "+".join(cats) + "|kw:" + "+".join(keywords)
+        + "|au:" + "+".join(authors) + "|id:" + "+".join(ids)
+        + f"|{days}:{max_results}"
+    )
+
+    async def build():
+        try:
+            raw = await fetch_arxiv_custom(
+                _client(), cats=cats, keywords=keywords, authors=authors,
+                ids=ids, days=days, max_results=max_results,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("custom feed build failed: %s", e)
+            raise RuntimeError("custom feed upstream failed") from e
+        merged = merge_sources(raw)
+        merged = [_slim_paper(p) for p in merged]
+        merged = _sort_papers(merged, "latest")
+        if len(merged) > _PAPERS_RESPONSE_CAP:
+            merged = merged[:_PAPERS_RESPONSE_CAP]
+        return {"papers": merged, "count": len(merged), "custom": True}
+
+    return cache_key, build
+
+
+@app.get("/api/custom")
+async def get_custom_feed(
+    request: Request,
+    cats: str = "",
+    keywords: str = "",
+    authors: str = "",
+    ids: str = "",
+    days: int = 30,
+    max_results: int = 100,
+    sort: str = "latest",
+    q: str = "",
+):
+    """使用者自訂 feed:cats/keywords/authors/ids 任一組合(逗號分隔)。"""
+    days = _bounded_int(days, default=30, min_value=1, max_value=_PAPERS_DAYS_MAX)
+    max_results = _bounded_int(max_results, default=100, min_value=1, max_value=300)
+    cat_list = _unique_csv(cats, max_items=_CUSTOM_FEED_MAX_ITEMS, field_name="cats")
+    kw_list = _unique_csv(keywords, max_items=_CUSTOM_FEED_MAX_ITEMS, field_name="keywords")
+    au_list = _unique_csv(authors, max_items=_CUSTOM_FEED_MAX_ITEMS, field_name="authors")
+    id_list = _valid_arxiv_ids(_unique_csv(ids, max_items=_CUSTOM_FEED_MAX_IDS, field_name="ids"))
+    if not (cat_list or kw_list or au_list or id_list):
+        raise HTTPException(status_code=400, detail="empty custom feed spec")
+    cache_key, builder = _custom_feed_build_spec(
+        cat_list, kw_list, au_list, id_list, days, max_results,
+    )
+    body, etag = await _custom_cache.get_or_build(cache_key, builder)
+    sort = (sort or "latest").lower()
+    q = (q or "").strip()
+    if q or (sort in _PAPERS_SORT_KEYS and sort != "latest"):
         payload = _json.loads(body)
         papers = payload.get("papers", [])
         if q:

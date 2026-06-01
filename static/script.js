@@ -795,6 +795,132 @@ function deletePinnedBtn(btn) {
     savePinnedTopics();
 }
 
+// ── 自訂訂閱系統(#17) ───────────────────────────────────────────
+// 直接組合 arXiv 查詢(cat/keyword/author/id),跨領域共用,單一 localStorage key。
+const CUSTOM_FEEDS_KEY = 'visionary_custom_feeds_v1';
+
+function loadCustomFeeds() {
+    try {
+        const arr = JSON.parse(localStorage.getItem(CUSTOM_FEEDS_KEY) || '[]');
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+}
+function saveCustomFeeds(feeds) {
+    localStorage.setItem(CUSTOM_FEEDS_KEY, JSON.stringify(feeds));
+}
+function getCustomFeed(id) {
+    return loadCustomFeeds().find(f => f.id === id) || null;
+}
+function _csvToList(raw) {
+    return (raw || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 12);
+}
+function _customFeedQuery(feed, extra) {
+    const p = new URLSearchParams();
+    if (feed.cats?.length)     p.set('cats', feed.cats.join(','));
+    if (feed.keywords?.length) p.set('keywords', feed.keywords.join(','));
+    if (feed.authors?.length)  p.set('authors', feed.authors.join(','));
+    if (feed.ids?.length)      p.set('ids', feed.ids.join(','));
+    Object.entries(extra || {}).forEach(([k, v]) => p.set(k, String(v)));
+    return p.toString();
+}
+function _customFeedSummary(feed) {
+    const parts = [];
+    if (feed.cats?.length)     parts.push(`分類 ${feed.cats.join('/')}`);
+    if (feed.keywords?.length) parts.push(`「${feed.keywords.join('／')}」`);
+    if (feed.authors?.length)  parts.push(`作者 ${feed.authors.join('、')}`);
+    if (feed.ids?.length)      parts.push(`${feed.ids.length} 篇指定 ID`);
+    return parts.join(' · ');
+}
+
+function renderCustomFeedBtns() {
+    const filtersDiv = document.querySelector('.category-filters');
+    if (!filtersDiv) return;
+    filtersDiv.querySelectorAll('.custom-feed-btn').forEach(el => el.remove());
+    const addBtn = document.getElementById('addCustomFeedBtn');
+    for (const feed of loadCustomFeeds()) {
+        const btn = document.createElement('button');
+        btn.className = 'category-btn custom-feed-btn';
+        btn.dataset.filter = feed.id;
+        btn.dataset.customFeed = 'true';
+        btn.title = _customFeedSummary(feed) || feed.name;
+
+        const icon = document.createElement('span');
+        icon.className = 'pin-icon';
+        icon.textContent = '🛰️';
+        const label = document.createElement('span');
+        label.className = 'label-span';
+        label.textContent = feed.name;
+        btn.appendChild(icon);
+        btn.appendChild(label);
+
+        if (addBtn) filtersDiv.insertBefore(btn, addBtn);
+        else filtersDiv.appendChild(btn);
+    }
+}
+
+function deleteCustomFeed(id) {
+    saveCustomFeeds(loadCustomFeeds().filter(f => f.id !== id));
+    if (currentCategory === id) {
+        currentCategory = 'all';
+        const allBtn = document.querySelector('.category-btn[data-filter="all"]');
+        if (allBtn) {
+            document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+            allBtn.classList.add('active');
+        }
+        filterPapers();
+    }
+    renderCustomFeedBtns();
+}
+
+let _cfEditId = null;
+function openCustomFeedModal(editId) {
+    const modal = document.getElementById('customFeedModal');
+    if (!modal) return;
+    _cfEditId = editId || null;
+    const feed = editId ? getCustomFeed(editId) : null;
+    document.getElementById('cfTitle').textContent = feed ? '編輯自訂訂閱' : '建立自訂訂閱';
+    document.getElementById('cfName').value     = feed?.name || '';
+    document.getElementById('cfCats').value     = (feed?.cats || []).join(', ');
+    document.getElementById('cfKeywords').value = (feed?.keywords || []).join(', ');
+    document.getElementById('cfAuthors').value  = (feed?.authors || []).join(', ');
+    document.getElementById('cfIds').value      = (feed?.ids || []).join(', ');
+    document.getElementById('cfDelete').hidden  = !feed;
+    modal.classList.remove('hidden');
+    setTimeout(() => document.getElementById('cfName').focus(), 30);
+}
+function closeCustomFeedModal() {
+    document.getElementById('customFeedModal')?.classList.add('hidden');
+    _cfEditId = null;
+}
+function _submitCustomFeed(e) {
+    if (e) e.preventDefault();
+    const name = document.getElementById('cfName').value.trim();
+    const cats = _csvToList(document.getElementById('cfCats').value);
+    const keywords = _csvToList(document.getElementById('cfKeywords').value);
+    const authors = _csvToList(document.getElementById('cfAuthors').value);
+    const ids = _csvToList(document.getElementById('cfIds').value)
+        .map(s => (s.match(/\d{4}\.\d{4,6}/) || [s])[0]);
+    if (!name) { showToast('請輸入訂閱名稱'); return; }
+    if (!(cats.length || keywords.length || authors.length || ids.length)) {
+        showToast('至少填一個條件:分類 / 關鍵字 / 作者 / ID');
+        return;
+    }
+    const feeds = loadCustomFeeds();
+    if (_cfEditId) {
+        const f = feeds.find(x => x.id === _cfEditId);
+        if (f) Object.assign(f, { name, cats, keywords, authors, ids });
+    } else {
+        _cfEditId = `custom_${Date.now().toString(36)}`;
+        feeds.push({ id: _cfEditId, name, cats, keywords, authors, ids });
+    }
+    saveCustomFeeds(feeds);
+    renderCustomFeedBtns();
+    const targetId = _cfEditId;
+    closeCustomFeedModal();
+    const btn = document.querySelector(`.custom-feed-btn[data-filter="${CSS.escape(targetId)}"]`);
+    if (btn) _selectCategory(targetId, btn);
+}
+
 // ── 已讀系統 ───────────────────────────────────────────────────
 const READ_KEY = 'visionary_read_v1';
 let readSet = new Set(JSON.parse(localStorage.getItem(READ_KEY) || '[]'));
@@ -2368,6 +2494,38 @@ async function filterPapers() {
         return;
     }
 
+    // 自訂訂閱(#17):直接打 /api/custom,組合 arXiv cat/keyword/author/id 查詢
+    if (currentCategory.startsWith('custom_')) {
+        const feed = getCustomFeed(currentCategory);
+        if (!feed) {
+            renderPapers([], '🛰️ 自訂訂閱（找不到，請重建）');
+            return;
+        }
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            const days = getTimeRangeMeta().days || 30;
+            const qs = _customFeedQuery(feed, { days, max_results: 100 });
+            const res = await fetch(`/api/custom?${qs}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            let papers = indexPapers(Array.isArray(data.papers) ? data.papers : []);
+            if (query) papers = applyFilter(papers, query);
+            papers = applyTimeRange(papers);
+            await prepareMetricData(papers, sortValue);
+            papers = sortPapersByMetric(papers, sortValue);
+            if (!papers.length) {
+                showToast('此自訂訂閱目前沒有命中,試著放寬條件或拉長時間範圍');
+            }
+            renderPapers(papers, `🛰️ ${feed.name}（${getTimeRangeMeta().label} · 依${getSortMeta().label} · ${papers.length} 篇）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('自訂訂閱載入失敗：' + e.message);
+        }
+        return;
+    }
+
     const pool = await papersForCurrentTimeRange();
     let filtered = applyFilter(pool, query);
     filtered = applyTimeRange(filtered);
@@ -2774,6 +2932,7 @@ let _topicFeedToken = 0;
 
 function _isTopicFilter(filter) {
     if (!filter || _RESERVED_CATEGORIES.has(filter)) return false;
+    if (filter.startsWith('custom_')) return false;   // 自訂訂閱走自己的 /api/custom 分支
     if (typeof CONF_FILTERS !== 'undefined' && CONF_FILTERS.has(filter)) return false;
     return true;
 }
@@ -2839,6 +2998,7 @@ function bindCategoryBtns() {
         }
         const btn = e.target.closest('.category-btn');
         if (!btn || btn.classList.contains('top-conf-btn') || btn.classList.contains('topic-group-btn')) return;
+        if (btn.id === 'addCustomFeedBtn') { openCustomFeedModal(); return; }
         _selectCategory(btn.dataset.filter, btn);
     });
 
@@ -2911,6 +3071,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     applyBuiltinModifications();
     loadPinnedTopics();
+    renderCustomFeedBtns();
     bindCategoryBtns();
 
     // 恢復上次的分類（找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
@@ -3120,13 +3281,33 @@ document.addEventListener('DOMContentLoaded', () => {
         e.stopPropagation();
         const btn = ctxTarget;
         hideCtxMenu();
-        if (btn) editBtnLabel(btn);
+        if (!btn) return;
+        if (btn.dataset.customFeed === 'true') { openCustomFeedModal(btn.dataset.filter); return; }
+        editBtnLabel(btn);
     });
     document.getElementById('ctxDelete').addEventListener('click', (e) => {
         e.stopPropagation();
         const btn = ctxTarget;
         hideCtxMenu();
-        if (btn) deleteCategoryBtn(btn);
+        if (!btn) return;
+        if (btn.dataset.customFeed === 'true') {
+            deleteCustomFeed(btn.dataset.filter);
+            showToast('已刪除自訂訂閱');
+            return;
+        }
+        deleteCategoryBtn(btn);
+    });
+
+    // ── 自訂訂閱 modal 綁定(#17) ──────────────────────────────
+    document.getElementById('cfForm')?.addEventListener('submit', _submitCustomFeed);
+    document.getElementById('cfClose')?.addEventListener('click', closeCustomFeedModal);
+    document.querySelector('#customFeedModal .cf-backdrop')?.addEventListener('click', closeCustomFeedModal);
+    document.getElementById('cfDelete')?.addEventListener('click', () => {
+        if (_cfEditId) { deleteCustomFeed(_cfEditId); showToast('已刪除自訂訂閱'); }
+        closeCustomFeedModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeCustomFeedModal();
     });
     document.addEventListener('click', hideCtxMenu);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtxMenu(); });
