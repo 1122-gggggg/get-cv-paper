@@ -17,7 +17,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from dotenv import load_dotenv
@@ -209,6 +209,7 @@ _WARMUP_CONCURRENCY = 2  # arXiv 嚴格限流;同時 ≤2 路請求避免 429
 
 _PAPERS_MAX_RESULTS = 5000
 _PAPERS_DAYS_MAX = 90
+_PAPERS_RESPONSE_CAP = 500  # 單次 /api/papers 回傳上限(截斷前先全域排序)
 # 召回層級:使用者請求(50)與語意召回(_WARMUP_MAX=80)都落入 80 桶,
 # cache key 因此一致 → warmup 命中,首位使用者不再付冷啟動成本。
 _CANONICAL_MAX_BUCKETS = (80, 200, 500, 1000, 5000)
@@ -863,6 +864,39 @@ def _canonical_max(max_results: int) -> int:
     return _CANONICAL_MAX_BUCKETS[-1]
 
 
+# 伺服器端排序鍵:latest=最新日期;其餘為對應指標(缺值視為 0/空字串墊底)。
+_PAPERS_SORT_KEYS: dict[str, Callable[[dict], Any]] = {
+    "latest": lambda p: p.get("published") or "",
+    "citations": lambda p: p.get("citation_count") or 0,
+    "hf": lambda p: p.get("hf_upvotes") or 0,
+    "stars": lambda p: p.get("github_stars") or 0,
+    "reviews": lambda p: p.get("review_avg") or 0,
+}
+
+
+def _sort_papers(papers: list[dict], sort: str) -> list[dict]:
+    """依指定指標降冪排序;未知 sort 原序返回。回傳新 list,不動原資料。"""
+    key_fn = _PAPERS_SORT_KEYS.get(sort)
+    if key_fn is None:
+        return papers
+    return sorted(papers, key=key_fn, reverse=True)
+
+
+def _filter_papers_by_query(papers: list[dict], query: str) -> list[dict]:
+    """標題/摘要/作者子字串過濾(case-insensitive)。"""
+    q = query.lower()
+    out: list[dict] = []
+    for p in papers:
+        hay = " ".join((
+            p.get("title") or "",
+            p.get("summary") or "",
+            " ".join(p.get("authors") or ()),
+        )).lower()
+        if q in hay:
+            out.append(p)
+    return out
+
+
 def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     """回傳 (cache_key, builder coroutine factory) — 給 endpoint 與 warmup 共用。"""
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
@@ -960,13 +994,16 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
                 if l2:
                     logger.info("L2 fallback for %s: %d papers", discipline_id, len(l2))
                     return {
-                        "papers": l2[:500],
+                        "papers": l2[:_PAPERS_RESPONSE_CAP],
                         "arxiv_native": arxiv_native,
                         "from_l2": True,
                     }
             raise RuntimeError(f"all sources empty for {discipline_id}")
-        if len(merged) > 500:
-            merged = merged[:500]
+        # rank-before-truncate:跨來源以最新日期全域排序後才截斷,避免「先接進來的
+        # 來源」吃光截斷額度、把較新但排在後面來源的論文丟掉(多來源領域尤其明顯)。
+        merged = _sort_papers(merged, "latest")
+        if len(merged) > _PAPERS_RESPONSE_CAP:
+            merged = merged[:_PAPERS_RESPONSE_CAP]
         return {"papers": merged, "arxiv_native": arxiv_native}
 
     return cache_key, build
@@ -984,6 +1021,8 @@ async def get_papers(
     max_results: int = 1000,
     days: int = 7,
     discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    sort: str = "latest",
+    q: str = "",
 ):
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
     max_results = _bounded_int(
@@ -994,6 +1033,20 @@ async def get_papers(
     )
     cache_key, builder = _papers_build_spec(discipline_id, days, max_results)
     body, etag = await _papers_cache.get_or_build(cache_key, builder)
+    # 預設(latest + 無查詢)走快取直出;只有非預設排序或帶查詢時才反序列化轉換,
+    # 讓前端常態請求零額外開銷(cache 存的是 bytes,canonical 已是 latest 序)。
+    sort = (sort or "latest").lower()
+    q = (q or "").strip()
+    needs_transform = q or (sort in _PAPERS_SORT_KEYS and sort != "latest")
+    if needs_transform:
+        payload = _json.loads(body)
+        papers = payload.get("papers", [])
+        if q:
+            papers = _filter_papers_by_query(papers, q)
+        papers = _sort_papers(papers, sort if sort in _PAPERS_SORT_KEYS else "latest")
+        payload = {**payload, "papers": papers, "count": len(papers)}
+        body = _json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        etag = make_etag(body)
     return etag_response(request, body, etag)
 
 

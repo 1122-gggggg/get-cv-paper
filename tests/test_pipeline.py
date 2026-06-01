@@ -156,6 +156,44 @@ class OpenReviewRatingTests(unittest.TestCase):
         self.assertEqual(clients._openreview_ratings({"details": {}}), [])
 
 
+class PapersSortFilterTests(unittest.TestCase):
+    _PAPERS = [
+        {"title": "Diffusion models", "summary": "image gen", "authors": ["Ho"],
+         "published": "2024-03-01 10:00", "citation_count": 5, "hf_upvotes": 2,
+         "github_stars": 100, "review_avg": 7.0},
+        {"title": "Mamba state space", "summary": "long context", "authors": ["Gu"],
+         "published": "2024-05-02 09:00", "citation_count": 50, "hf_upvotes": 0,
+         "github_stars": 9, "review_avg": None},
+        {"title": "RLHF tuning", "summary": "alignment work", "authors": ["Lee"],
+         "published": "2024-01-10 00:00", "citation_count": 0, "hf_upvotes": 30,
+         "review_avg": 8.5},
+    ]
+
+    def test_latest_sorts_by_published_desc(self):
+        out = main._sort_papers(self._PAPERS, "latest")
+        self.assertEqual([p["published"] for p in out],
+                         ["2024-05-02 09:00", "2024-03-01 10:00", "2024-01-10 00:00"])
+
+    def test_citations_sort_and_missing_keys_sink(self):
+        out = main._sort_papers(self._PAPERS, "citations")
+        self.assertEqual(out[0]["title"], "Mamba state space")  # 50 cits first
+
+    def test_unknown_sort_returns_input_unchanged(self):
+        out = main._sort_papers(self._PAPERS, "bogus")
+        self.assertIs(out, self._PAPERS)
+
+    def test_sort_does_not_mutate_input(self):
+        before = [p["title"] for p in self._PAPERS]
+        main._sort_papers(self._PAPERS, "citations")
+        self.assertEqual([p["title"] for p in self._PAPERS], before)
+
+    def test_filter_matches_title_summary_author(self):
+        self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "mamba")), 1)
+        self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "alignment")), 1)
+        self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "gu")), 1)
+        self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "zzz")), 0)
+
+
 class ProbeTests(unittest.TestCase):
     # Plain TestClient (no `with`) skips lifespan → no warmup / no network.
     def test_health_always_ok(self):
