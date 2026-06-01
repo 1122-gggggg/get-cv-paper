@@ -2765,6 +2765,51 @@ function syncTopConfActiveState() {
     });
 }
 
+// #16 子主題伺服器端深抓:保留字與會議 filter 不觸發(它們走既有特殊邏輯)
+const _RESERVED_CATEGORIES = new Set([
+    'all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'popular', 'reviews',
+]);
+const _topicFeedFetched = new Set();   // `${disc}::${topic}` 已抓過/進行中,避免重複請求
+let _topicFeedToken = 0;
+
+function _isTopicFilter(filter) {
+    if (!filter || _RESERVED_CATEGORIES.has(filter)) return false;
+    if (typeof CONF_FILTERS !== 'undefined' && CONF_FILTERS.has(filter)) return false;
+    return true;
+}
+
+// 漸進增強:選子主題時除了即時 client 端篩選,另向 server 抓 topic 收窄的深度結果
+// (arXiv 全文片語查詢),併入 allPapers 後重新篩選 — 不阻塞當前畫面。
+async function _fetchTopicFeed(filter) {
+    if (!_isTopicFilter(filter)) return;
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    const key = `${disc}::${filter}`;
+    if (_topicFeedFetched.has(key)) return;
+    _topicFeedFetched.add(key);
+    const token = ++_topicFeedToken;
+    const days = getTimeRangeMeta().days || 7;
+    const url = `/api/papers?max_results=100&days=${days}`
+        + `&discipline=${encodeURIComponent(disc)}&topic=${encodeURIComponent(filter)}`;
+    let data;
+    try {
+        const res = await fetch(url);
+        if (!res.ok) { _topicFeedFetched.delete(key); return; }
+        data = await res.json();
+    } catch (_) {
+        _topicFeedFetched.delete(key);   // 失敗可重試
+        return;
+    }
+    if (token !== _topicFeedToken) return;                  // 已切到別的 topic
+    if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return;   // 已切 discipline
+    const incoming = Array.isArray(data?.papers) ? data.papers : [];
+    if (!incoming.length) return;
+    const seen = new Set(allPapers.map(p => p.url));
+    const fresh = incoming.filter(p => p?.url && !seen.has(p.url));
+    if (!fresh.length) return;
+    allPapers = indexPapers(allPapers.concat(fresh));
+    if (currentCategory === filter) await filterPapers();
+}
+
 function _selectCategory(filter, activeEl) {
     document.querySelectorAll('.category-btn, .topic-item').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
@@ -2778,6 +2823,7 @@ function _selectCategory(filter, activeEl) {
     }
     syncTopConfActiveState();
     filterPapers();
+    if (_isTopicFilter(filter)) _fetchTopicFeed(filter);
 }
 
 function bindCategoryBtns() {

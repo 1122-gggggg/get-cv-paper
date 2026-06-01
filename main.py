@@ -880,6 +880,24 @@ _PAPERS_SORT_KEYS: dict[str, Callable[[dict], Any]] = {
 }
 
 
+_TOPIC_MAXLEN = 64
+_TOPIC_STRIP_RE = re.compile(r"[^\w\s\-]", re.UNICODE)
+
+
+def _sanitize_topic(topic: str) -> str:
+    """收窄用子主題清洗:去特殊字元、收斂空白、限長。空字串代表不收窄。"""
+    if not topic:
+        return ""
+    t = _TOPIC_STRIP_RE.sub(" ", topic)
+    t = " ".join(t.split())
+    return t[:_TOPIC_MAXLEN].strip()
+
+
+def _arxiv_terms_for_topic(topic: str) -> str:
+    """把清洗後的子主題轉成 arXiv all-field 片語查詢(已去引號,安全內插)。"""
+    return f'all:"{topic}"' if topic else ""
+
+
 def _sort_papers(papers: list[dict], sort: str) -> list[dict]:
     """依指定指標降冪排序;未知 sort 原序返回。回傳新 list,不動原資料。"""
     key_fn = _PAPERS_SORT_KEYS.get(sort)
@@ -903,8 +921,12 @@ def _filter_papers_by_query(papers: list[dict], query: str) -> list[dict]:
     return out
 
 
-def _papers_build_spec(discipline_id: str, days: int, max_results: int):
-    """回傳 (cache_key, builder coroutine factory) — 給 endpoint 與 warmup 共用。"""
+def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: str = ""):
+    """回傳 (cache_key, builder coroutine factory) — 給 endpoint 與 warmup 共用。
+
+    topic 非空時收窄各上游查詢(arXiv 全文片語 / S2·OpenAlex·Crossref search),
+    並跳過 paper_store 寫入(避免收窄子集污染 emergence 基線)。
+    """
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
     max_results = _bounded_int(
         max_results,
@@ -915,6 +937,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     if days >= 30 and max_results < 5000:
         max_results = 5000
     max_results = _canonical_max(max_results)
+    topic = _sanitize_topic(topic)
     disc = discipline(discipline_id)
     arxiv_native = bool(disc.get("arxiv_native", True))
     openalex_concept = disc.get("openalex_concept")
@@ -928,7 +951,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     cache_key = (
         f"{disc.get('cat','')}:{cats_key}:{openalex_concept or ''}:{crossref_subject or ''}:"
         f"{pubmed_mesh or ''}:{int(use_biorxiv)}:{int(use_medrxiv)}:{int(use_chemrxiv)}:"
-        f"{int(arxiv_native)}:{days}:{max_results}"
+        f"{int(arxiv_native)}:{days}:{max_results}:t={topic}"
     )
 
     arxiv_max = max_results if arxiv_native else min(max_results, 200)
@@ -951,11 +974,12 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
                 logger.warning("%s listing failed for %s: %s", name, discipline_id, e)
                 return []
 
+        arxiv_terms = _arxiv_terms_for_topic(topic) or None
         tasks = [_safe("arxiv", fetch_arxiv_listing(
-            c, disc["cat"], days, arxiv_max, cats=disc_cats or None,
+            c, disc["cat"], days, arxiv_max, cats=disc_cats or None, terms=arxiv_terms,
         ))]
         if s2_max > 0:
-            s2_query = disc.get("name") or disc.get("cat") or ""
+            s2_query = topic or disc.get("name") or disc.get("cat") or ""
             tasks.append(_safe("s2", fetch_s2_search(
                 c, query=s2_query, fos=s2_fos_for_cat(disc.get("cat", "")),
                 days=days, max_results=s2_max,
@@ -963,12 +987,12 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
         if openalex_max > 0:
             tasks.append(_safe("openalex", fetch_openalex_listing(
                 c, concept_id=openalex_concept, days=days, max_results=openalex_max,
-                search_query=None if openalex_concept else disc.get("name"),
+                search_query=topic or (None if openalex_concept else disc.get("name")),
             )))
         if crossref_max > 0:
             tasks.append(_safe("crossref", fetch_crossref_listing(
                 c, subject=crossref_subject, days=days, max_results=crossref_max,
-                search_query=None if crossref_subject else disc.get("name"),
+                search_query=topic or (None if crossref_subject else disc.get("name")),
             )))
         if biorxiv_max > 0:
             tasks.append(_safe("biorxiv", fetch_biorxiv_listing(c, "biorxiv", days, biorxiv_max)))
@@ -984,7 +1008,8 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
         merged = [_slim_paper(p) for p in merged]
 
         primary_cat = disc.get("cat") or ""
-        if merged and primary_cat:
+        # topic 收窄時不寫入 store:子集會扭曲 emergence 基線與廣域 L2 快照
+        if merged and primary_cat and not topic:
             try:
                 await asyncio.to_thread(_paper_store.upsert_many, merged, primary_cat)
                 await asyncio.to_thread(_paper_store.record_snapshots, merged, primary_cat)
@@ -992,6 +1017,10 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
                 logger.warning("paper_store upsert failed for %s: %s", discipline_id, e)
 
         if not merged:
+            # topic 收窄查無結果是合法狀態(該子主題近期無新論文),直接回空集,
+            # 不走廣域 L2 fallback(否則會回傳未收窄的論文,誤導使用者)。
+            if topic:
+                return {"papers": [], "arxiv_native": arxiv_native, "topic": topic}
             # L2 fallback: upstream 全掛時,改從 SQLite 撈最近 days 內的歷史紀錄
             if primary_cat:
                 try:
@@ -1014,7 +1043,10 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
         merged = _sort_papers(merged, "latest")
         if len(merged) > _PAPERS_RESPONSE_CAP:
             merged = merged[:_PAPERS_RESPONSE_CAP]
-        return {"papers": merged, "arxiv_native": arxiv_native}
+        result = {"papers": merged, "arxiv_native": arxiv_native}
+        if topic:
+            result["topic"] = topic
+        return result
 
     return cache_key, build
 
@@ -1033,6 +1065,7 @@ async def get_papers(
     discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
     sort: str = "latest",
     q: str = "",
+    topic: str = "",
 ):
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
     max_results = _bounded_int(
@@ -1041,7 +1074,7 @@ async def get_papers(
         min_value=1,
         max_value=_PAPERS_MAX_RESULTS,
     )
-    cache_key, builder = _papers_build_spec(discipline_id, days, max_results)
+    cache_key, builder = _papers_build_spec(discipline_id, days, max_results, topic=topic)
     body, etag = await _papers_cache.get_or_build(cache_key, builder)
     # 預設(latest + 無查詢)走快取直出;只有非預設排序或帶查詢時才反序列化轉換,
     # 讓前端常態請求零額外開銷(cache 存的是 bytes,canonical 已是 latest 序)。
