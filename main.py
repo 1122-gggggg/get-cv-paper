@@ -1240,6 +1240,102 @@ async def get_papers(
     return etag_response(request, body, etag)
 
 
+_FEED_MAX_FIELDS = 8       # 合併 feed 一次最多併幾個領域
+_FEED_PER_FIELD_MAX = 80   # 對齊 _canonical_max 桶 → days=7 時暖機領域零冷啟動
+
+
+def _valid_field_ids(raw: str) -> list[str]:
+    """逗號分隔 discipline id → 去重保序、濾掉未知 id、上限 _FEED_MAX_FIELDS。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for tok in (raw or "").split(","):
+        fid = tok.strip()
+        if fid and fid in DISCIPLINES and fid not in seen:
+            seen.add(fid)
+            out.append(fid)
+            if len(out) >= _FEED_MAX_FIELDS:
+                break
+    return out
+
+
+@app.get("/api/feed")
+async def get_combined_feed(
+    request: Request,
+    fields: str = "",
+    days: int = 7,
+    sort: str = "latest",
+    q: str = "",
+    max_results: int = 300,
+):
+    """合併「我的領域」feed(#14):多個 discipline 併成單一去重、排序的串流。
+
+    各領域以與 /api/papers 相同的 cache 規格建構(預設 days=7、per-field 80 →
+    對齊暖機桶,熱門領域零冷啟動);跨領域去重後保留每篇命中的領域標籤,
+    讓前端標示來源並沿用單領域 feed 的排序/搜尋/卡片渲染。
+    """
+    field_ids = _valid_field_ids(fields)
+    if not field_ids:
+        raise HTTPException(status_code=400, detail="empty or unknown fields")
+    days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
+    max_results = _bounded_int(
+        max_results, default=300, min_value=1, max_value=_PAPERS_RESPONSE_CAP
+    )
+
+    async def _pool(fid: str) -> list[dict]:
+        key, builder = _papers_build_spec(fid, days, _FEED_PER_FIELD_MAX)
+        body, _etag = await _papers_cache.get_or_build(key, builder)
+        return (_json.loads(body) or {}).get("papers") or []
+
+    pools = await asyncio.gather(
+        *[_pool(f) for f in field_ids], return_exceptions=True
+    )
+
+    merged: list[dict] = []
+    index: dict[str, int] = {}
+    for fid, pool in zip(field_ids, pools):
+        if isinstance(pool, Exception):
+            logger.warning("feed: pool unavailable for %s: %s", fid, pool)
+            continue
+        fname = discipline(fid).get("name") or fid
+        for p in pool:
+            ext = p.get("external_ids") or {}
+            k = (ext.get("arxiv") if isinstance(ext, dict) else "") or p.get("url") or p.get("title") or ""
+            if not k:
+                continue
+            pos = index.get(k)
+            if pos is not None:
+                tags = merged[pos].setdefault("fields", [])
+                if fid not in tags:
+                    tags.append(fid)
+                continue
+            entry = dict(p)
+            entry["fields"] = [fid]
+            entry["field_name"] = fname
+            index[k] = len(merged)
+            merged.append(entry)
+
+    q = (q or "").strip()
+    if q:
+        merged = _filter_papers_by_query(merged, q)
+    sort = (sort or "latest").lower()
+    merged = _sort_papers(merged, sort if sort in _PAPERS_SORT_KEYS else "latest")
+    if len(merged) > max_results:
+        merged = merged[:max_results]
+
+    body = _json.dumps(
+        {
+            "papers": merged,
+            "count": len(merged),
+            "fields": field_ids,
+            "as_of": int(time.time()),
+            "combined": True,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return etag_response(request, body, make_etag(body))
+
+
 @app.get("/api/stream")
 async def stream(request: Request) -> StreamingResponse:
     """SSE 即時推播:有新論文落地時通知開著的分頁(#15)。

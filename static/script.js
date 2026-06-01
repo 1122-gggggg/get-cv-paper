@@ -406,7 +406,7 @@ function applyDiscipline(disciplineId) {
 
     // 建構 CONF_FILTERS：data-filter="conf_<key>"
     CONF_FILTERS = new Map(d.confs.map(c => [`conf_${c.key.replace(/\s+/g, '_')}`, c.key.toLowerCase()]));
-    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'popular', 'reviews', ...CONF_FILTERS.keys()]);
+    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'popular', 'reviews', 'my_fields', ...CONF_FILTERS.keys()]);
 
     // VENUE_PATTERNS：顯示在卡片上的 venue 徽章
     VENUE_PATTERNS = d.confs.map(c => ({
@@ -1953,6 +1953,21 @@ function buildCard(paper, index) {
     titleLink.href = paper.url;
     titleLink.textContent = paper.title;
 
+    // 我的領域(#14):合併 feed 標出論文來自哪個追蹤領域
+    if (currentCategory === 'my_fields' && (paper.field_name || (Array.isArray(paper.fields) && paper.fields.length))) {
+        const titleEl = card.querySelector('.paper-title');
+        if (titleEl) {
+            const ids = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : null;
+            const names = ids
+                ? ids.map(id => window.DISCIPLINES?.[id]?.name || id)
+                : [paper.field_name];
+            const badge = document.createElement('span');
+            badge.className = 'field-badge';
+            badge.textContent = '🗂️ ' + names.join(' · ');
+            titleEl.parentNode.insertBefore(badge, titleEl);
+        }
+    }
+
     // 來源 tooltip (hover 卡片時顯示來自哪些上游)
     const _srcArr = Array.isArray(paper.source) ? paper.source : (paper.source ? [paper.source] : ['arxiv']);
     const _srcLabel = {
@@ -2441,7 +2456,7 @@ function _matchCatTerm(term, tLc, sLc) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || currentCategory === 'my_fields' || currentCategory.startsWith('custom_') || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -2482,6 +2497,7 @@ function currentCategoryLabel() {
     if (currentCategory === 'emerging') return '爆發中論文';
     if (currentCategory === 'popular') return '熱門論文';
     if (currentCategory === 'reviews') return '評審熱度';
+    if (currentCategory === 'my_fields') return '我的領域';
     if (CONF_FILTERS.has(currentCategory)) {
         return document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim()
             || CONF_FILTERS.get(currentCategory)?.toUpperCase()
@@ -2828,6 +2844,40 @@ async function filterPapers() {
         } catch (e) {
             loader.classList.add('hidden');
             alert('自訂訂閱載入失敗：' + e.message);
+        }
+        return;
+    }
+
+    // 我的領域(#14):把追蹤清單(getTracks)合併成單一去重、排序的 feed
+    if (currentCategory === 'my_fields') {
+        const fields = (window.getTracks?.() || []);
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        if (!fields.length) {
+            loader.classList.add('hidden');
+            renderPapers([], '🗂️ 我的領域（尚未追蹤任何領域）');
+            showToast('先在「切換研究領域」面板用 ☆ 星號追蹤幾個領域，這裡就會合併成單一動態');
+            if (typeof openDisciplinePicker === 'function') openDisciplinePicker({ closable: true });
+            return;
+        }
+        try {
+            const days = getTimeRangeMeta().days || 7;
+            const params = new URLSearchParams({ fields: fields.join(','), days: String(days), max_results: '300' });
+            const res = await fetch(`/api/feed?${params}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            let papers = indexPapers(Array.isArray(data.papers) ? data.papers : []);
+            if (query) papers = applyFilter(papers, query);
+            papers = applyTimeRange(papers);
+            await prepareMetricData(papers, sortValue);
+            papers = sortPapersByMetric(papers, sortValue);
+            if (!papers.length) showToast('追蹤的領域近期沒有新論文，試著拉長時間範圍或多追蹤幾個領域');
+            const names = fields.map(id => window.DISCIPLINES?.[id]?.name || id).join('、');
+            renderPapers(papers, `🗂️ 我的領域（${names} · ${getTimeRangeMeta().label} · 依${getSortMeta().label} · ${papers.length} 篇）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('我的領域載入失敗：' + e.message);
         }
         return;
     }
