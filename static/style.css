@@ -2630,6 +2630,26 @@ body.light-mode .side-discipline .switch-discipline-btn {
     letter-spacing: 0.01em;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.rss-subscribe-btn {
+    width: 100%;
+    margin-top: 8px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--side-line);
+    color: var(--ink-side-soft);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+body.light-mode .rss-subscribe-btn { background: rgba(255, 255, 255, 0.6); }
+.rss-subscribe-btn:hover {
+    background: color-mix(in srgb, #ee802f 16%, transparent);
+    border-color: color-mix(in srgb, #ee802f 50%, transparent);
+    color: var(--ink-side);
+}
 
 /* Sidebar search (mini, optional visual only — actual search stays in header) */
 .side-hint {

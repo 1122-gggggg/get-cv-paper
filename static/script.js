@@ -406,7 +406,7 @@ function applyDiscipline(disciplineId) {
 
     // 建構 CONF_FILTERS：data-filter="conf_<key>"
     CONF_FILTERS = new Map(d.confs.map(c => [`conf_${c.key.replace(/\s+/g, '_')}`, c.key.toLowerCase()]));
-    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'popular', 'reviews', 'my_fields', ...CONF_FILTERS.keys()]);
+    SPECIAL_FILTERS = new Set(['all', 'favorites', 'top_conf', 'hf_daily', 'emerging', 'popular', 'reviews', 'my_fields', 'hot', ...CONF_FILTERS.keys()]);
 
     // VENUE_PATTERNS：顯示在卡片上的 venue 徽章
     VENUE_PATTERNS = d.confs.map(c => ({
@@ -751,6 +751,45 @@ function renderDpCategoryChips() {
     for (const c of cats) mk(c.id, `${c.icon} ${c.name}`, c.ids.length);
 }
 
+// ── Modal 無障礙(#20):focus trap + Escape 關閉 + 還原焦點 ──────
+const _FOCUSABLE_SEL = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+const _modalTrap = new Map(); // modalId -> { handler, prevFocus }
+
+function trapModal(modalId, onEscape) {
+    const modal = document.getElementById(modalId);
+    if (!modal || _modalTrap.has(modalId)) return;
+    const prevFocus = document.activeElement;
+    modal.setAttribute('role', modal.getAttribute('role') || 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    const handler = (e) => {
+        if (e.key === 'Escape') {
+            if (typeof onEscape === 'function') { e.preventDefault(); onEscape(); }
+            return;
+        }
+        if (e.key !== 'Tab') return;
+        const items = [...modal.querySelectorAll(_FOCUSABLE_SEL)].filter(el => el.offsetParent !== null);
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault(); first.focus();
+        }
+    };
+    modal.addEventListener('keydown', handler);
+    _modalTrap.set(modalId, { handler, prevFocus });
+}
+
+function releaseModal(modalId) {
+    const st = _modalTrap.get(modalId);
+    if (!st) return;
+    document.getElementById(modalId)?.removeEventListener('keydown', st.handler);
+    _modalTrap.delete(modalId);
+    if (st.prevFocus && typeof st.prevFocus.focus === 'function') {
+        try { st.prevFocus.focus(); } catch (e) {}
+    }
+}
+
 function openDisciplinePicker({ closable = true } = {}) {
     const picker = document.getElementById('disciplinePicker');
     const closeBtn = document.getElementById('disciplinePickerClose');
@@ -774,11 +813,13 @@ function openDisciplinePicker({ closable = true } = {}) {
 
     if (closeBtn) closeBtn.hidden = !closable;
     picker.classList.remove('hidden');
+    trapModal('disciplinePicker', closable ? closeDisciplinePicker : null);
     setTimeout(() => searchInput?.focus(), 60);
 }
 
 function closeDisciplinePicker() {
     document.getElementById('disciplinePicker')?.classList.add('hidden');
+    releaseModal('disciplinePicker');
 }
 
 function selectDiscipline(id) {
@@ -820,6 +861,8 @@ async function openSimilarModal(paper) {
     if (seedEl) seedEl.innerHTML = `<div class="similar-seed-title">${escapeHtml(paper.title)}</div>`;
     if (bodyEl) bodyEl.innerHTML = '<div class="similar-loading">載入中…</div>';
     modal.classList.remove('hidden');
+    trapModal('similarModal', closeSimilarModal);
+    setTimeout(() => document.getElementById('similarCloseBtn')?.focus(), 30);
 
     const arxivId = _extractArxivId(paper);
     if (!arxivId) {
@@ -856,6 +899,7 @@ async function openSimilarModal(paper) {
 
 function closeSimilarModal() {
     document.getElementById('similarModal')?.classList.add('hidden');
+    releaseModal('similarModal');
 }
 
 // ── 最近搜尋（每個 discipline 各自 5 筆） ───────────────────────
@@ -1087,10 +1131,12 @@ function openCustomFeedModal(editId) {
     document.getElementById('cfIds').value      = (feed?.ids || []).join(', ');
     document.getElementById('cfDelete').hidden  = !feed;
     modal.classList.remove('hidden');
+    trapModal('customFeedModal', closeCustomFeedModal);
     setTimeout(() => document.getElementById('cfName').focus(), 30);
 }
 function closeCustomFeedModal() {
     document.getElementById('customFeedModal')?.classList.add('hidden');
+    releaseModal('customFeedModal');
     _cfEditId = null;
 }
 function _submitCustomFeed(e) {
@@ -1953,8 +1999,8 @@ function buildCard(paper, index) {
     titleLink.href = paper.url;
     titleLink.textContent = paper.title;
 
-    // 我的領域(#14):合併 feed 標出論文來自哪個追蹤領域
-    if (currentCategory === 'my_fields' && (paper.field_name || (Array.isArray(paper.fields) && paper.fields.length))) {
+    // 我的領域(#14)/全領域熱榜(#20):標出論文來自哪個領域
+    if ((currentCategory === 'my_fields' || currentCategory === 'hot') && (paper.field_name || (Array.isArray(paper.fields) && paper.fields.length))) {
         const titleEl = card.querySelector('.paper-title');
         if (titleEl) {
             const ids = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : null;
@@ -2456,7 +2502,7 @@ function _matchCatTerm(term, tLc, sLc) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || currentCategory === 'my_fields' || currentCategory.startsWith('custom_') || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || currentCategory === 'my_fields' || currentCategory === 'hot' || currentCategory.startsWith('custom_') || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -2498,6 +2544,7 @@ function currentCategoryLabel() {
     if (currentCategory === 'popular') return '熱門論文';
     if (currentCategory === 'reviews') return '評審熱度';
     if (currentCategory === 'my_fields') return '我的領域';
+    if (currentCategory === 'hot') return '全領域熱榜';
     if (CONF_FILTERS.has(currentCategory)) {
         return document.querySelector(`.conf-item[data-filter="${currentCategory}"]`)?.textContent.trim()
             || CONF_FILTERS.get(currentCategory)?.toUpperCase()
@@ -2735,6 +2782,38 @@ async function filterPapers() {
         } catch (e) {
             loader.classList.add('hidden');
             alert('爆發中載入失敗：' + e.message);
+        }
+        return;
+    }
+
+    // 全領域熱榜(#20):跨所有追蹤領域的 emergence burst,大家正在關注什麼
+    if (currentCategory === 'hot') {
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            const res = await fetch('/api/hot?window=7&limit=60');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            let papers = indexPapers(Array.isArray(data.papers) ? data.papers : []);
+            if (query) papers = applyFilter(papers, query);
+            if (!papers.length) {
+                const why = data.warming_up
+                    ? '🌱 資料累積中:跨領域熱榜需要至少兩天的每日快照,過幾天再回來看'
+                    : '目前全領域沒有明顯爆發的論文,稍後再試';
+                showToast(why);
+                renderPapers([], '🌐 全領域熱榜');
+                return;
+            }
+            if (sortValue !== 'latest') {
+                await prepareMetricData(papers, sortValue);
+                papers = sortPapersByMetric(papers, sortValue);
+            }
+            const sortLabel = sortValue === 'latest' ? '依爆發指數' : `依${getSortMeta().label}`;
+            renderPapers(papers, `🌐 全領域熱榜（跨領域 · 近 7 天 · ${sortLabel} · ${papers.length} 篇）`);
+        } catch (e) {
+            loader.classList.add('hidden');
+            alert('全領域熱榜載入失敗：' + e.message);
         }
         return;
     }
@@ -3474,6 +3553,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1) 先綁定切換領域按鈕（無論有沒有選領域都要能開啟）
     document.getElementById('switchDisciplineBtn')?.addEventListener('click', () => {
         openDisciplinePicker({ closable: true });
+    });
+    document.getElementById('rssSubscribeBtn')?.addEventListener('click', () => {
+        const days = getTimeRangeMeta().days || 7;
+        const url = currentCategory === 'hot'
+            ? `/api/rss?view=hot&days=${days}`
+            : `/api/rss?discipline=${encodeURIComponent(window.getActiveDiscipline?.()?.id || 'cv')}&days=${days}`;
+        window.open(url, '_blank', 'noopener');
     });
     document.getElementById('disciplinePickerClose')?.addEventListener('click', closeDisciplinePicker);
     document.querySelector('#disciplinePicker .dp-backdrop')?.addEventListener('click', () => {

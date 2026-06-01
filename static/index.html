@@ -114,6 +114,7 @@
                     <span id="activeDisciplineBadge" class="discipline-badge">選擇領域</span>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                 </button>
+                <button id="rssSubscribeBtn" class="rss-subscribe-btn" type="button" title="訂閱 RSS：目前領域最新論文（在「全領域熱榜」時則訂閱跨領域熱榜）">📡 RSS 訂閱</button>
             </div>
             <div class="side-section-label">檢視 <span class="hint">按主題篩選</span></div>
             <nav class="side-nav">
@@ -124,6 +125,7 @@
                         <button class="category-btn" data-filter="favorites">⭐ 收藏夾</button>
                         <button class="category-btn" data-filter="my_fields" title="把你追蹤的多個研究領域合併成單一去重、排序的動態（在「切換研究領域」面板用 ☆ 追蹤）">🗂️ 我的領域</button>
                         <button class="category-btn" data-filter="hf_daily" title="HuggingFace 每日精選（社群 upvote）">🤗 HF Daily</button>
+                        <button class="category-btn" data-filter="hot" title="跨所有領域近期爆發中的論文（citation/HF/star burst 聚合）— 大家正在關注什麼">🌐 全領域熱榜</button>
                         <button class="category-btn" data-filter="emerging" title="近期引用／社群熱度爆發中的論文（citation + HF velocity 融合）">🚀 爆發中</button>
                         <button class="category-btn" data-filter="popular" title="全站使用者近 7 天開啟最多的論文（匿名點擊熱度）">🔥 熱門</button>
                         <button class="category-btn" data-filter="reviews" title="四大會議（ICLR/NeurIPS/ICML/COLM）當前審查週期評分最高的投稿">📊 評審熱度</button>
@@ -325,9 +327,9 @@
     <!-- 研究領域選擇器 -->
     <div id="disciplinePicker" class="discipline-picker hidden">
         <div class="dp-backdrop"></div>
-        <div class="dp-modal">
+        <div class="dp-modal" role="dialog" aria-modal="true" aria-labelledby="dpTitle">
             <div class="dp-header">
-                <h2 class="dp-title">選擇你的研究領域</h2>
+                <h2 class="dp-title" id="dpTitle">選擇你的研究領域</h2>
                 <p class="dp-subtitle">主領域決定 arXiv 分類與頂會主題。點卡片切換，★ 加入追蹤清單（跨 2+ 領域論文會標為 🌉 Bridge）。</p>
                 <button id="disciplinePickerClose" class="dp-close" hidden>×</button>
             </div>
@@ -349,10 +351,10 @@
     <!-- 相似論文 modal -->
     <div id="similarModal" class="similar-modal hidden">
         <div class="similar-backdrop"></div>
-        <div class="similar-panel">
+        <div class="similar-panel" role="dialog" aria-modal="true" aria-labelledby="similarTitle">
             <div class="similar-head">
-                <h3 class="similar-title">相似論文</h3>
-                <button id="similarCloseBtn" class="similar-close" title="關閉">×</button>
+                <h3 class="similar-title" id="similarTitle">相似論文</h3>
+                <button id="similarCloseBtn" class="similar-close" title="關閉" aria-label="關閉">×</button>
             </div>
             <div class="similar-seed" id="similarSeed"></div>
             <div class="similar-body" id="similarBody">

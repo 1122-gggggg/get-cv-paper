@@ -17,6 +17,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -188,6 +189,7 @@ _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
 _custom_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=128)
 # 突發偵測:每 30 分新鮮、24h stale,讀 metric_snapshots delta(每日才變)
 _emerging_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=32)
+_hot_cache = CachedJSON(ttl=15 * 60, stale_ttl=12 * 3600, max_keys=16)
 
 # 個別 ID-level 快取(citations / pwc):跨 request 共享、JSON 持久化
 _s2_store = LRUStore("s2", maxsize=20000, ttl=6 * 3600, cache_dir=CACHE_DIR)
@@ -233,6 +235,15 @@ _EMERGE_STAR_PRIOR = 20.0  # star 數量級較大,prior 也較高,避免 0→30 
 _EMERGE_HF_WEIGHT = 0.6   # 引用是較持久的訊號,權重高於 HF 投票
 _EMERGE_STAR_WEIGHT = 0.4  # GitHub star 是工程關注度,權重低於引用/HF
 _EMERGE_MIN = 1.0         # z-score 門檻,過濾 50→51 這類噪音
+# 全領域熱榜(/api/hot):跨所有 snapshot 追蹤的領域聚合 emergence,回答
+# 「大家正在關注哪些領域/論文」。同一篇可橫跨多領域 → 取最高分、累積領域標籤。
+_HOT_DISCIPLINES = _WARMUP_DISCIPLINES + _WARMUP_DISCIPLINES_TIER2
+_HOT_DEFAULT_LIMIT = 40
+_HOT_LIMIT_MAX = 100
+_HOT_WINDOW_MAX = 30
+_RSS_DAYS_MAX = 30
+_RSS_ITEMS_MAX = 80
+_RSS_SUMMARY_MAX = 600
 _CITATIONS_MAX = 200
 _PWC_IDS_MAX = 100
 _GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")  # 有 token → 5000 req/hr,無 → 60
@@ -1547,6 +1558,178 @@ async def get_emerging(
 
     body, etag = await _emerging_cache.get_or_build(cache_key, _build)
     return etag_response(request, body, etag)
+
+
+async def _hot_build(window: int, limit: int) -> dict:
+    """跨領域 emergence 聚合(/api/hot 的核心)。RSS view=hot 也共用此快取。"""
+    specs: list[tuple[str, str, str]] = []
+    for did in _HOT_DISCIPLINES:
+        d = discipline(did)
+        cat = d.get("cat") or ""
+        if cat:
+            specs.append((did, cat, d.get("name") or did))
+    deltas_lists = await asyncio.gather(
+        *[asyncio.to_thread(_paper_store.metric_deltas, cat, window, 300) for _, cat, _ in specs]
+    )
+    agg: dict[str, dict] = {}
+    any_delta = False
+    for (did, cat, name), deltas in zip(specs, deltas_lists):
+        if deltas:
+            any_delta = True
+        for d in deltas:
+            s = _emergence_score(d)
+            if not (s["cit_delta"] or s["hf_delta"] or s["star_delta"]):
+                continue
+            if s["emergence"] < _EMERGE_MIN:
+                continue
+            pid = d["paper_id"]
+            cur = agg.get(pid)
+            if cur is None:
+                cur = {"score": s, "delta": d, "cat": cat, "fields": [], "field_names": []}
+                agg[pid] = cur
+            elif s["emergence"] > cur["score"]["emergence"]:
+                cur["score"] = s
+                cur["delta"] = d
+                cur["cat"] = cat
+            if did not in cur["fields"]:
+                cur["fields"].append(did)
+                cur["field_names"].append(name)
+    if not agg:
+        return {"papers": [], "count": 0, "warming_up": not any_delta, "window": window}
+    ranked = sorted(
+        agg.items(), key=lambda kv: kv[1]["score"]["emergence"], reverse=True
+    )[:limit]
+    by_cat: dict[str, list[str]] = {}
+    for pid, info in ranked:
+        by_cat.setdefault(info["cat"], []).append(pid)
+    payloads: dict[str, dict] = {}
+    fetched = await asyncio.gather(
+        *[asyncio.to_thread(_paper_store.payloads_by_ids, pids, cat) for cat, pids in by_cat.items()]
+    )
+    for got in fetched:
+        payloads.update(got)
+    papers: list[dict] = []
+    for pid, info in ranked:
+        p = payloads.get(pid)
+        if not p:
+            continue
+        item = _slim_paper(p)
+        item["emergence"] = info["score"]
+        item["cit_new"] = info["delta"]["cit_new"]
+        item["hf_now"] = info["delta"]["hf_new"]
+        item["star_now"] = info["delta"].get("star_new", 0)
+        item["fields"] = info["fields"]
+        item["field_name"] = info["field_names"][0] if info["field_names"] else None
+        papers.append(item)
+    return {
+        "papers": papers,
+        "count": len(papers),
+        "warming_up": False,
+        "window": window,
+        "cross_discipline": True,
+    }
+
+
+@app.get("/api/hot")
+async def get_hot(request: Request, window: int = 7, limit: int = _HOT_DEFAULT_LIMIT):
+    """全領域熱榜(#20):跨所有追蹤領域聚合 emergence burst → 大家正在關注什麼。
+
+    對每個 snapshot 追蹤的領域算 metric_deltas + emergence z-score,跨領域去重
+    (同一篇橫跨多領域取最高分並累積領域標籤),依 emergence 排序回傳。需 snapshot
+    表 ≥2 個日期才有 delta,冷啟期回 warming_up=true 空清單。
+    """
+    window = _bounded_int(window, default=7, min_value=2, max_value=_HOT_WINDOW_MAX)
+    limit = _bounded_int(limit, default=_HOT_DEFAULT_LIMIT, min_value=1, max_value=_HOT_LIMIT_MAX)
+    cache_key = f"{window}:{limit}"
+    body, etag = await _hot_cache.get_or_build(
+        cache_key, lambda: _hot_build(window, limit)
+    )
+    return etag_response(request, body, etag)
+
+
+# ── RSS 2.0 訂閱輸出 (#20) ──────────────────────────────────────
+def _rfc822(published: str | None) -> str:
+    """ISO/日期字串 → RFC822 (RSS pubDate)。解析失敗回空字串(該 item 省略 pubDate)。"""
+    if not published:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(published).strip().replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return format_datetime(dt)
+    except (ValueError, TypeError):
+        return ""
+
+
+def _rss_xml(title: str, link: str, description: str, self_url: str, papers: list[dict]) -> bytes:
+    items: list[str] = []
+    for p in papers[:_RSS_ITEMS_MAX]:
+        url = str(p.get("url") or "")
+        if not url:
+            continue
+        url_x = _html.escape(url)
+        t = _html.escape(str(p.get("title") or "(untitled)"))
+        authors = p.get("authors") or []
+        auth = _html.escape(", ".join(authors[:8])) if isinstance(authors, list) else ""
+        summ = _html.escape(str(p.get("summary") or "")[:_RSS_SUMMARY_MAX])
+        desc = f"{auth} — {summ}" if auth else summ
+        pub = _rfc822(p.get("published"))
+        pub_el = f"<pubDate>{pub}</pubDate>" if pub else ""
+        items.append(
+            f"<item><title>{t}</title><link>{url_x}</link>"
+            f'<guid isPermaLink="true">{url_x}</guid>{pub_el}'
+            f"<description>{desc}</description></item>"
+        )
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">\n<channel>\n'
+        f"<title>{_html.escape(title)}</title>"
+        f"<link>{_html.escape(link)}</link>"
+        f"<description>{_html.escape(description)}</description>"
+        f'<atom:link href="{_html.escape(self_url)}" rel="self" type="application/rss+xml"/>\n'
+        + "\n".join(items)
+        + "\n</channel>\n</rss>\n"
+    )
+    return body.encode("utf-8")
+
+
+@app.get("/api/rss")
+async def get_rss(
+    request: Request,
+    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    days: int = 7,
+    view: str = "",
+):
+    """RSS 2.0 訂閱:預設某領域最新論文;view=hot 則輸出全領域熱榜。"""
+    days = _bounded_int(days, default=7, min_value=1, max_value=_RSS_DAYS_MAX)
+    self_url = str(request.url)
+    base = "https://allenvisionary.duckdns.org/"
+
+    if view == "hot":
+        body, _etag = await _hot_cache.get_or_build(
+            f"{days}:{_HOT_DEFAULT_LIMIT}", lambda: _hot_build(days, _HOT_DEFAULT_LIMIT)
+        )
+        papers = (_json.loads(body) or {}).get("papers") or []
+        xml = _rss_xml(
+            "全領域熱榜 · Visionary Papers",
+            base, "跨領域近期爆發中的論文(citation/HF/star burst)", self_url, papers,
+        )
+        return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
+
+    if discipline_id not in DISCIPLINES:
+        raise HTTPException(status_code=404, detail="unknown discipline")
+    d = discipline(discipline_id)
+    key, builder = _papers_build_spec(discipline_id, days, _WARMUP_MAX)
+    body, _etag = await _papers_cache.get_or_build(key, builder)
+    papers = (_json.loads(body) or {}).get("papers") or []
+    name = d.get("name") or discipline_id
+    xml = _rss_xml(
+        f"{name} 最新論文 · Visionary Papers",
+        f"{base}?discipline={discipline_id}",
+        f"{name} 近 {days} 天最新論文",
+        self_url, papers,
+    )
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
 
 
 @app.get("/api/search")
