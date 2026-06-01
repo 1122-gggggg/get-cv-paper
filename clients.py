@@ -10,17 +10,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import Any
 
+import defusedxml.ElementTree as DET
 import httpx
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-ARXIV_BASE = "http://export.arxiv.org/api/query"
+ARXIV_BASE = "https://export.arxiv.org/api/query"
 ARXIV_UA = "Mozilla/5.0 DesktopDashboard/1.0"
 
 _ARXIV_NS = {
@@ -35,7 +35,7 @@ _ARXIV_ID_NUM_RE = re.compile(r"(\d{4}\.\d{4,6})")
 
 
 def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[str, Any]]:
-    root = ET.fromstring(xml_data)
+    root = DET.fromstring(xml_data)
     papers: list[dict[str, Any]] = []
     # arXiv 回應是 submittedDate desc;一旦遇到 cutoff 之前的可早停
     early_stop = cutoff is not None
@@ -92,15 +92,17 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
 async def fetch_arxiv_listing(
     client: httpx.AsyncClient, cat: str, days: int, max_results: int
 ) -> list[dict[str, Any]]:
-    url = (
-        f"{ARXIV_BASE}?search_query=cat:{cat}"
-        f"&sortBy=submittedDate&sortOrder=descending&max_results={max_results}"
-    )
+    params = {
+        "search_query": f"cat:{cat}",
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+        "max_results": max_results,
+    }
     # arXiv 嚴格限流;遇 429/503 退避重試,避免整輪 warmup 把 IP 卡死
     delays = (3.0, 8.0, 0.0)  # 最後一次不再 sleep
     for attempt, sleep_s in enumerate(delays):
         try:
-            r = await client.get(url, timeout=30.0)
+            r = await client.get(ARXIV_BASE, params=params, timeout=30.0)
             if r.status_code in (429, 503):
                 if sleep_s > 0:
                     logger.info("arXiv %d on %s, retrying in %ss", r.status_code, cat, sleep_s)
@@ -124,13 +126,14 @@ async def fetch_arxiv_listing(
 async def fetch_arxiv_search(
     client: httpx.AsyncClient, q: str, max_results: int
 ) -> list[dict[str, Any]]:
-    encoded = urllib.parse.quote(q.strip())
-    url = (
-        f"{ARXIV_BASE}?search_query=all:{encoded}"
-        f"&sortBy=relevance&sortOrder=descending&max_results={max_results}"
-    )
+    params = {
+        "search_query": f"all:{q.strip()}",
+        "sortBy": "relevance",
+        "sortOrder": "descending",
+        "max_results": max_results,
+    }
     try:
-        r = await client.get(url, timeout=20.0)
+        r = await client.get(ARXIV_BASE, params=params, timeout=20.0)
         r.raise_for_status()
     except Exception as e:
         logger.error("arXiv search failed: %s", e)

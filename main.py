@@ -253,6 +253,17 @@ def _unique_csv(raw: str, *, max_items: int, field_name: str = "ids") -> list[st
     return out
 
 
+# arXiv id 形態:新式 2401.12345(v2),或舊式 cs.AI/0601001(v1)
+_ARXIV_ID_VALID_RE = re.compile(
+    r"^(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z][a-z\-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?)$"
+)
+
+
+def _valid_arxiv_ids(ids: list[str]) -> list[str]:
+    """過濾成合法 arXiv id;擋掉亂填的字串浪費 embedding / 上游呼叫。"""
+    return [i for i in ids if _ARXIV_ID_VALID_RE.match(i)]
+
+
 async def _flush_task() -> None:
     while True:
         try:
@@ -555,6 +566,16 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/api/health")
 def health():
     return {"ok": True, "t": int(time.time())}
+
+
+@app.get("/api/ready")
+def ready():
+    """Readiness:paper cache 暖了才算 ready。供監控/手動探測,不接 Fly health check
+    (單機 + volume 不能 blue-green;若把這個接上 LB,arXiv 限流冷啟會誤判 unhealthy)。"""
+    warm = _papers_cache.stats()["entries"] > 0
+    if not warm:
+        raise HTTPException(status_code=503, detail="cache cold")
+    return {"ready": True, "entries": _papers_cache.stats()["entries"], "t": int(time.time())}
 
 
 _SSR_PAPER_COUNT = 30
@@ -1045,7 +1066,7 @@ async def get_personalized(
     """
     if not HF_TOKEN:
         raise HTTPException(status_code=503, detail="personalized rerank unavailable (HF_TOKEN missing)")
-    fav_ids = _unique_csv(favorites, max_items=50, field_name="favorites")
+    fav_ids = _valid_arxiv_ids(_unique_csv(favorites, max_items=50, field_name="favorites"))
     if not fav_ids:
         return {"papers": [], "discipline": discipline_id, "reason": "no_favorites"}
 

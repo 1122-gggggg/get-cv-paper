@@ -26,3 +26,4 @@ urllib3==2.6.3
 uvicorn==0.42.0
 python-dotenv>=1.0.0
 brotli-asgi>=1.4.0
+defusedxml>=0.7.1
