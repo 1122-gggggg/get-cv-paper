@@ -3,7 +3,7 @@
 //   靜態資源 → stale-while-revalidate
 //   /api/papers, /api/trending → SWR + 背景刷新後 postMessage 通知前端
 //   其他 /api/* → 不快取
-const VERSION = 'v10';
+const VERSION = 'v11';
 const STATIC_CACHE = `visionary-static-${VERSION}`;
 const API_CACHE    = `visionary-api-${VERSION}`;
 const STATIC_ASSETS = [
@@ -107,4 +107,35 @@ self.addEventListener('fetch', (e) => {
     }
 
     e.respondWith(staticSWR(req));
+});
+
+// ── Web-Push (#19) ──────────────────────────────────────────────
+self.addEventListener('push', (e) => {
+    let d = {};
+    try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
+    const title = d.title || 'Visionary Papers';
+    const opts = {
+        body: d.body || '',
+        tag: d.tag || 'visionary',
+        icon: '/static/og-image.svg',
+        badge: '/static/og-image.svg',
+        data: { url: d.url || '/' },
+        renotify: true,
+    };
+    e.waitUntil(self.registration.showNotification(title, opts));
+});
+
+self.addEventListener('notificationclick', (e) => {
+    e.notification.close();
+    const target = (e.notification.data && e.notification.data.url) || '/';
+    e.waitUntil((async () => {
+        const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const c of all) {
+            if ('focus' in c) {
+                try { if ('navigate' in c) await c.navigate(target); } catch (_) {}
+                return c.focus();
+            }
+        }
+        if (self.clients.openWindow) return self.clients.openWindow(target);
+    })());
 });

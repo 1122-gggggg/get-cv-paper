@@ -668,6 +668,7 @@ function _dpBindCardEvents(card, id) {
             window.setTracks && window.setTracks([...next]);
             starBtn.textContent = next.has(tid) ? '★' : '☆';
             card.classList.toggle('tracked', next.has(tid));
+            window.__resyncPushFields && window.__resyncPushFields();
             return;
         }
         selectDiscipline(id);
@@ -4148,6 +4149,107 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
         navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
 }
+
+// ── #19 Web-Push 訂閱（每日追蹤領域爆發摘要）──────────────────────
+(function initWebPush() {
+    const btn = document.getElementById('pushSubscribeBtn');
+    if (!btn) return;
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    if (!supported || location.protocol !== 'https:') return;
+
+    let publicKey = '';
+    let busy = false;
+
+    function urlB64ToUint8Array(b64) {
+        const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+        const base = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+        const raw = atob(base);
+        const out = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+        return out;
+    }
+
+    async function currentSub() {
+        const reg = await navigator.serviceWorker.ready;
+        return reg.pushManager.getSubscription();
+    }
+
+    function setLabel(subscribed) {
+        btn.textContent = subscribed ? '🔔 推播已開（點擊關閉）' : '🔔 推播訂閱';
+        btn.classList.toggle('active', !!subscribed);
+    }
+
+    async function subscribe() {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { showToast('需要通知權限才能開啟推播'); return; }
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlB64ToUint8Array(publicKey),
+        });
+        const fields = (window.getTracks?.() || []);
+        const res = await fetch('/api/push/subscribe', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscription: sub.toJSON(), fields }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        fetch('/api/push/test', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint: sub.endpoint }),
+        }).catch(() => {});
+        setLabel(true);
+        showToast(fields.length ? `已開啟推播 · 追蹤 ${fields.length} 個領域` : '已開啟推播');
+    }
+
+    async function unsubscribe() {
+        const sub = await currentSub();
+        if (sub) {
+            await fetch('/api/push/unsubscribe', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint: sub.endpoint }),
+            }).catch(() => {});
+            await sub.unsubscribe().catch(() => {});
+        }
+        setLabel(false);
+        showToast('已關閉推播');
+    }
+
+    btn.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        try {
+            const sub = await currentSub();
+            if (sub) await unsubscribe(); else await subscribe();
+        } catch (e) {
+            showToast('推播設定失敗：' + (e.message || e));
+        } finally {
+            busy = false;
+        }
+    });
+
+    // 已訂閱者切換追蹤領域 → 背景同步 fields(供每日摘要個人化)
+    window.__resyncPushFields = async function () {
+        try {
+            const sub = await currentSub();
+            if (!sub) return;
+            await fetch('/api/push/subscribe', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subscription: sub.toJSON(), fields: (window.getTracks?.() || []) }),
+            });
+        } catch (_) { /* best-effort */ }
+    };
+
+    (async () => {
+        try {
+            const res = await fetch('/api/push/key');
+            const data = await res.json();
+            if (!data.enabled || !data.publicKey) return;   // 伺服器未設定 VAPID → 隱藏按鈕
+            publicKey = data.publicKey;
+            btn.hidden = false;
+            setLabel(!!(await currentSub()));
+        } catch (_) { /* push 不可用,保持隱藏 */ }
+    })();
+})();
 
 
 // ── 鍵盤快捷鍵說明按鈕 ────────────────────────────────────────

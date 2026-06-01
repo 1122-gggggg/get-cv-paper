@@ -2650,6 +2650,15 @@ body.light-mode .rss-subscribe-btn { background: rgba(255, 255, 255, 0.6); }
     border-color: color-mix(in srgb, #ee802f 50%, transparent);
     color: var(--ink-side);
 }
+.push-subscribe-btn:hover {
+    background: color-mix(in srgb, var(--accent-from, #6366f1) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-from, #6366f1) 50%, transparent);
+}
+.push-subscribe-btn.active {
+    background: color-mix(in srgb, var(--accent-from, #6366f1) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-from, #6366f1) 60%, transparent);
+    color: var(--ink-side);
+}
 
 /* Sidebar search (mini, optional visual only — actual search stays in header) */
 .side-hint {

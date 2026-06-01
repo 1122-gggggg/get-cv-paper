@@ -58,6 +58,7 @@ from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
 from event_hub import EventHub
 from oai_harvest import harvest_arxiv_oai
 from paper_store import PaperStore, _paper_id as _derive_paper_id
+from webpush import push_service
 from semantic import (
     HF_EMBED_MODEL,
     HF_TOKEN,
@@ -244,6 +245,19 @@ _HOT_WINDOW_MAX = 30
 _RSS_DAYS_MAX = 30
 _RSS_ITEMS_MAX = 80
 _RSS_SUMMARY_MAX = 600
+# Web-Push 每日摘要 (#19):跨領域熱榜挑使用者追蹤領域命中的爆發論文 → 推播。
+# enabled 取決於 VAPID 金鑰是否就緒(webpush.push_service);未設定時整條 pipeline 靜默。
+try:
+    _DIGEST_INTERVAL = min(7 * 86400, max(3600, int(os.environ.get("DIGEST_INTERVAL_SECONDS", "86400"))))
+except (TypeError, ValueError):
+    _DIGEST_INTERVAL = 86400
+_DIGEST_FIRST_DELAY = 600        # 開機後等 10 分鐘(暖機完)再發第一輪
+_DIGEST_MIN_GAP = 12 * 3600      # 同一訂閱 12h 內不重複打擾
+_DIGEST_HOT_WINDOW = 3
+_DIGEST_HOT_LIMIT = 40
+_DIGEST_BODY_PAPERS = 3          # 通知內文最多列幾篇
+_PUSH_FIELDS_MAX = 16            # 每個訂閱最多記幾個追蹤領域
+_PUSH_ENDPOINT_MAX = 1024
 _CITATIONS_MAX = 200
 _PWC_IDS_MAX = 100
 _GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")  # 有 token → 5000 req/hr,無 → 60
@@ -643,6 +657,7 @@ async def lifespan(app: FastAPI):
     cleanup = asyncio.create_task(_paper_cleanup_task())
     stars = asyncio.create_task(_stars_loop())
     oai = asyncio.create_task(_oai_harvest_loop()) if _OAI_ENABLED and _OAI_SETS else None
+    digest = asyncio.create_task(_digest_loop()) if push_service.enabled else None
     try:
         yield
     finally:
@@ -653,6 +668,8 @@ async def lifespan(app: FastAPI):
         stars.cancel()
         if oai is not None:
             oai.cancel()
+        if digest is not None:
+            digest.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
         _paper_store.close()
@@ -1730,6 +1747,181 @@ async def get_rss(
         self_url, papers,
     )
     return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
+
+
+# ── Web-Push 訂閱 + 每日摘要 (#19) ──────────────────────────────
+def _clean_fields(raw: Any) -> str:
+    """訂閱附帶的追蹤領域 → 逗號分隔字串(只留合法 discipline id)。"""
+    if not isinstance(raw, list):
+        return ""
+    out: list[str] = []
+    for f in raw:
+        fid = str(f).strip()[:40]
+        if fid in DISCIPLINES and fid not in out:
+            out.append(fid)
+        if len(out) >= _PUSH_FIELDS_MAX:
+            break
+    return ",".join(out)
+
+
+@app.get("/api/push/key")
+async def push_key():
+    """前端據此決定是否顯示訂閱 UI;未設定 VAPID 時 enabled=false。"""
+    return {"enabled": push_service.enabled, "publicKey": push_service.public_key}
+
+
+def _parse_subscription(data: dict) -> tuple[str, str, str]:
+    sub = data.get("subscription")
+    if not isinstance(sub, dict):
+        raise HTTPException(status_code=400, detail="missing subscription")
+    endpoint = str(sub.get("endpoint") or "").strip()[:_PUSH_ENDPOINT_MAX]
+    keys = sub.get("keys") if isinstance(sub.get("keys"), dict) else {}
+    p256dh = str(keys.get("p256dh") or "").strip()
+    auth = str(keys.get("auth") or "").strip()
+    if not (endpoint.startswith("https://") and p256dh and auth):
+        raise HTTPException(status_code=400, detail="invalid subscription")
+    return endpoint, p256dh, auth
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request):
+    """Body: {subscription: <PushSubscription.toJSON()>, fields: [discipline_id,...]}."""
+    if not push_service.enabled:
+        return {"ok": False, "enabled": False}
+    try:
+        data = _json.loads(await request.body() or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="invalid body")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="invalid body")
+    endpoint, p256dh, auth = _parse_subscription(data)
+    fields = _clean_fields(data.get("fields"))
+    await asyncio.to_thread(_paper_store.upsert_push_sub, endpoint, p256dh, auth, fields)
+    return {"ok": True, "enabled": True, "fields": fields.split(",") if fields else []}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    """Body: {endpoint}."""
+    try:
+        data = _json.loads(await request.body() or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="invalid body")
+    endpoint = str((data or {}).get("endpoint") or "").strip()[:_PUSH_ENDPOINT_MAX]
+    if endpoint:
+        await asyncio.to_thread(_paper_store.delete_push_sub, endpoint)
+    return {"ok": True}
+
+
+def _digest_payload_for(fields: list[str], hot: dict) -> dict | None:
+    """挑出命中追蹤領域的爆發論文;沒命中就退回全領域 top。回 None = 沒料可推。"""
+    papers = hot.get("papers") or []
+    if not papers:
+        return None
+    fset = set(fields)
+    if fset:
+        matched = [p for p in papers if fset.intersection(p.get("fields") or [])]
+        picked = matched or papers
+    else:
+        picked = papers
+    top = picked[:_DIGEST_BODY_PAPERS]
+    if not top:
+        return None
+    lines = [str(p.get("title") or "").strip() for p in top if p.get("title")]
+    lead = top[0]
+    scope = "你追蹤的領域" if (fset and any(fset.intersection(p.get("fields") or []) for p in top)) else "全領域"
+    return {
+        "title": f"🔥 {scope}有 {len(picked)} 篇論文正在爆發",
+        "body": " · ".join(lines)[:180],
+        "url": str(lead.get("url") or "https://allenvisionary.duckdns.org/"),
+        "tag": "visionary-digest",
+        "count": len(picked),
+    }
+
+
+async def _send_digest_round() -> int:
+    """建跨領域熱榜 → 對每個訂閱組合個人化通知 → 送出。回實際送出數。"""
+    if not push_service.enabled:
+        return 0
+    subs = await asyncio.to_thread(_paper_store.all_push_subs)
+    if not subs:
+        return 0
+    hot = await _hot_build(_DIGEST_HOT_WINDOW, _DIGEST_HOT_LIMIT)
+    if not (hot.get("papers")):
+        return 0
+    now = time.time()
+    sent_eps: list[str] = []
+    dead_eps: list[str] = []
+    for s in subs:
+        last = s.get("last_sent") or 0
+        if last and (now - last) < _DIGEST_MIN_GAP:
+            continue
+        fields = s["fields"].split(",") if s.get("fields") else []
+        payload = _digest_payload_for(fields, hot)
+        if not payload:
+            continue
+        sub_info = {"endpoint": s["endpoint"], "keys": {"p256dh": s["p256dh"], "auth": s["auth"]}}
+        status = await asyncio.to_thread(
+            push_service.send, sub_info, _json.dumps(payload, ensure_ascii=False)
+        )
+        if status in (404, 410):
+            dead_eps.append(s["endpoint"])
+        elif status:
+            sent_eps.append(s["endpoint"])
+    if sent_eps:
+        await asyncio.to_thread(_paper_store.mark_push_sent, sent_eps)
+    for ep in dead_eps:
+        await asyncio.to_thread(_paper_store.delete_push_sub, ep)
+    if sent_eps or dead_eps:
+        logger.info("digest: sent=%d pruned=%d", len(sent_eps), len(dead_eps))
+    return len(sent_eps)
+
+
+async def _digest_loop() -> None:
+    """每日摘要排程。VAPID 未設定時 push_service.enabled=False,本迴圈純睡眠。"""
+    if not push_service.enabled:
+        logger.info("digest loop: push disabled, idle")
+        return
+    await asyncio.sleep(_DIGEST_FIRST_DELAY)
+    while True:
+        try:
+            await _send_digest_round()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("digest loop error: %s", e)
+        await asyncio.sleep(_DIGEST_INTERVAL)
+
+
+@app.post("/api/push/test")
+async def push_test(request: Request):
+    """手動觸發:對 body.endpoint 指定的訂閱送一則測試通知(驗證金鑰/SW 正常)。"""
+    if not push_service.enabled:
+        return {"ok": False, "enabled": False}
+    try:
+        data = _json.loads(await request.body() or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="invalid body")
+    endpoint = str((data or {}).get("endpoint") or "").strip()[:_PUSH_ENDPOINT_MAX]
+    target = None
+    for s in await asyncio.to_thread(_paper_store.all_push_subs):
+        if s["endpoint"] == endpoint:
+            target = s
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    payload = {
+        "title": "✅ Visionary 推播已開通",
+        "body": "之後每天會把你追蹤領域的爆發論文整理給你。",
+        "url": "https://allenvisionary.duckdns.org/",
+        "tag": "visionary-test",
+    }
+    sub_info = {"endpoint": target["endpoint"], "keys": {"p256dh": target["p256dh"], "auth": target["auth"]}}
+    status = await asyncio.to_thread(push_service.send, sub_info, _json.dumps(payload, ensure_ascii=False))
+    if status in (404, 410):
+        await asyncio.to_thread(_paper_store.delete_push_sub, endpoint)
+        raise HTTPException(status_code=410, detail="subscription expired")
+    return {"ok": bool(status), "status": status}
 
 
 @app.get("/api/search")
