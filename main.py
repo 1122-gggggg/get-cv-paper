@@ -24,7 +24,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 
@@ -54,6 +54,7 @@ from clients import (
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
+from event_hub import EventHub
 from oai_harvest import harvest_arxiv_oai
 from paper_store import PaperStore, _paper_id as _derive_paper_id
 from semantic import (
@@ -333,6 +334,23 @@ def _build_oai_cat_map() -> dict[str, set[str]]:
 _OAI_CAT_TO_PRIMARY = _build_oai_cat_map()
 
 
+def _build_primary_to_disciplines() -> dict[str, list[str]]:
+    """primary_cat → 以該 cat 為主領域的 discipline id 清單(SSE 推播用反查表)。"""
+    out: dict[str, list[str]] = {}
+    for did, d in DISCIPLINES.items():
+        primary = d.get("cat")
+        if primary:
+            out.setdefault(primary, []).append(did)
+    return out
+
+
+_PRIMARY_TO_DISCIPLINES = _build_primary_to_disciplines()
+
+# #15 即時推播:有新論文落地時透過 SSE 通知開著的分頁。
+_event_hub = EventHub()
+_SSE_PING_S = 20  # 心跳間隔(秒);同時用來輪詢 client 斷線
+
+
 async def _flush_task() -> None:
     while True:
         try:
@@ -524,6 +542,7 @@ async def _oai_harvest_once() -> None:
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cold_start = (datetime.now(timezone.utc) - timedelta(days=_OAI_COLD_START_DAYS)).strftime("%Y-%m-%d")
+    affected_primaries: set[str] = set()
     for idx, oai_set in enumerate(_OAI_SETS):
         if idx > 0:
             await asyncio.sleep(5)
@@ -545,11 +564,18 @@ async def _oai_harvest_once() -> None:
             n = await asyncio.to_thread(_paper_store.upsert_many, rows, primary)
             await asyncio.to_thread(_paper_store.record_snapshots, rows, primary)
             upserted += n
+        affected_primaries |= buckets.keys()
         await asyncio.to_thread(_paper_store.oai_set_state, oai_set, today)
         logger.info(
             "oai harvest %s: %d papers → %d rows across %d cats (from %s)",
             oai_set, len(papers), upserted, len(buckets), from_date,
         )
+    disc_ids = sorted({
+        did for primary in affected_primaries
+        for did in _PRIMARY_TO_DISCIPLINES.get(primary, [])
+    })
+    if disc_ids:
+        _event_hub.publish({"type": "papers", "disciplines": disc_ids, "at": int(time.time())})
 
 
 async def _oai_harvest_loop() -> None:
@@ -1158,9 +1184,15 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
         merged = _sort_papers(merged, "latest")
         if len(merged) > _PAPERS_RESPONSE_CAP:
             merged = merged[:_PAPERS_RESPONSE_CAP]
-        result = {"papers": merged, "arxiv_native": arxiv_native, "as_of": int(time.time())}
+        as_of = int(time.time())
+        result = {"papers": merged, "arxiv_native": arxiv_native, "as_of": as_of}
         if topic:
             result["topic"] = topic
+        else:
+            # 廣域快取(重)建成功 → 通知開著的分頁該領域有新資料
+            _event_hub.publish(
+                {"type": "papers", "disciplines": [discipline_id], "at": as_of}
+            )
         return result
 
     return cache_key, build
@@ -1206,6 +1238,45 @@ async def get_papers(
         body = _json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         etag = make_etag(body)
     return etag_response(request, body, etag)
+
+
+@app.get("/api/stream")
+async def stream(request: Request) -> StreamingResponse:
+    """SSE 即時推播:有新論文落地時通知開著的分頁(#15)。
+
+    單 worker 內以 EventHub 廣播;每 _SSE_PING_S 秒送一次心跳兼偵測斷線。
+    事件格式 {"type":"papers","disciplines":[...],"at":epoch},client 自行判斷
+    是否與當前領域相關。容量滿時回 503,client 端會自動重連。
+    """
+    queue = _event_hub.subscribe()
+    if queue is None:
+        raise HTTPException(status_code=503, detail="stream capacity reached")
+
+    async def gen():
+        try:
+            yield b": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=_SSE_PING_S)
+                except asyncio.TimeoutError:
+                    yield b": ping\n\n"
+                    continue
+                data = _json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                yield f"data: {data}\n\n".encode("utf-8")
+        finally:
+            _event_hub.unsubscribe(queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 _CUSTOM_FEED_MAX_ITEMS = 12   # cats/keywords/authors 各自上限

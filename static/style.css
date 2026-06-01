@@ -1089,6 +1089,50 @@ body.light-mode .survey-badge {
     border-color: rgba(244, 63, 94, 0.4);
 }
 
+/* ── #15 即時推播：有新論文的浮動提示鈕 ── */
+.live-refresh-pill {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translate(-50%, 24px);
+    z-index: 1200;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, #7c3aed, #ec4899);
+    border: none;
+    border-radius: 999px;
+    box-shadow: 0 10px 30px rgba(124, 58, 237, 0.4);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s var(--ease-out, ease);
+}
+.live-refresh-pill.show {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0);
+}
+.live-refresh-pill:hover {
+    box-shadow: 0 12px 36px rgba(236, 72, 153, 0.5);
+}
+.live-refresh-pill .live-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7);
+    animation: liveDotPulse 1.6s ease-out infinite;
+}
+@keyframes liveDotPulse {
+    0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7); }
+    100% { box-shadow: 0 0 0 8px rgba(255, 255, 255, 0); }
+}
+
 .paper-link {
     text-decoration: none;
     color: #9333ea;

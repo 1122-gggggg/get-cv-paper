@@ -1258,6 +1258,55 @@ async function _fetchAndApply(disc) {
     await filterPapers();
     scheduleBadgeUpdate();
     _writePapersIDB(disc, data.papers);
+    hideLiveRefreshPill();  // 已套用最新資料 → 收起提示
+}
+
+// ── #15 即時推播：SSE 連線，伺服器收割到新論文時提示更新 ──────────
+let _sse = null;
+let _liveRefreshDisc = null;
+function initLiveStream() {
+    if (_sse || typeof EventSource === 'undefined') return;
+    try {
+        _sse = new EventSource('/api/stream');
+        _sse.onmessage = (e) => {
+            try { handleLiveEvent(JSON.parse(e.data)); } catch (_) { /* 非 JSON 心跳忽略 */ }
+        };
+        // 連線中斷時 EventSource 內建自動重連，不需手動處理
+        _sse.onerror = () => {};
+    } catch (_) { _sse = null; }
+}
+
+function handleLiveEvent(ev) {
+    if (!ev || ev.type !== 'papers') return;
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    if (Array.isArray(ev.disciplines) && !ev.disciplines.includes(disc)) return;
+    const atMs = Number.isFinite(ev.at) ? ev.at * 1000 : Date.now();
+    if (atMs <= lastDataAsOf + 2000) return;  // 自己剛抓的資料，不重複提示
+    showLiveRefreshPill(disc);
+}
+
+function showLiveRefreshPill(disc) {
+    let pill = document.getElementById('liveRefreshPill');
+    if (!pill) {
+        pill = document.createElement('button');
+        pill.id = 'liveRefreshPill';
+        pill.className = 'live-refresh-pill';
+        pill.type = 'button';
+        pill.setAttribute('aria-live', 'polite');
+        pill.addEventListener('click', async () => {
+            const target = _liveRefreshDisc || (ACTIVE_DISCIPLINE?.id || 'cv');
+            hideLiveRefreshPill();
+            try { await _fetchAndApply(target); } catch (_) {}
+        });
+        document.body.appendChild(pill);
+    }
+    _liveRefreshDisc = disc;
+    pill.innerHTML = '<span class="live-dot"></span>有新論文，點擊更新';
+    pill.classList.add('show');
+}
+
+function hideLiveRefreshPill() {
+    document.getElementById('liveRefreshPill')?.classList.remove('show');
 }
 
 function _readSSRPapers(disc) {
@@ -1277,6 +1326,7 @@ async function fetchPapers() {
     papersGrid.classList.add('hidden');
     noResults.classList.add('hidden');
     loader.classList.remove('hidden');
+    hideLiveRefreshPill();  // 換領域/重載時收起舊的新論文提示
     startLoaderMessages();
 
     const disc = ACTIVE_DISCIPLINE?.id || 'cv';
@@ -3147,6 +3197,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     fetchPapers();
+    initLiveStream();  // #15 SSE 即時推播
 
     // ── 分類標籤左右箭頭 ──（側邊欄模式下不啟用）
     const filterScroll = document.querySelector('.category-filters');
