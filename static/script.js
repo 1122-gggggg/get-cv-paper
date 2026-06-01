@@ -119,6 +119,172 @@ function absoluteDate(ms) {
 
 const NEW_PAPER_WINDOW_MS = 24 * 3600 * 1000;  // 近 24h 視為「新」
 
+// ── #5 引用 / 複製 / 分享 / 匯出 BibTeX ───────────────────────────
+function _paperArxivId(paper) {
+    const ext = paper.external_ids || {};
+    if (ext.arxiv) {
+        const m = String(ext.arxiv).match(/(\d{4}\.\d{4,6})/);
+        if (m) return m[1];
+    }
+    const m2 = (paper.url || '').match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,6})/i);
+    return m2 ? m2[1] : null;
+}
+
+function _paperYear(paper) {
+    const ts = paperTimestamp(paper);
+    if (ts > 0) return new Date(ts).getFullYear();
+    const m = String(paper.published || '').match(/(\d{4})/);
+    return m ? Number(m[1]) : null;
+}
+
+function _bibtexKey(paper, year) {
+    const clean = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
+    const surname = ((paper.authors && paper.authors[0]) || '').trim().split(/\s+/).pop() || '';
+    const titleWord = (paper.title || '').split(/\s+/).find(w => w.length > 3) || '';
+    const key = clean(surname) + (year || '') + clean(titleWord).slice(0, 12);
+    return key || ('paper' + (year || _paperArxivId(paper) || ''));
+}
+
+function _bibField(name, value) {
+    if (!value) return '';
+    return `  ${name} = {${String(value).replace(/[{}]/g, '')}},\n`;
+}
+
+function toBibtex(paper) {
+    const year = _paperYear(paper);
+    const key = _bibtexKey(paper, year);
+    const authors = (paper.authors || []).join(' and ');
+    const ext = paper.external_ids || {};
+    const arxivId = _paperArxivId(paper);
+    const doi = ext.doi ? String(ext.doi).replace(/^https?:\/\/(dx\.)?doi\.org\//i, '') : '';
+    const entryType = (arxivId || !doi) ? 'misc' : 'article';
+    let out = `@${entryType}{${key},\n`;
+    out += _bibField('title', paper.title);
+    out += _bibField('author', authors);
+    if (year) out += `  year = {${year}},\n`;
+    if (arxivId) {
+        out += `  eprint = {${arxivId}},\n`;
+        out += `  archivePrefix = {arXiv},\n`;
+        out += _bibField('primaryClass', paper.primary_cat);
+    }
+    out += _bibField('doi', doi);
+    out += _bibField('url', paper.url);
+    out += '}\n';
+    return out;
+}
+
+async function copyText(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (e) { /* fall through to legacy path */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+function downloadText(filename, text, mime = 'text/plain') {
+    const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// 卡片動作浮層（引用 / 複製連結 / 分享）──共用單一元素，依需求重新定位
+let _actionMenuEl = null;
+let _actionMenuPaper = null;
+
+function _ensureActionMenu() {
+    if (_actionMenuEl) return _actionMenuEl;
+    const menu = document.createElement('div');
+    menu.id = 'cardActionMenu';
+    menu.className = 'card-action-menu hidden';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML = `
+        <button data-act="bibtex" role="menuitem">📋 複製 BibTeX 引用</button>
+        <button data-act="link" role="menuitem">🔗 複製論文連結</button>
+        <button data-act="share" role="menuitem" hidden>📤 分享</button>`;
+    menu.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-act]');
+        if (!btn || !_actionMenuPaper) return;
+        e.stopPropagation();
+        runCardAction(btn.dataset.act, _actionMenuPaper);
+        hideActionMenu();
+    });
+    document.body.appendChild(menu);
+    _actionMenuEl = menu;
+    return menu;
+}
+
+async function runCardAction(act, paper) {
+    if (act === 'bibtex') {
+        const ok = await copyText(toBibtex(paper));
+        showToast(ok ? '已複製 BibTeX 引用' : '複製失敗，請手動選取');
+    } else if (act === 'link') {
+        const ok = await copyText(paper.url || '');
+        showToast(ok ? '已複製論文連結' : '複製失敗');
+    } else if (act === 'share') {
+        try {
+            await navigator.share({ title: paper.title || '論文', url: paper.url || '' });
+        } catch (e) { /* 使用者取消分享 */ }
+    }
+}
+
+function openCardActionMenu(paper, anchorBtn) {
+    const menu = _ensureActionMenu();
+    _actionMenuPaper = paper;
+    const shareBtn = menu.querySelector('button[data-act="share"]');
+    if (shareBtn) shareBtn.hidden = !navigator.share;
+    menu.classList.remove('hidden');
+    const r = anchorBtn.getBoundingClientRect();
+    const mw = menu.offsetWidth || 200;
+    let left = r.left;
+    if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${r.bottom + 6}px`;
+}
+
+function hideActionMenu() {
+    if (_actionMenuEl) _actionMenuEl.classList.add('hidden');
+    _actionMenuPaper = null;
+}
+
+document.addEventListener('click', (e) => {
+    if (_actionMenuEl && !_actionMenuEl.classList.contains('hidden')) {
+        if (!e.target.closest('#cardActionMenu') && !e.target.closest('.cite-btn')) {
+            hideActionMenu();
+        }
+    }
+}, true);
+
+function exportFavoritesBibtex() {
+    const papers = _favoritesPool();
+    if (!papers.length) {
+        showToast('收藏夾是空的');
+        return;
+    }
+    const body = papers.map(toBibtex).join('\n');
+    downloadText('favorites.bib', `% ${papers.length} papers — 論文追蹤系統匯出\n\n${body}`, 'application/x-bibtex');
+    showToast(`已匯出 ${papers.length} 篇收藏為 BibTeX`);
+}
+
 function startOfTodayMs() {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -1632,6 +1798,14 @@ function _bindPapersGridDelegation() {
             return;
         }
 
+        const citeBtn = e.target.closest('.cite-btn');
+        if (citeBtn && card.contains(citeBtn)) {
+            e.stopPropagation();
+            const paper = currentFilteredPapers.find(p => p.url === url);
+            if (paper) openCardActionMenu(paper, citeBtn);
+            return;
+        }
+
         const saveBtn = e.target.closest('.note-save-btn');
         if (saveBtn && card.contains(saveBtn)) {
             e.stopPropagation();
@@ -1843,6 +2017,9 @@ function renderPapers(papers, customTitle) {
     const countHeader = document.getElementById('countHeader');
     const themeEl = countHeader?.querySelector('.count-theme');
     const metaEl = countHeader?.querySelector('.count-meta');
+
+    const favExportBtnTop = document.getElementById('favExportBtn');
+    if (favExportBtnTop) favExportBtnTop.classList.toggle('hidden', currentCategory !== 'favorites' || papers.length === 0);
 
     if (papers.length === 0) {
         noResults.classList.remove('hidden');
@@ -3144,6 +3321,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _goHome(); }
         });
     }
+
+    // #5 匯出收藏為 BibTeX
+    document.getElementById('favExportBtn')?.addEventListener('click', exportFavoritesBibtex);
 
     // 1) 先綁定切換領域按鈕（無論有沒有選領域都要能開啟）
     document.getElementById('switchDisciplineBtn')?.addEventListener('click', () => {

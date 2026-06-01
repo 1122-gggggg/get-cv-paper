@@ -194,6 +194,7 @@
                         <button class="sort-item" data-value="personalized">✨ 為你推薦 <span>For You</span></button>
                     </div>
                 </div>
+                <button id="favExportBtn" class="fav-export-btn hidden" title="匯出收藏為 BibTeX">⬇ 匯出 BibTeX</button>
                 <span class="count-meta"></span>
             </div>
             <div id="loader" class="loader-container">
@@ -268,6 +269,10 @@
                         <button class="note-btn" title="個人筆記">
                             <svg width="12" height="12"><use href="#icon-note"/></svg>
                             <span class="note-label">筆記</span>
+                        </button>
+                        <button class="cite-btn" title="引用 / 複製 / 分享" aria-haspopup="menu">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h4v6H6.5L5 16V9a2 2 0 0 1 2-2zm9 0h4v6h-4.5L14 16V9a2 2 0 0 1 2-2z"/></svg>
+                            <span class="cite-label">引用</span>
                         </button>
                         <a class="paper-link" target="_blank" rel="noopener noreferrer">
                             閱讀論文
