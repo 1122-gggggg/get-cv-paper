@@ -835,7 +835,8 @@ async def fetch_openreview_listing(
         year = datetime.now().year
 
     params = {
-        "content.venue": f"{group}/{year}/Conference",
+        # v2 用 venueid(group path)而非 venue(人類可讀字串);後者查不到任何 note
+        "content.venueid": f"{group}/{year}/Conference",
         "details": "directReplies",  # 內嵌評審 reply,供解析 review_avg/review_count
         "limit": min(max_results, 1000),
     }
