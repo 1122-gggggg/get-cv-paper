@@ -1118,6 +1118,29 @@ function _submitCustomFeed(e) {
 const READ_KEY = 'visionary_read_v1';
 let readSet = new Set(JSON.parse(localStorage.getItem(READ_KEY) || '[]'));
 
+// #6 上次造訪時間：先讀舊值（本次 session 比對基準），再寫入「現在」供下次比對
+const LAST_VISIT_KEY = 'visionary_last_visit_v1';
+const PREV_VISIT_MS = Number(localStorage.getItem(LAST_VISIT_KEY) || 0);
+try { localStorage.setItem(LAST_VISIT_KEY, String(Date.now())); } catch (_) {}
+
+function newSinceVisitCount() {
+    if (!PREV_VISIT_MS || !Array.isArray(allPapers)) return 0;
+    return allPapers.reduce((n, p) => n + (paperTimestamp(p) > PREV_VISIT_MS ? 1 : 0), 0);
+}
+
+async function showNewSinceVisit() {
+    if (!PREV_VISIT_MS) { showToast('這是你的第一次造訪，下次回來就能看到新增論文'); return; }
+    const pool = Array.isArray(allPapers) ? allPapers : [];
+    let fresh = pool.filter(p => paperTimestamp(p) > PREV_VISIT_MS);
+    if (!fresh.length) { showToast('自上次造訪後沒有新論文'); return; }
+    fresh = indexPapers(fresh);
+    await prepareMetricData(fresh, 'latest');
+    fresh = sortPapersByMetric(fresh, 'latest');
+    currentPage = 1;
+    renderPapers(fresh, `🆕 自上次造訪新增（${fresh.length} 篇）`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function saveReadSet() {
     localStorage.setItem(READ_KEY, JSON.stringify([...readSet]));
 }
@@ -3835,18 +3858,25 @@ function updateStats() {
         _statsEls.fav   = document.getElementById('statFav');
         _statsEls.notes = document.getElementById('statNotes');
         _statsEls.total = document.getElementById('statTotal');
+        _statsEls.fresh = document.getElementById('statNew');
+        _statsEls.fresh?.addEventListener('click', showNewSinceVisit);
     }
     if (!_statsEls.read) return;
 
-    const snapshot = `${readSet.size}|${favorites.size}|${Object.keys(notesMap).length}|${allPapers.length}`;
+    const totalCount = Array.isArray(currentFilteredPapers) ? currentFilteredPapers.length : allPapers.length;
+    const newCount = newSinceVisitCount();
+    const snapshot = `${readSet.size}|${favorites.size}|${Object.keys(notesMap).length}|${totalCount}|${newCount}`;
     if (snapshot === _statsSnapshot) return;
     _statsSnapshot = snapshot;
 
     _statsEls.read.textContent  = `📖 已讀 ${readSet.size}`;
     _statsEls.fav.textContent   = `⭐ 收藏 ${favorites.size}`;
     _statsEls.notes.textContent = `📝 筆記 ${Object.keys(notesMap).length}`;
-    const totalCount = Array.isArray(currentFilteredPapers) ? currentFilteredPapers.length : allPapers.length;
     _statsEls.total.textContent = `📚 ${getTimeRangeMeta().label} ${totalCount} 篇`;
+    if (_statsEls.fresh) {
+        _statsEls.fresh.textContent = `🆕 新增 ${newCount}`;
+        _statsEls.fresh.classList.toggle('hidden', newCount === 0);
+    }
 }
 
 setTimeout(updateStats, 300);

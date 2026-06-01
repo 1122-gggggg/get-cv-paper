@@ -2813,6 +2813,42 @@ body.light-mode .side-discipline .switch-discipline-btn {
 }
 
 /* Sidebar footer: keyboard hints — pinned to viewport bottom, never overlapped by expanded submenus */
+/* #6 閱讀統計面板 */
+.reading-stats {
+    flex: 0 0 auto;
+    padding: 12px 18px 6px;
+    border-top: 1px solid var(--side-line-soft);
+    background: var(--side-bg);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.stat-pill {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink-side-soft);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--side-line);
+    border-radius: 999px;
+    padding: 3px 9px;
+    white-space: nowrap;
+}
+body.light-mode .stat-pill { background: rgba(20, 25, 48, 0.04); }
+button.stat-pill { cursor: pointer; font-family: inherit; transition: background 0.18s, transform 0.18s, color 0.18s; }
+.stat-new {
+    color: #fff;
+    background: linear-gradient(135deg, #f43f5e, #fb7185);
+    border-color: transparent;
+    animation: statNewPulse 2.4s ease-in-out infinite;
+}
+.stat-new:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.stat-new.hidden { display: none; }
+@keyframes statNewPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.45); }
+    50% { box-shadow: 0 0 0 5px rgba(244, 63, 94, 0); }
+}
+
 .side-foot {
     flex: 0 0 auto;
     padding: 12px 20px 4px;
@@ -2941,7 +2977,7 @@ body.light-mode .side-foot-item kbd {
     .side-nav .topic-item.active {
         background: var(--purple-soft);
     }
-    .side-foot { display: none; }
+    .side-foot, .reading-stats { display: none; }
     .app-shell > .container {
         padding: 20px 20px 60px;
     }
