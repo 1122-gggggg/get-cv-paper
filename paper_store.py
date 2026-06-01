@@ -117,6 +117,11 @@ class PaperStore:
                 PRIMARY KEY (paper_id, view_date)
             );
             CREATE INDEX IF NOT EXISTS idx_views_date ON paper_views(view_date);
+            CREATE TABLE IF NOT EXISTS oai_state (
+                oai_set TEXT PRIMARY KEY,
+                last_date TEXT NOT NULL,
+                last_at REAL NOT NULL
+            );
             """
         )
 
@@ -370,6 +375,34 @@ class PaperStore:
             return float(row[0]) if row else None
         except Exception:
             return None
+
+    # ── OAI-PMH incremental harvest state: last datestamp per set ────
+    def oai_get_state(self, oai_set: str) -> str | None:
+        """Last successfully-harvested OAI datestamp (YYYY-MM-DD) for a set."""
+        if not oai_set:
+            return None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT last_date FROM oai_state WHERE oai_set=?", (oai_set,)
+                ).fetchone()
+            return str(row[0]) if row else None
+        except Exception:
+            return None
+
+    def oai_set_state(self, oai_set: str, last_date: str) -> None:
+        if not oai_set or not last_date:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO oai_state(oai_set, last_date, last_at) VALUES(?,?,?) "
+                    "ON CONFLICT(oai_set) DO UPDATE SET last_date=excluded.last_date, "
+                    "last_at=excluded.last_at",
+                    (oai_set, last_date, time.time()),
+                )
+        except Exception as e:
+            logger.warning("paper_store: oai_set_state failed for %s: %s", oai_set, e)
 
     # ── view telemetry: anonymous per-paper open counts (no PII) ─────
     def record_view(self, paper_id: str, url: str = "", title: str = "") -> None:

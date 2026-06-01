@@ -16,6 +16,7 @@ import secrets
 import time
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -53,6 +54,7 @@ from clients import (
 )
 from dedup import merge_sources
 from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
+from oai_harvest import harvest_arxiv_oai
 from paper_store import PaperStore, _paper_id as _derive_paper_id
 from semantic import (
     HF_EMBED_MODEL,
@@ -293,6 +295,44 @@ def _valid_arxiv_ids(ids: list[str]) -> list[str]:
     return [i for i in ids if _ARXIV_ID_VALID_RE.match(i)]
 
 
+# OAI-PMH 增量收割:Atom query API 單次有上限,高流量 archive(cs)會漏掉新論文;
+# OAI ListRecords 以 resumption token 回傳完整窗口 → top-up L2 store,讓近期覆蓋齊全。
+# free-tier VM 受限:預設僅收割 cs(密度最高、漏最多),每輪上限 max_pages × ~1000。
+_OAI_ENABLED = os.environ.get("OAI_HARVEST_ENABLED", "1") != "0"
+_OAI_SETS = tuple(
+    s.strip() for s in os.environ.get("OAI_HARVEST_SETS", "cs").split(",") if s.strip()
+)
+_OAI_INTERVAL = _bounded_int(
+    os.environ.get("OAI_HARVEST_INTERVAL_S"), default=6 * 3600, min_value=900, max_value=86400
+)
+_OAI_MAX_PAGES = _bounded_int(
+    os.environ.get("OAI_HARVEST_MAX_PAGES"), default=4, min_value=1, max_value=50
+)
+_OAI_MAX_RECORDS = _bounded_int(
+    os.environ.get("OAI_HARVEST_MAX_RECORDS"), default=4000, min_value=100, max_value=50000
+)
+_OAI_COLD_START_DAYS = 2  # 無 state 時的回溯窗口(天)
+
+
+def _build_oai_cat_map() -> dict[str, set[str]]:
+    """arXiv category → 應 upsert 的 primary_cat 集合(對齊 warmup 的 per-discipline 存法)。
+
+    discipline d 想要 categories 與其 {cat}∪cats 相交的論文,存到 d['cat']。
+    """
+    out: dict[str, set[str]] = {}
+    for d in DISCIPLINES.values():
+        primary = d.get("cat")
+        if not primary:
+            continue
+        match_set = {primary, *d.get("cats", [])}
+        for c in match_set:
+            out.setdefault(c, set()).add(primary)
+    return out
+
+
+_OAI_CAT_TO_PRIMARY = _build_oai_cat_map()
+
+
 async def _flush_task() -> None:
     while True:
         try:
@@ -464,6 +504,67 @@ async def _stars_loop() -> None:
         await asyncio.sleep(_STARS_INTERVAL)
 
 
+def _oai_group_by_primary(papers: list[dict]) -> dict[str, list[dict]]:
+    """把收割到的論文依其 categories 映射到各 discipline 的 primary_cat 桶。"""
+    buckets: dict[str, list[dict]] = {}
+    for p in papers:
+        primaries: set[str] = set()
+        for c in p.get("categories") or []:
+            primaries |= _OAI_CAT_TO_PRIMARY.get(c, set())
+        for primary in primaries:
+            buckets.setdefault(primary, []).append(p)
+    return buckets
+
+
+async def _oai_harvest_once() -> None:
+    """對每個 OAI set 收割自上次 datestamp 以來的新論文,分桶寫進 L2 store。
+
+    state 推進到今天(datestamp 為日粒度,同日重跑為冪等 upsert)。set 之間留間隔
+    避免對 arXiv OAI 連續施壓。
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cold_start = (datetime.now(timezone.utc) - timedelta(days=_OAI_COLD_START_DAYS)).strftime("%Y-%m-%d")
+    for idx, oai_set in enumerate(_OAI_SETS):
+        if idx > 0:
+            await asyncio.sleep(5)
+        from_date = await asyncio.to_thread(_paper_store.oai_get_state, oai_set) or cold_start
+        try:
+            papers = await harvest_arxiv_oai(
+                _client(), oai_set, from_date=from_date,
+                max_pages=_OAI_MAX_PAGES, max_records=_OAI_MAX_RECORDS,
+            )
+        except Exception as e:
+            logger.warning("oai harvest %s failed: %s", oai_set, e)
+            continue
+        if not papers:
+            await asyncio.to_thread(_paper_store.oai_set_state, oai_set, today)
+            continue
+        buckets = _oai_group_by_primary(papers)
+        upserted = 0
+        for primary, rows in buckets.items():
+            n = await asyncio.to_thread(_paper_store.upsert_many, rows, primary)
+            await asyncio.to_thread(_paper_store.record_snapshots, rows, primary)
+            upserted += n
+        await asyncio.to_thread(_paper_store.oai_set_state, oai_set, today)
+        logger.info(
+            "oai harvest %s: %d papers → %d rows across %d cats (from %s)",
+            oai_set, len(papers), upserted, len(buckets), from_date,
+        )
+
+
+async def _oai_harvest_loop() -> None:
+    """背景增量收割迴圈;等首輪 warmup 後啟動,每 _OAI_INTERVAL 跑一輪。"""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _oai_harvest_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("oai harvest loop error: %s", e)
+        await asyncio.sleep(_OAI_INTERVAL)
+
+
 async def _reviews_aggregate() -> list[dict]:
     """聚合四大會議當年+前一年已評審的投稿,依 review_avg 排序。
 
@@ -504,6 +605,7 @@ async def lifespan(app: FastAPI):
     warm_t2 = asyncio.create_task(_warmup_loop_tier2())
     cleanup = asyncio.create_task(_paper_cleanup_task())
     stars = asyncio.create_task(_stars_loop())
+    oai = asyncio.create_task(_oai_harvest_loop()) if _OAI_ENABLED and _OAI_SETS else None
     try:
         yield
     finally:
@@ -512,6 +614,8 @@ async def lifespan(app: FastAPI):
         warm_t2.cancel()
         cleanup.cancel()
         stars.cancel()
+        if oai is not None:
+            oai.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
         _paper_store.close()
