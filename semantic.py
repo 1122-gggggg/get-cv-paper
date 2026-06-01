@@ -714,7 +714,7 @@ async def hybrid_rank(
             s += 1.0 / (rrf_k + r_d)
         fused[i] = s
 
-    order = sorted(idxs, key=lambda i: (fused[i], dense_scores.get(i, 0.0)), reverse=True)
+    order = sorted(idxs, key=lambda i: (fused[i], dense_scores.get(i, 0.0), i), reverse=True)
     out: list[dict[str, Any]] = []
     for i in order[:top_k]:
         item = dict(papers[i])

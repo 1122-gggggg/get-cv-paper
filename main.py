@@ -527,7 +527,7 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        if not path.startswith("/api/") or path == "/api/health":
+        if not path.startswith("/api/") or path in ("/api/health", "/api/ready"):
             await self.app(scope, receive, send)
             return
 
@@ -543,6 +543,9 @@ class RateLimitMiddleware:
             await self._reject(send)
             return
 
+        # reserve the slot atomically (no await between the burst check and this append)
+        # so concurrent in-flight requests for the same IP count against the budget
+        dq.append(now)
         status = {"code": 200}
 
         async def send_wrapper(message):
@@ -550,9 +553,17 @@ class RateLimitMiddleware:
                 status["code"] = message["status"]
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
-        if status["code"] < 500:
-            dq.append(now)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception:
+            status["code"] = 500
+            raise
+        finally:
+            if status["code"] >= 500:  # refund failed requests so failures stay free
+                try:
+                    dq.remove(now)
+                except ValueError:
+                    pass
 
 
 app.add_middleware(RateLimitMiddleware)

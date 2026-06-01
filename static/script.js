@@ -641,7 +641,7 @@ async function openSimilarModal(paper) {
                 const authors = (p.authors || []).slice(0, 4).join(', ');
                 const venue = p.venue ? `<span class="sim-venue">${escapeHtml(p.venue)}</span>` : '';
                 const yr = p.year ? `<span class="sim-year">${escapeHtml(String(p.year))}</span>` : '';
-                const cit = p.citation_count ? `<span class="sim-cit">📊 ${p.citation_count}</span>` : '';
+                const cit = p.citation_count ? `<span class="sim-cit">📊 ${escapeHtml(String(p.citation_count))}</span>` : '';
                 return `<a class="sim-item" href="${url}" target="_blank" rel="noopener noreferrer">
                     <div class="sim-title">${title}</div>
                     <div class="sim-meta">${escapeHtml(authors)} ${venue} ${yr} ${cit}</div>

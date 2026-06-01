@@ -327,6 +327,13 @@ class PaperStore:
                 deleted = cur.rowcount or 0
                 self._conn.execute("DELETE FROM metric_snapshots WHERE snapshot_date<?", (snap_cutoff,))
                 self._conn.execute("DELETE FROM topic_daily WHERE snapshot_date<?", (snap_cutoff,))
+                # papers prune by published-date but snapshots by snapshot-date — different
+                # axes leave snapshots whose payload was pruned; drop those orphans so
+                # get_emerging never silently skips paper_ids it can't resolve a payload for
+                self._conn.execute(
+                    "DELETE FROM metric_snapshots WHERE (paper_id, primary_cat) "
+                    "NOT IN (SELECT paper_id, primary_cat FROM papers)"
+                )
             if deleted:
                 logger.info("paper_store: pruned %d rows older than %s", deleted, cutoff)
             return deleted

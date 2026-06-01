@@ -642,6 +642,9 @@ async def fetch_pubmed_listing(
         }, timeout=20.0)
         if r2.status_code != 200:
             return []
+        # PubMed efetch XML relies on externally-defined entities; defusedxml's
+        # forbid_external would reject them. Upstream is NCBI (trusted) and this path is
+        # entity-bomb-free, so stdlib ET is intentional here (arXiv Atom uses DET above).
         root = ET.fromstring(r2.content)
     except Exception as e:
         logger.warning("PubMed efetch failed: %s", e)
