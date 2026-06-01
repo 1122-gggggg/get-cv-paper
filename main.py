@@ -30,21 +30,23 @@ from starlette.datastructures import MutableHeaders
 from cache import CachedJSON, LRUStore, etag_response, make_etag
 from clients import (
     ARXIV_UA,
+    extract_github_url,
     fetch_arxiv_listing,
     fetch_arxiv_search,
     fetch_biorxiv_listing,
     fetch_crossref_listing,
     fetch_dblp_venues_many,
+    fetch_github_stars,
     fetch_hf_daily,
     fetch_openalex_listing,
     fetch_openreview_listing,
     fetch_pubmed_listing,
-    fetch_pwc_many,
     fetch_s2_author_papers,
     fetch_s2_author_search,
     fetch_s2_batch,
     fetch_s2_recommendations,
     fetch_s2_search,
+    github_repo_slug,
     s2_fos_for_cat,
 )
 from dedup import merge_sources
@@ -193,8 +195,8 @@ _PAPER_STORE_RETENTION_DAYS = 100
 _PAPER_STORE_CLEANUP_INTERVAL = 6 * 3600
 
 # Warmup:啟動立刻跑 + 每 5 分鐘背景刷新熱門 disciplines。
-# 注意:max 必須與 script.js 實際請求對齊(/api/papers?max_results=50),否則 cache key 不同,
-# 首位使用者仍要付冷啟動成本。
+# cache key 對齊改由 _canonical_max() 處理:使用者 50 與 _WARMUP_MAX 80 都收斂到 80 桶,
+# 不再依賴手動把常數對齊到 script.js。
 # 主層(常駐, 5 分鐘輪詢):首頁最熱 4 個領域,使用者體感命中率最高
 _WARMUP_DISCIPLINES = ("cv", "ml", "ai", "nlp")
 # 次層(輪詢, 15 分鐘):覆蓋第二梯隊熱門領域,提高跨領域命中率
@@ -207,6 +209,9 @@ _WARMUP_CONCURRENCY = 2  # arXiv 嚴格限流;同時 ≤2 路請求避免 429
 
 _PAPERS_MAX_RESULTS = 5000
 _PAPERS_DAYS_MAX = 90
+# 召回層級:使用者請求(50)與語意召回(_WARMUP_MAX=80)都落入 80 桶,
+# cache key 因此一致 → warmup 命中,首位使用者不再付冷啟動成本。
+_CANONICAL_MAX_BUCKETS = (80, 200, 500, 1000, 5000)
 _TRENDING_DAYS_MAX = 30
 _SEARCH_MAX_RESULTS = 100
 _SEMANTIC_POOL_MAX = 500  # 混合召回(BM25+dense)單次評分的候選上限
@@ -216,10 +221,17 @@ _EMERGING_LIMIT = 40
 # 讓 0→5 的新秀(z≈1.79)勝過 100→105 的老牌(z≈0.49)。
 _EMERGE_CIT_PRIOR = 5.0
 _EMERGE_HF_PRIOR = 3.0
+_EMERGE_STAR_PRIOR = 20.0  # star 數量級較大,prior 也較高,避免 0→30 爆分
 _EMERGE_HF_WEIGHT = 0.6   # 引用是較持久的訊號,權重高於 HF 投票
+_EMERGE_STAR_WEIGHT = 0.4  # GitHub star 是工程關注度,權重低於引用/HF
 _EMERGE_MIN = 1.0         # z-score 門檻,過濾 50→51 這類噪音
 _CITATIONS_MAX = 200
 _PWC_IDS_MAX = 100
+_GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")  # 有 token → 5000 req/hr,無 → 60
+# 背景 star 補值:對熱門領域近期論文解析 GitHub repo → 取 star → 寫進 snapshots。
+# 無 token 時 GitHub 限 60 req/hr,故每輪上限壓低、間隔拉長以免被限流。
+_STARS_INTERVAL = 30 * 60
+_STARS_MAX_REPOS = 300 if _GITHUB_TOKEN else 40
 _OPENREVIEW_DAYS_MAX = 365
 _OPENREVIEW_MAX_RESULTS = 1000
 _BIBTEX_IDS_MAX = 50
@@ -381,6 +393,60 @@ async def _warmup_loop_tier2() -> None:
             await asyncio.sleep(_WARMUP_INTERVAL_TIER2)
 
 
+async def _stars_enrich_once() -> None:
+    """對熱門領域近期論文解析 GitHub repo → 取 star → 寫回 snapshots。
+
+    star 走背景補值而非請求路徑:GitHub API 慢且有限流,不能塞進 /api/papers 熱路徑。
+    跨領域去重 slug 後一次抓取,再分領域以帶 published 的完整 payload 寫 snapshots
+    (避免 published 空字串污染)。
+    """
+    by_cat: dict[str, list[dict]] = {}
+    slug_to_url: dict[str, str] = {}
+    for disc_id in _WARMUP_DISCIPLINES:
+        cat = discipline(disc_id).get("cat") or ""
+        if not cat or cat in by_cat:
+            continue
+        recent = await asyncio.to_thread(_paper_store.query, cat, _WARMUP_DAYS, _WARMUP_MAX)
+        with_gh = [p for p in recent if p.get("github_url")]
+        if not with_gh:
+            continue
+        by_cat[cat] = with_gh
+        for p in with_gh:
+            slug = github_repo_slug(p["github_url"])
+            if slug:
+                slug_to_url.setdefault(slug, p["github_url"])
+    slugs = list(slug_to_url)[:_STARS_MAX_REPOS]
+    if not slugs:
+        return
+    stars = await fetch_github_stars(_client(), slugs, token=_GITHUB_TOKEN)
+    if not stars:
+        return
+    enriched_cats = 0
+    for cat, papers in by_cat.items():
+        rows = [
+            {**p, "github_stars": stars[slug]}
+            for p in papers
+            if (slug := github_repo_slug(p.get("github_url") or "")) and slug in stars
+        ]
+        if rows:
+            await asyncio.to_thread(_paper_store.record_snapshots, rows, cat)
+            enriched_cats += 1
+    logger.info("stars: enriched %d repos across %d cats", len(stars), enriched_cats)
+
+
+async def _stars_loop() -> None:
+    """背景 star 補值迴圈;等首輪 warm 把 papers 寫進 store 後啟動。"""
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await _stars_enrich_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("stars loop error: %s", e)
+        await asyncio.sleep(_STARS_INTERVAL)
+
+
 _INDEX_HTML: str = ""
 
 
@@ -395,6 +461,7 @@ async def lifespan(app: FastAPI):
     warm = asyncio.create_task(_warmup_loop())
     warm_t2 = asyncio.create_task(_warmup_loop_tier2())
     cleanup = asyncio.create_task(_paper_cleanup_task())
+    stars = asyncio.create_task(_stars_loop())
     try:
         yield
     finally:
@@ -402,6 +469,7 @@ async def lifespan(app: FastAPI):
         warm.cancel()
         warm_t2.cancel()
         cleanup.cancel()
+        stars.cancel()
         for s in (_s2_store, _pwc_store):
             s.flush()
         _paper_store.close()
@@ -625,8 +693,11 @@ def _slim_paper(p: dict) -> dict:
         out["venue"] = p["venue"]
     if p.get("hf_upvotes"):
         out["hf_upvotes"] = p["hf_upvotes"]
-    if p.get("github_url"):
-        out["github_url"] = p["github_url"]
+    github_url = p.get("github_url") or extract_github_url(p.get("summary"))
+    if github_url:
+        out["github_url"] = github_url
+    if p.get("github_stars"):
+        out["github_stars"] = p["github_stars"]
     if p.get("citation_count"):
         out["citation_count"] = p["citation_count"]
     if p.get("or_rating"):
@@ -748,6 +819,14 @@ def sitemap_xml():
     return Response(content=body, media_type="application/xml")
 
 
+def _canonical_max(max_results: int) -> int:
+    """把任意 max_results 收斂到固定桶,讓 endpoint / 語意召回 / warmup 共用同一 cache key。"""
+    for bucket in _CANONICAL_MAX_BUCKETS:
+        if max_results <= bucket:
+            return bucket
+    return _CANONICAL_MAX_BUCKETS[-1]
+
+
 def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     """回傳 (cache_key, builder coroutine factory) — 給 endpoint 與 warmup 共用。"""
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
@@ -759,6 +838,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     )
     if days >= 30 and max_results < 5000:
         max_results = 5000
+    max_results = _canonical_max(max_results)
     disc = discipline(discipline_id)
     arxiv_native = bool(disc.get("arxiv_native", True))
     openalex_concept = disc.get("openalex_concept")
@@ -766,8 +846,10 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
     pubmed_mesh = disc.get("pubmed_mesh")
     use_biorxiv = bool(disc.get("biorxiv"))
     use_medrxiv = bool(disc.get("medrxiv"))
+    disc_cats = [c for c in (disc.get("cats") or []) if c]
+    cats_key = "+".join(disc_cats)
     cache_key = (
-        f"{disc.get('cat','')}:{openalex_concept or ''}:{crossref_subject or ''}:"
+        f"{disc.get('cat','')}:{cats_key}:{openalex_concept or ''}:{crossref_subject or ''}:"
         f"{pubmed_mesh or ''}:{int(use_biorxiv)}:{int(use_medrxiv)}:"
         f"{int(arxiv_native)}:{days}:{max_results}"
     )
@@ -791,7 +873,9 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int):
                 logger.warning("%s listing failed for %s: %s", name, discipline_id, e)
                 return []
 
-        tasks = [_safe("arxiv", fetch_arxiv_listing(c, disc["cat"], days, arxiv_max))]
+        tasks = [_safe("arxiv", fetch_arxiv_listing(
+            c, disc["cat"], days, arxiv_max, cats=disc_cats or None,
+        ))]
         if s2_max > 0:
             s2_query = disc.get("name") or disc.get("cat") or ""
             tasks.append(_safe("s2", fetch_s2_search(
@@ -895,14 +979,20 @@ def _emergence_score(d: dict) -> dict:
     """
     cit_delta = max(0, int(d["cit_new"]) - int(d["cit_old"]))
     hf_delta = max(0, int(d["hf_new"]) - int(d["hf_old"]))
+    star_delta = max(0, int(d.get("star_new", 0)) - int(d.get("star_old", 0)))
     cit_z = cit_delta / ((int(d["cit_old"]) + _EMERGE_CIT_PRIOR) ** 0.5)
     hf_z = hf_delta / ((int(d["hf_old"]) + _EMERGE_HF_PRIOR) ** 0.5)
+    star_z = star_delta / ((int(d.get("star_old", 0)) + _EMERGE_STAR_PRIOR) ** 0.5)
     return {
         "cit_delta": cit_delta,
         "hf_delta": hf_delta,
+        "star_delta": star_delta,
         "cit_z": round(cit_z, 3),
         "hf_z": round(hf_z, 3),
-        "emergence": round(cit_z + _EMERGE_HF_WEIGHT * hf_z, 3),
+        "star_z": round(star_z, 3),
+        "emergence": round(
+            cit_z + _EMERGE_HF_WEIGHT * hf_z + _EMERGE_STAR_WEIGHT * star_z, 3
+        ),
     }
 
 
@@ -933,7 +1023,7 @@ async def get_emerging(
         scored: list[tuple[str, dict, dict]] = []
         for d in deltas:
             s = _emergence_score(d)
-            if (s["cit_delta"] or s["hf_delta"]) and s["emergence"] >= _EMERGE_MIN:
+            if (s["cit_delta"] or s["hf_delta"] or s["star_delta"]) and s["emergence"] >= _EMERGE_MIN:
                 scored.append((d["paper_id"], s, d))
         if not scored:
             return {
@@ -956,6 +1046,7 @@ async def get_emerging(
             item["emergence"] = s
             item["cit_new"] = d["cit_new"]
             item["hf_now"] = d["hf_new"]
+            item["star_now"] = d.get("star_new", 0)
             papers.append(item)
         return {
             "papers": papers,
@@ -1221,20 +1312,34 @@ async def get_citations(
     return etag_response(request, body, etag)
 
 
-# ── Papers with Code proxy ───────────────────────────────────────
+# ── GitHub repo/star resolver (PwC successor) ────────────────────
+# PwC 已於 2025-07 關站,改直接以 arXiv abstract 內的 github 連結 +
+# GitHub API 取 star 數。回傳形狀維持 {arxiv_id: {github_url, stars}} 不變。
 @app.get("/api/pwc")
 async def get_pwc(request: Request, arxiv_ids: str):
     ids = _unique_csv(arxiv_ids, max_items=_PWC_IDS_MAX, field_name="ids")
     missing = [a for a in ids if _pwc_store.get(a) is None]
     if missing:
-        fresh = await fetch_pwc_many(_client(), missing, concurrency=5)
-        for aid, entry in fresh.items():
-            _pwc_store.set(aid, entry)
+        gh_map = await asyncio.to_thread(_paper_store.github_urls_for_arxiv, missing)
+        slug_by_id = {a: github_repo_slug(u) for a, u in gh_map.items() if u}
+        slugs = sorted({s for s in slug_by_id.values() if s})
+        stars_by_slug: dict[str, int] = {}
+        if slugs:
+            try:
+                stars_by_slug = await fetch_github_stars(_client(), slugs, token=_GITHUB_TOKEN)
+            except Exception as e:
+                logger.warning("github star fetch failed: %s", e)
+        for a in missing:
+            slug = slug_by_id.get(a)
+            _pwc_store.set(a, {
+                "github_url": gh_map.get(a),
+                "stars": stars_by_slug.get(slug, 0) if slug else 0,
+            })
 
     out: dict[str, dict] = {}
     for a in ids:
         v = _pwc_store.get(a)
-        if v:
+        if v and v.get("github_url"):
             out[a] = {"github_url": v.get("github_url"), "stars": v.get("stars", 0)}
 
     body = _json.dumps({"results": out}, ensure_ascii=False).encode("utf-8")

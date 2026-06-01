@@ -90,10 +90,18 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
 
 
 async def fetch_arxiv_listing(
-    client: httpx.AsyncClient, cat: str, days: int, max_results: int
+    client: httpx.AsyncClient, cat: str, days: int, max_results: int,
+    cats: list[str] | None = None, terms: str | None = None,
 ) -> list[dict[str, Any]]:
+    # cats 為多分類 OR 查詢(如 ml = cs.LG OR stat.ML);terms 進一步以全文 AND 收窄(子主題用)
+    cat_list = [c for c in (cats or [cat]) if c]
+    cat_clause = " OR ".join(f"cat:{c}" for c in cat_list)
+    if len(cat_list) > 1:
+        cat_clause = f"({cat_clause})"
+    search_query = f"{cat_clause} AND ({terms})" if terms else cat_clause
+    label = "+".join(cat_list)
     params = {
-        "search_query": f"cat:{cat}",
+        "search_query": search_query,
         "sortBy": "submittedDate",
         "sortOrder": "descending",
         "max_results": max_results,
@@ -105,7 +113,7 @@ async def fetch_arxiv_listing(
             r = await client.get(ARXIV_BASE, params=params, timeout=30.0)
             if r.status_code in (429, 503):
                 if sleep_s > 0:
-                    logger.info("arXiv %d on %s, retrying in %ss", r.status_code, cat, sleep_s)
+                    logger.info("arXiv %d on %s, retrying in %ss", r.status_code, label, sleep_s)
                     await asyncio.sleep(sleep_s)
                     continue
                 raise HTTPException(status_code=502, detail="arXiv rate-limited")
@@ -1014,4 +1022,76 @@ async def fetch_pwc_many(
             out[aid] = await fetch_pwc_one(client, aid)
 
     await asyncio.gather(*[_one(a) for a in arxiv_ids])
+    return out
+
+
+# ── GitHub stars (PwC 已於 2025-07 關閉,改直接打 GitHub API) ────────
+GITHUB_API = "https://api.github.com"
+_GITHUB_URL_RE = re.compile(
+    r"https?://github\.com/([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*?)(?:\.git)?(?=[\s)\].,;'\"<]|$)",
+    re.IGNORECASE,
+)
+_GITHUB_BAD_OWNERS = {"sponsors", "about", "features", "topics", "collections", "marketplace"}
+
+
+def extract_github_url(text: str | None) -> str | None:
+    """從摘要抓第一個 github repo URL(owner/repo),濾掉非 repo 路徑。"""
+    if not text:
+        return None
+    for owner, repo in _GITHUB_URL_RE.findall(text):
+        if owner.lower() in _GITHUB_BAD_OWNERS:
+            continue
+        repo = repo.rstrip(".")
+        if not repo:
+            continue
+        return f"https://github.com/{owner}/{repo}"
+    return None
+
+
+def github_repo_slug(github_url: str | None) -> str | None:
+    """https://github.com/owner/repo → 'owner/repo'(供 GitHub API 用)。"""
+    if not github_url:
+        return None
+    m = _GITHUB_URL_RE.search(github_url)
+    if not m:
+        return None
+    return f"{m.group(1)}/{m.group(2).rstrip('.')}"
+
+
+async def fetch_github_stars(
+    client: httpx.AsyncClient,
+    repo_slugs: list[str],
+    token: str | None = None,
+    concurrency: int = 4,
+) -> dict[str, int]:
+    """批次查詢 repo star 數。回傳 {slug: stars};查不到的 slug 省略。
+
+    有 token → 5000 req/hr;無 token → 60 req/hr,呼叫端需自行控管預算。
+    """
+    if not repo_slugs:
+        return {}
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": ARXIV_UA,
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    sem = asyncio.Semaphore(concurrency)
+    out: dict[str, int] = {}
+
+    async def _one(slug: str) -> None:
+        async with sem:
+            try:
+                r = await client.get(f"{GITHUB_API}/repos/{slug}", headers=headers, timeout=10.0)
+                if r.status_code == 200:
+                    stars = r.json().get("stargazers_count")
+                    if isinstance(stars, int):
+                        out[slug] = stars
+                elif r.status_code == 403 and "rate limit" in (r.text or "").lower():
+                    logger.warning("GitHub rate-limited on %s", slug)
+            except Exception as e:
+                logger.debug("GitHub stars fetch failed for %s: %s", slug, e)
+
+    await asyncio.gather(*[_one(s) for s in dict.fromkeys(repo_slugs)])
     return out

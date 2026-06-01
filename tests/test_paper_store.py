@@ -20,7 +20,7 @@ class PaperStoreSnapshotTests(unittest.TestCase):
         self.store.close()
         self._tmp.cleanup()
 
-    def _paper(self, aid, cit=None, hf=None, pub=None):
+    def _paper(self, aid, cit=None, hf=None, pub=None, stars=None, gh=None):
         p = {"title": f"P{aid}", "url": f"https://arxiv.org/abs/{aid}",
              "external_ids": {"arxiv": aid}}
         if cit is not None:
@@ -29,6 +29,10 @@ class PaperStoreSnapshotTests(unittest.TestCase):
             p["hf_upvotes"] = hf
         if pub is not None:
             p["published"] = pub
+        if stars is not None:
+            p["github_stars"] = stars
+        if gh is not None:
+            p["github_url"] = gh
         return p
 
     def test_record_snapshots_writes_and_counts(self):
@@ -68,6 +72,25 @@ class PaperStoreSnapshotTests(unittest.TestCase):
         got = self.store.payloads_by_ids([_paper_id(p)], "ml")
         self.assertIn(_paper_id(p), got)
         self.assertEqual(got[_paper_id(p)]["citation_count"], 7)
+
+    def test_github_stars_snapshot_delta(self):
+        # star 補值寫進 snapshots,metric_deltas 暴露 new/old star
+        self.store.record_snapshots([self._paper("2401.7", stars=120)], "ml")
+        with self.store._lock:
+            self.store._conn.execute(
+                "INSERT INTO metric_snapshots(paper_id, primary_cat, snapshot_date, "
+                "github_stars, published, at) VALUES(?,?,?,?,?,?)",
+                (_paper_id(self._paper("2401.7")), "ml", _d(7), 30, "", 0.0),
+            )
+        d = self.store.metric_deltas("ml", window_days=14)[0]
+        self.assertEqual(d["star_new"], 120)
+        self.assertEqual(d["star_old"], 30)
+
+    def test_github_urls_for_arxiv_lookup(self):
+        p = self._paper("2401.8", pub=_d(1), gh="https://github.com/foo/bar")
+        self.store.upsert_many([p], "ml")
+        got = self.store.github_urls_for_arxiv(["2401.8", "2401.404"])
+        self.assertEqual(got, {"2401.8": "https://github.com/foo/bar"})
 
 
 if __name__ == "__main__":

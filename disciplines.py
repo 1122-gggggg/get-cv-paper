@@ -1,6 +1,7 @@
 """arXiv / OpenAlex / Crossref / PubMed / bioRxiv 多源學科映射表 + 取用器。
 
 每個 discipline 至少有 `cat`(arXiv 主分類)，並可選擇性提供:
+- `cats`: arXiv 多分類列表(如 ml = [cs.LG, stat.ML]),以 OR 查詢擴大召回;省略則等同 [cat]
 - `openalex_concept`: OpenAlex Concept ID (Cxxxxxxxx)
 - `crossref_subject`: Crossref subject code (str, 4 digits)
 - `pubmed_mesh`: PubMed MeSH 主題詞 (str)
@@ -20,12 +21,12 @@ DISCIPLINES: dict[str, dict] = {
     # ── CS 主領域 (arXiv native) ────────────────────────────────
     "cv":          {"cat": "cs.CV",   "name": "電腦視覺",        "role": "電腦視覺研究助理",   "arxiv_native": True},
     "nlp":         {"cat": "cs.CL",   "name": "自然語言處理",    "role": "自然語言處理研究助理","arxiv_native": True},
-    "ml":          {"cat": "cs.LG",   "name": "機器學習",        "role": "機器學習研究助理",   "arxiv_native": True},
-    "ai":          {"cat": "cs.AI",   "name": "人工智慧",        "role": "人工智慧研究助理",   "arxiv_native": True},
-    "robotics":    {"cat": "cs.RO",   "name": "機器人學",        "role": "機器人學研究助理",   "arxiv_native": True},
+    "ml":          {"cat": "cs.LG",   "name": "機器學習",        "role": "機器學習研究助理",   "arxiv_native": True, "cats": ["cs.LG", "stat.ML"]},
+    "ai":          {"cat": "cs.AI",   "name": "人工智慧",        "role": "人工智慧研究助理",   "arxiv_native": True, "cats": ["cs.AI", "cs.MA", "cs.NE"]},
+    "robotics":    {"cat": "cs.RO",   "name": "機器人學",        "role": "機器人學研究助理",   "arxiv_native": True, "cats": ["cs.RO", "eess.SY"]},
     "graphics":    {"cat": "cs.GR",   "name": "電腦繪圖",        "role": "電腦繪圖研究助理",   "arxiv_native": True},
     "security":    {"cat": "cs.CR",   "name": "資訊安全",        "role": "資訊安全研究助理",   "arxiv_native": True},
-    "systems":     {"cat": "cs.OS",   "name": "系統與架構",      "role": "系統研究助理",       "arxiv_native": True},
+    "systems":     {"cat": "cs.OS",   "name": "系統與架構",      "role": "系統研究助理",       "arxiv_native": True, "cats": ["cs.OS", "cs.AR", "cs.DC"]},
     "db":          {"cat": "cs.DB",   "name": "資料庫",          "role": "資料庫研究助理",     "arxiv_native": True},
     "hci":         {"cat": "cs.HC",   "name": "人機互動",        "role": "人機互動研究助理",   "arxiv_native": True},
     "ir":          {"cat": "cs.IR",   "name": "資訊檢索與推薦",  "role": "資訊檢索研究助理",   "arxiv_native": True},
@@ -33,14 +34,14 @@ DISCIPLINES: dict[str, dict] = {
     "networks":    {"cat": "cs.NI",   "name": "網路工程",        "role": "網路研究助理",       "arxiv_native": True},
     "distsys":     {"cat": "cs.DC",   "name": "分散式系統",      "role": "分散式系統研究助理", "arxiv_native": True},
     "infotheory":  {"cat": "cs.IT",   "name": "資訊理論",        "role": "資訊理論研究助理",   "arxiv_native": True},
-    "multimedia":  {"cat": "cs.MM",   "name": "多媒體",          "role": "多媒體研究助理",     "arxiv_native": True},
+    "multimedia":  {"cat": "cs.MM",   "name": "多媒體",          "role": "多媒體研究助理",     "arxiv_native": True, "cats": ["cs.MM", "cs.SD"]},
     "proglang":    {"cat": "cs.PL",   "name": "程式語言",        "role": "程式語言研究助理",   "arxiv_native": True},
     "complexity":  {"cat": "cs.CC",   "name": "計算複雜度",      "role": "計算理論研究助理",   "arxiv_native": True},
     "logic":       {"cat": "cs.LO",   "name": "計算邏輯",        "role": "計算邏輯研究助理",   "arxiv_native": True},
     "gametheory":  {"cat": "cs.GT",   "name": "賽局論",          "role": "賽局論研究助理",     "arxiv_native": True},
     "datastruct":  {"cat": "cs.DS",   "name": "資料結構與演算法","role": "演算法研究助理",     "arxiv_native": True},
-    "datasci":     {"cat": "stat.ML", "name": "資料科學",        "role": "資料科學研究助理",   "arxiv_native": True},
-    "socialnet":   {"cat": "cs.SI",   "name": "社群網路分析",    "role": "社群網路研究助理",   "arxiv_native": True},
+    "datasci":     {"cat": "stat.ML", "name": "資料科學",        "role": "資料科學研究助理",   "arxiv_native": True, "cats": ["stat.ML", "cs.LG", "stat.ME"]},
+    "socialnet":   {"cat": "cs.SI",   "name": "社群網路分析",    "role": "社群網路研究助理",   "arxiv_native": True, "cats": ["cs.SI", "physics.soc-ph"]},
     "numerical":   {"cat": "cs.NA",   "name": "數值分析",        "role": "數值分析研究助理",   "arxiv_native": True},
     # 新增 CS 細分
     "fl":          {"cat": "cs.FL",   "name": "形式語言與自動機","role": "形式語言研究助理",   "arxiv_native": True},
@@ -92,7 +93,7 @@ DISCIPLINES: dict[str, dict] = {
     "cellbio":     {"cat": "q-bio.SC",  "name": "細胞生物",     "role": "細胞生物研究助理",   "arxiv_native": True,  "biorxiv": True},
     "bioinfo":     {"cat": "q-bio.QM",  "name": "生物資訊",     "role": "生物資訊研究助理",   "arxiv_native": True,  "biorxiv": True},
     "biomed":      {"cat": "q-bio.TO",  "name": "生醫工程",     "role": "生醫工程研究助理",   "arxiv_native": True,  "biorxiv": True, "pubmed_mesh": "Biomedical Engineering"},
-    "medimg":      {"cat": "eess.IV",   "name": "醫療影像",     "role": "醫療影像研究助理",   "arxiv_native": True},
+    "medimg":      {"cat": "eess.IV",   "name": "醫療影像",     "role": "醫療影像研究助理",   "arxiv_native": True,  "cats": ["eess.IV", "cs.CV"]},
     "epidem":      {"cat": "q-bio.PE",  "name": "流行病學",     "role": "流行病學研究助理",   "arxiv_native": True,  "biorxiv": True, "pubmed_mesh": "Epidemiology"},
     "neuroai":     {"cat": "q-bio.NC",  "name": "認知與神經 AI","role": "認知科學研究助理",   "arxiv_native": True,  "biorxiv": True},
     "pubhealth":   {"cat": "q-bio.PE",  "name": "公衛",         "role": "公衛研究助理",       "arxiv_native": True,  "biorxiv": True, "pubmed_mesh": "Public Health"},
@@ -120,8 +121,8 @@ DISCIPLINES: dict[str, dict] = {
     "tradingstrat":  {"cat": "q-fin.TR","name": "交易策略",     "role": "交易策略研究助理", "arxiv_native": True},
 
     # ── 電機 / 控制 ─────────────────────────────────────────────
-    "eess":          {"cat": "eess.SP", "name": "電機與信號",   "role": "電機工程研究助理", "arxiv_native": True},
-    "speech":        {"cat": "eess.AS", "name": "語音與音訊",   "role": "語音研究助理",     "arxiv_native": True},
+    "eess":          {"cat": "eess.SP", "name": "電機與信號",   "role": "電機工程研究助理", "arxiv_native": True, "cats": ["eess.SP", "eess.SY"]},
+    "speech":        {"cat": "eess.AS", "name": "語音與音訊",   "role": "語音研究助理",     "arxiv_native": True, "cats": ["eess.AS", "cs.SD"]},
     "control":       {"cat": "eess.SY", "name": "控制與系統工程","role": "控制工程研究助理","arxiv_native": True},
     "civil":         {"cat": "eess.SY", "name": "土木與結構",   "role": "土木工程研究助理", "arxiv_native": False},
     "indus":         {"cat": "math.OC", "name": "工業工程",     "role": "工業工程研究助理", "arxiv_native": False},

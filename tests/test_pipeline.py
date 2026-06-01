@@ -77,6 +77,63 @@ class ArxivIdValidationTests(unittest.TestCase):
         self.assertEqual(out, ["a", "b", "c"])
 
 
+class ArxivListingQueryTests(unittest.TestCase):
+    def _capture_query(self, **kwargs) -> str:
+        import asyncio
+
+        captured = {}
+
+        class _FakeResp:
+            status_code = 200
+            content = _ATOM
+
+            def raise_for_status(self):
+                return None
+
+        class _FakeClient:
+            async def get(self, _url, params=None, timeout=None):
+                captured["search_query"] = params["search_query"]
+                return _FakeResp()
+
+        asyncio.run(clients.fetch_arxiv_listing(
+            _FakeClient(), "cs.CV", 7, 50, **kwargs
+        ))
+        return captured["search_query"]
+
+    def test_single_cat_plain_query(self):
+        self.assertEqual(self._capture_query(), "cat:cs.CV")
+
+    def test_multi_cat_builds_grouped_or(self):
+        q = self._capture_query(cats=["cs.LG", "stat.ML"])
+        self.assertEqual(q, "(cat:cs.LG OR cat:stat.ML)")
+
+    def test_terms_appended_as_and_clause(self):
+        q = self._capture_query(cats=["cs.AI", "cs.MA"], terms="all:agent")
+        self.assertEqual(q, "(cat:cs.AI OR cat:cs.MA) AND (all:agent)")
+
+
+class GithubRepoHelperTests(unittest.TestCase):
+    def test_extract_first_repo_from_abstract(self):
+        text = "Code at https://github.com/Owner/My-Repo.git and a demo."
+        self.assertEqual(
+            clients.extract_github_url(text), "https://github.com/Owner/My-Repo"
+        )
+
+    def test_extract_skips_non_repo_owners(self):
+        text = "See https://github.com/sponsors/foo then https://github.com/o/r ."
+        self.assertEqual(clients.extract_github_url(text), "https://github.com/o/r")
+
+    def test_extract_returns_none_when_absent(self):
+        self.assertIsNone(clients.extract_github_url("no links here"))
+        self.assertIsNone(clients.extract_github_url(None))
+
+    def test_repo_slug_extraction(self):
+        self.assertEqual(
+            clients.github_repo_slug("https://github.com/Owner/Repo"), "Owner/Repo"
+        )
+        self.assertIsNone(clients.github_repo_slug(None))
+
+
 class ProbeTests(unittest.TestCase):
     # Plain TestClient (no `with`) skips lifespan → no warmup / no network.
     def test_health_always_ok(self):

@@ -56,7 +56,18 @@ class PaperStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
+        self._migrate()
         logger.info("paper_store: DB at %s", db_path)
+
+    def _migrate(self) -> None:
+        """加新欄位給既有 DB(CREATE TABLE IF NOT EXISTS 不會 ALTER 舊表)。"""
+        try:
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(metric_snapshots)")}
+            if "github_stars" not in cols:
+                self._conn.execute("ALTER TABLE metric_snapshots ADD COLUMN github_stars INTEGER")
+                logger.info("paper_store: migrated metric_snapshots +github_stars")
+        except Exception as e:
+            logger.warning("paper_store: migration failed: %s", e)
 
     def _init_schema(self) -> None:
         self._conn.executescript(
@@ -82,6 +93,7 @@ class PaperStore:
                 snapshot_date TEXT NOT NULL,
                 citation_count INTEGER,
                 hf_upvotes INTEGER,
+                github_stars INTEGER,
                 published TEXT,
                 at REAL NOT NULL,
                 PRIMARY KEY (paper_id, primary_cat, snapshot_date)
@@ -147,28 +159,31 @@ class PaperStore:
         now = time.time()
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         fresh_cutoff = self._cutoff(2)
-        snap_rows: list[tuple[str, str, str, int | None, int | None, str, float]] = []
+        snap_rows: list[tuple[str, str, str, int | None, int | None, int | None, str, float]] = []
         fresh = 0
         for p in papers:
             pid = _paper_id(p)
             cit = p.get("citation_count")
             hf = p.get("hf_upvotes")
+            stars = p.get("github_stars")
             cit_i = int(cit) if isinstance(cit, (int, float)) and cit >= 0 else None
             hf_i = int(hf) if isinstance(hf, (int, float)) and hf >= 0 else None
+            stars_i = int(stars) if isinstance(stars, (int, float)) and stars >= 0 else None
             pub = _norm_published(p)
             if pub and pub >= fresh_cutoff:
                 fresh += 1
-            snap_rows.append((pid, primary_cat, today, cit_i, hf_i, pub, now))
+            snap_rows.append((pid, primary_cat, today, cit_i, hf_i, stars_i, pub, now))
         try:
             with self._lock:
                 self._conn.execute("BEGIN")
                 self._conn.executemany(
                     "INSERT INTO metric_snapshots"
-                    "(paper_id, primary_cat, snapshot_date, citation_count, hf_upvotes, published, at) "
-                    "VALUES(?,?,?,?,?,?,?) "
+                    "(paper_id, primary_cat, snapshot_date, citation_count, hf_upvotes, github_stars, published, at) "
+                    "VALUES(?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(paper_id, primary_cat, snapshot_date) DO UPDATE SET "
                     " citation_count=MAX(COALESCE(citation_count,0), COALESCE(excluded.citation_count,0)), "
                     " hf_upvotes=MAX(COALESCE(hf_upvotes,0), COALESCE(excluded.hf_upvotes,0)), "
+                    " github_stars=MAX(COALESCE(github_stars,0), COALESCE(excluded.github_stars,0)), "
                     " at=excluded.at",
                     snap_rows,
                 )
@@ -203,11 +218,12 @@ class PaperStore:
             "WITH ranked AS ("
             "  SELECT paper_id, snapshot_date,"
             "         COALESCE(citation_count,0) AS cit, COALESCE(hf_upvotes,0) AS hf,"
+            "         COALESCE(github_stars,0) AS gh,"
             "         ROW_NUMBER() OVER (PARTITION BY paper_id ORDER BY snapshot_date DESC) AS rn_new,"
             "         ROW_NUMBER() OVER (PARTITION BY paper_id ORDER BY snapshot_date ASC)  AS rn_old"
             "  FROM metric_snapshots WHERE primary_cat=? AND snapshot_date>=?"
             ") "
-            "SELECT n.paper_id, n.cit, o.cit, n.hf, o.hf, n.snapshot_date, o.snapshot_date "
+            "SELECT n.paper_id, n.cit, o.cit, n.hf, o.hf, n.gh, o.gh, n.snapshot_date, o.snapshot_date "
             "FROM ranked n JOIN ranked o USING(paper_id) "
             "WHERE n.rn_new=1 AND o.rn_old=1 AND n.snapshot_date<>o.snapshot_date "
             "LIMIT ?"
@@ -220,7 +236,8 @@ class PaperStore:
                     "paper_id": r[0],
                     "cit_new": int(r[1]), "cit_old": int(r[2]),
                     "hf_new": int(r[3]), "hf_old": int(r[4]),
-                    "date_new": r[5], "date_old": r[6],
+                    "star_new": int(r[5]), "star_old": int(r[6]),
+                    "date_new": r[7], "date_old": r[8],
                 }
                 for r in rows
             ]
@@ -263,6 +280,32 @@ class PaperStore:
                         out[pid] = json.loads(payload)
         except Exception as e:
             logger.warning("paper_store: payloads_by_ids failed: %s", e)
+        return out
+
+    def github_urls_for_arxiv(self, arxiv_ids: list[str]) -> dict[str, str]:
+        """{arxiv_id: github_url} — 跨 cat 查 payload 取 github_url(供 stars 解析)。"""
+        if not arxiv_ids:
+            return {}
+        pids = [f"arxiv:{a}" for a in arxiv_ids]
+        out: dict[str, str] = {}
+        try:
+            with self._lock:
+                for i in range(0, len(pids), 400):
+                    chunk = pids[i : i + 400]
+                    ph = ",".join("?" for _ in chunk)
+                    rows = self._conn.execute(
+                        f"SELECT paper_id, payload FROM papers WHERE paper_id IN ({ph})",
+                        tuple(chunk),
+                    ).fetchall()
+                    for pid, payload in rows:
+                        aid = pid.split("arxiv:", 1)[-1]
+                        if aid in out:
+                            continue
+                        gh = (json.loads(payload) or {}).get("github_url")
+                        if gh:
+                            out[aid] = gh
+        except Exception as e:
+            logger.warning("paper_store: github_urls_for_arxiv failed: %s", e)
         return out
 
     def query(self, primary_cat: str, days: int, limit: int = 500) -> list[dict[str, Any]]:

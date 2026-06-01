@@ -35,6 +35,23 @@ class ApiLimitTests(unittest.TestCase):
         self.assertEqual(result, {"papers": []})
         self.assertEqual(seen, {"q": "diffusion", "max_results": main._SEARCH_MAX_RESULTS})
 
+    def test_canonical_max_collapses_user_and_warmup_to_same_bucket(self):
+        # 使用者 50 與語意召回/warmup 80 必須落入同一桶,cache key 才會一致
+        self.assertEqual(main._canonical_max(50), main._canonical_max(main._WARMUP_MAX))
+        self.assertEqual(main._canonical_max(50), 80)
+        self.assertEqual(main._canonical_max(1), 80)
+        self.assertEqual(main._canonical_max(80), 80)
+        self.assertEqual(main._canonical_max(81), 200)
+        self.assertEqual(main._canonical_max(1000), 1000)
+        self.assertEqual(main._canonical_max(99999), 5000)
+
+    def test_build_spec_cache_key_aligns_user_request_with_warmup(self):
+        user_key, _ = main._papers_build_spec(main.DEFAULT_DISCIPLINE, main._WARMUP_DAYS, 50)
+        warm_key, _ = main._papers_build_spec(
+            main.DEFAULT_DISCIPLINE, main._WARMUP_DAYS, main._WARMUP_MAX
+        )
+        self.assertEqual(user_key, warm_key)
+
     def test_pwc_rejects_too_many_ids_before_fetching(self):
         too_many = ",".join(str(i) for i in range(main._PWC_IDS_MAX + 1))
 
