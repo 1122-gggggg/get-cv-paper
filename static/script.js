@@ -788,6 +788,14 @@ function selectDiscipline(id) {
         closeDisciplinePicker();
         return;
     }
+    // #11 切換領域時同步 URL 的 d,並清掉與舊領域綁定的 cat(主題/會議換領域即失效),避免 reload 後被舊參數覆蓋
+    try {
+        const p = new URLSearchParams(window.location.search);
+        p.set('d', id);
+        p.delete('cat');
+        const qs = p.toString();
+        window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+    } catch (e) {}
     // 切換領域 → reload 使整個 UI／localStorage 狀態重新初始化
     location.reload();
 }
@@ -2920,10 +2928,11 @@ function handleSearchInput() {
     const query = searchInput.value.trim();
     if (!query) {
         filterPapers();
+        writeUrlState();  // #11 清空搜尋 → URL 去掉 q
         return;
     }
     if (window._SEMANTIC_ON) return; // semantic 模式只在 Enter 時觸發
-    searchDebounceTimer = setTimeout(() => searchAllPapers(query), 250);
+    searchDebounceTimer = setTimeout(() => { searchAllPapers(query); writeUrlState(); }, 250);
 }
 
 async function semanticSearchPapers(query) {
@@ -3281,6 +3290,7 @@ function _selectCategory(filter, activeEl) {
     syncTopConfActiveState();
     filterPapers();
     if (_isTopicFilter(filter)) _fetchTopicFeed(filter);
+    writeUrlState();  // #11
 }
 
 function bindCategoryBtns() {
@@ -3322,8 +3332,71 @@ function showToast(msg) {
     }, 1800);
 }
 
+// ── #11 可分享 / 可書籤的 URL 狀態 ───────────────────────────────
+const URL_STATE_DEFAULTS = { cat: 'all', sort: 'hot', range: 'week' };
+let _restoringUrlState = false;
+
+function readUrlState() {
+    try {
+        const p = new URLSearchParams(window.location.search);
+        return { d: p.get('d'), cat: p.get('cat'), q: p.get('q'), sort: p.get('sort'), range: p.get('range') };
+    } catch (e) {
+        return {};
+    }
+}
+
+function writeUrlState() {
+    if (_restoringUrlState) return;
+    try {
+        const p = new URLSearchParams(window.location.search);
+        const disc = window.getActiveDiscipline?.()?.id;
+        const q = (document.getElementById('searchInput')?.value || '').trim();
+        const set = (k, v, def) => { if (v && v !== def) p.set(k, v); else p.delete(k); };
+        if (disc) p.set('d', disc); else p.delete('d');
+        set('cat', currentCategory, URL_STATE_DEFAULTS.cat);
+        set('sort', currentSortValue, URL_STATE_DEFAULTS.sort);
+        set('range', currentTimeRange, URL_STATE_DEFAULTS.range);
+        if (q) p.set('q', q); else p.delete('q');
+        const qs = p.toString();
+        window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+    } catch (e) {}
+}
+
+function applyUrlStateLive(s) {
+    _restoringUrlState = true;
+    try {
+        if (s.sort && SORT_VALUES.has(s.sort)) currentSortValue = s.sort;
+        if (s.range && TIME_RANGE_VALUES.has(s.range)) currentTimeRange = s.range;
+        const targetCat = s.cat || 'all';
+        currentCategory = targetCat;
+        try { localStorage.setItem(LAST_CATEGORY_KEY, targetCat); } catch (e) {}
+        document.querySelectorAll('.category-btn, .topic-item, .conf-item').forEach(b => b.classList.remove('active'));
+        const catBtn = document.querySelector(
+            `.category-btn[data-filter="${CSS.escape(targetCat)}"], .topic-item[data-filter="${CSS.escape(targetCat)}"], .conf-item[data-filter="${CSS.escape(targetCat)}"]`
+        );
+        if (catBtn) catBtn.classList.add('active');
+        const sortLabelEl = document.getElementById('sortLabel');
+        if (sortLabelEl && typeof getSortMeta === 'function') sortLabelEl.textContent = getSortMeta(currentSortValue).label;
+        document.querySelectorAll('#sortSubmenu .sort-item').forEach(i => i.classList.toggle('active', i.dataset.value === currentSortValue));
+        document.querySelectorAll('#timeRangeWrapper .time-range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === currentTimeRange));
+        const si = document.getElementById('searchInput');
+        if (si) { si.value = s.q || ''; si.classList.toggle('has-text', !!s.q); }
+        if (typeof syncTopConfActiveState === 'function') syncTopConfActiveState();
+        if (s.q) { if (window._SEMANTIC_ON) semanticSearchPapers(s.q); else searchAllPapers(s.q); }
+        else filterPapers();
+    } finally {
+        _restoringUrlState = false;
+    }
+}
+
 // Initial Load
 document.addEventListener('DOMContentLoaded', () => {
+    // #11 解析 URL 狀態(深連結/書籤)；d 需在 discipline gate 前先生效
+    const _urlState = readUrlState();
+    if (_urlState.d && window.DISCIPLINES?.[_urlState.d]) {
+        window.setActiveDiscipline(_urlState.d);
+    }
+
     // 0) 點左上角品牌 ICON 回到主頁(切回 All + 清空搜尋)
     const _brandHome = document.getElementById('brandHome');
     if (_brandHome) {
@@ -3375,8 +3448,8 @@ document.addEventListener('DOMContentLoaded', () => {
     renderCustomFeedBtns();
     bindCategoryBtns();
 
-    // 恢復上次的分類（找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
-    const savedCategory = localStorage.getItem(LAST_CATEGORY_KEY);
+    // 恢復上次的分類（URL cat 優先；找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
+    const savedCategory = _urlState.cat || localStorage.getItem(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
         const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || savedCategory === 'popular' || savedCategory === 'reviews' || CONF_FILTERS.has(savedCategory);
         const targetBtn = document.querySelector(
@@ -3399,8 +3472,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    fetchPapers();
+    // #11 套用 URL 的 sort / range（cat 已於上方處理；q 於資料載入後觸發搜尋）
+    if (_urlState.sort && SORT_VALUES.has(_urlState.sort)) currentSortValue = _urlState.sort;
+    if (_urlState.range && TIME_RANGE_VALUES.has(_urlState.range)) currentTimeRange = _urlState.range;
+
+    fetchPapers().finally(() => {
+        try {
+            if (_urlState.q) {
+                const si = document.getElementById('searchInput');
+                if (si) { si.value = _urlState.q; si.classList.add('has-text'); }
+                if (window._SEMANTIC_ON) semanticSearchPapers(_urlState.q);
+                else searchAllPapers(_urlState.q);
+            }
+            writeUrlState();  // 正規化 URL（清掉預設值參數）
+        } catch (e) {}
+    });
     initLiveStream();  // #15 SSE 即時推播
+
+    // #11 上/下一頁(back/forward)時重新套用 URL 狀態
+    window.addEventListener('popstate', () => {
+        const s = readUrlState();
+        const curDisc = window.getActiveDiscipline?.()?.id;
+        if (s.d && window.DISCIPLINES?.[s.d] && s.d !== curDisc) {
+            window.setActiveDiscipline(s.d);
+            location.reload();
+            return;
+        }
+        applyUrlStateLive(s);
+    });
 
     // ── 分類標籤左右箭頭 ──（側邊欄模式下不啟用）
     const filterScroll = document.querySelector('.category-filters');
@@ -3516,6 +3615,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 try { localStorage.setItem('visionary_time_range_v1', next); } catch (e) {}
                 updateTimeRangeUI();
                 await filterPapers();
+                writeUrlState();  // #11
             });
         });
         updateTimeRangeUI();
@@ -3565,6 +3665,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 item.classList.add('active');
                 closeSortSubmenu();
                 filterPapers();
+                writeUrlState();  // #11
             });
         });
     }
@@ -3669,6 +3770,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             searchAllPapers(q);
         }
+        writeUrlState();  // #11
     });
 
     // ── 最近搜尋 chip bar ─────────────────────────────────────────
@@ -3688,6 +3790,7 @@ document.addEventListener('DOMContentLoaded', () => {
             pushRecentSearch(q);
             if (window._SEMANTIC_ON) semanticSearchPapers(q);
             else searchAllPapers(q);
+            writeUrlState();  // #11
         });
     }
 
@@ -3708,6 +3811,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const allBtn = document.querySelector('.category-btn[data-filter="all"]');
             if (allBtn) allBtn.classList.add('active');
             filterPapers();
+            writeUrlState();  // #11
         });
     }
 
