@@ -3546,3 +3546,127 @@ body.light-mode .cf-title { color: #0f172a; }
 body.light-mode .cf-field > span { color: #334155; }
 body.light-mode .cf-field input { background: #f8fafc; color: #0f172a; border-color: #cbd5e1; }
 body.light-mode .cf-hint { color: #64748b; }
+
+/* ── #13 命令面板 (Ctrl/Cmd-K) ───────────────────────────────── */
+.cmd-palette {
+    position: fixed;
+    inset: 0;
+    z-index: 1300;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+}
+.cmd-palette.hidden { display: none; }
+.cmd-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(8, 12, 24, 0.55);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+.cmd-panel {
+    position: relative;
+    margin-top: 12vh;
+    width: min(640px, 92vw);
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-glass);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    box-shadow: 0 24px 64px rgba(8, 12, 24, 0.28);
+    overflow: hidden;
+    animation: cmdPop 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes cmdPop {
+    from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.cmd-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--card-border);
+}
+.cmd-icon { color: var(--accent-to); flex: none; }
+#cmdInput {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 1.02rem;
+    font-family: inherit;
+}
+.cmd-esc {
+    flex: none;
+    font-size: 0.7rem;
+    padding: 2px 7px;
+    border-radius: 6px;
+    border: 1px solid var(--card-border);
+    color: var(--text-secondary);
+}
+.cmd-results {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    overflow-y: auto;
+    flex: 1;
+}
+.cmd-group-label {
+    padding: 8px 12px 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+.cmd-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 9px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 0.92rem;
+}
+.cmd-item .cmd-item-icon { flex: none; width: 1.4em; text-align: center; }
+.cmd-item .cmd-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-item .cmd-item-kind {
+    flex: none;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--card-border);
+}
+.cmd-item.active,
+.cmd-item:hover { background: var(--hover-bg); }
+.cmd-item.active { box-shadow: inset 2px 0 0 var(--accent-to); }
+.cmd-empty {
+    padding: 22px 16px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+.cmd-foot {
+    display: flex;
+    gap: 16px;
+    padding: 9px 16px;
+    border-top: 1px solid var(--card-border);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+.cmd-foot kbd {
+    font-size: 0.68rem;
+    padding: 1px 5px;
+    margin-right: 2px;
+    border-radius: 5px;
+    border: 1px solid var(--card-border);
+}
+@media (max-width: 600px) {
+    .cmd-panel { margin-top: 6vh; max-height: 82vh; }
+    .cmd-foot { display: none; }
+}

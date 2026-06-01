@@ -4018,3 +4018,178 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
     document.getElementById('kbdHint')?.classList.toggle('visible');
 });
+
+// ── #13 命令面板（Ctrl/Cmd-K）─────────────────────────────────────
+(function initCommandPalette() {
+    const palette = document.getElementById('cmdPalette');
+    const input = document.getElementById('cmdInput');
+    const resultsEl = document.getElementById('cmdResults');
+    if (!palette || !input || !resultsEl) return;
+
+    let _cmdItems = [];   // 目前渲染的可執行項目（依 DOM 順序）
+    let _selIdx = 0;
+    let _lastFocus = null;
+    const GROUP_ORDER = ['動作', '領域', '分類', '排序', '時間'];
+
+    function staticCommands() {
+        const cmds = [];
+        const push = (kind, icon, label, search, run) => cmds.push({ kind, icon, label, search, run });
+        push('動作', '🔎', '聚焦搜尋框', '搜尋 search focus', () => { closePalette(); document.getElementById('searchInput')?.focus(); });
+        push('動作', '🆕', '自上次造訪新增的論文', '新增 new since visit', () => { closePalette(); if (typeof showNewSinceVisit === 'function') showNewSinceVisit(); });
+        push('動作', '⬇', '匯出收藏為 BibTeX', '匯出 export bibtex favorites', () => { closePalette(); if (typeof exportFavoritesBibtex === 'function') exportFavoritesBibtex(); });
+        push('動作', '🔮', '切換語意搜尋', '語意 semantic toggle', () => { closePalette(); document.getElementById('semanticToggle')?.click(); });
+        push('動作', '🔄', '切換研究領域…', '切換 領域 discipline switch', () => { closePalette(); if (typeof openDisciplinePicker === 'function') openDisciplinePicker({ closable: true }); });
+        push('動作', '⬆', '回到頂部', '頂部 top scroll', () => { closePalette(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+
+        const disc = window.DISCIPLINES || {};
+        const cur = window.getActiveDiscipline?.()?.id;
+        Object.keys(disc).forEach(id => {
+            const d = disc[id];
+            if (!d) return;
+            push('領域', id === cur ? '📍' : '🧭', d.name + (d.nameEn ? `（${d.nameEn}）` : ''),
+                [d.name, d.nameEn, d.brand, d.arxivCat, id].filter(Boolean).join(' '),
+                () => { closePalette(); if (typeof selectDiscipline === 'function') selectDiscipline(id); });
+        });
+
+        document.querySelectorAll('.category-btn[data-filter], .topic-item[data-filter], .conf-item[data-filter]').forEach(btn => {
+            if (btn.classList.contains('topic-group-btn') || btn.id === 'addCustomFeedBtn') return;
+            const label = (typeof getLabelText === 'function' ? getLabelText(btn) : btn.textContent.trim());
+            if (!label) return;
+            push('分類', '📂', label, label + ' ' + (btn.dataset.filter || ''), () => { closePalette(); btn.click(); });
+        });
+        document.querySelectorAll('#sortSubmenu .sort-item[data-value]').forEach(item => {
+            const v = item.dataset.value;
+            const meta = (typeof getSortMeta === 'function') ? getSortMeta(v) : { label: v };
+            push('排序', '↕', meta.label, `${meta.label} ${meta.title || ''} ${v} sort`, () => { closePalette(); item.click(); });
+        });
+        document.querySelectorAll('#timeRangeWrapper .time-range-btn[data-range]').forEach(btn => {
+            const r = btn.dataset.range;
+            const meta = (typeof getTimeRangeMeta === 'function') ? getTimeRangeMeta(r) : { label: r };
+            push('時間', '🕑', meta.label, `${meta.label} ${meta.en || ''} ${r} time range`, () => { closePalette(); btn.click(); });
+        });
+        return cmds;
+    }
+
+    function fuzzyScore(hay, q) {
+        hay = (hay || '').toLowerCase();
+        const idx = hay.indexOf(q);
+        if (idx >= 0) return 100 - Math.min(idx, 60);   // 子字串：越靠前分數越高
+        let hi = 0, qi = 0, gaps = 0;                    // 子序列比對
+        while (hi < hay.length && qi < q.length) {
+            if (hay[hi] === q[qi]) qi++; else gaps++;
+            hi++;
+        }
+        return qi === q.length ? 40 - Math.min(gaps, 39) : -1;
+    }
+
+    function webSearchCommand(q) {
+        const semantic = !!window._SEMANTIC_ON;
+        return {
+            kind: '搜尋', icon: '🔎', label: `${semantic ? '語意' : '全網'}搜尋「${q}」`,
+            run: () => {
+                closePalette();
+                const si = document.getElementById('searchInput');
+                if (si) { si.value = q; si.classList.add('has-text'); }
+                if (typeof pushRecentSearch === 'function') pushRecentSearch(q);
+                if (semantic && typeof semanticSearchPapers === 'function') semanticSearchPapers(q);
+                else if (typeof searchAllPapers === 'function') searchAllPapers(q);
+                if (typeof writeUrlState === 'function') writeUrlState();
+            },
+        };
+    }
+
+    function appendItem(c) {
+        const idx = _cmdItems.length;
+        const li = document.createElement('li');
+        li.className = 'cmd-item';
+        li.setAttribute('role', 'option');
+        li.innerHTML = `<span class="cmd-item-icon"></span><span class="cmd-item-label"></span>${c.kind ? '<span class="cmd-item-kind"></span>' : ''}`;
+        li.querySelector('.cmd-item-icon').textContent = c.icon || '•';
+        li.querySelector('.cmd-item-label').textContent = c.label;
+        const kindEl = li.querySelector('.cmd-item-kind');
+        if (kindEl) kindEl.textContent = c.kind;
+        li.addEventListener('mousemove', () => { if (_selIdx !== idx) { _selIdx = idx; updateActive(); } });
+        li.addEventListener('click', () => runIdx(idx));
+        resultsEl.appendChild(li);
+        _cmdItems.push(c);
+    }
+
+    function render(query) {
+        const q = query.trim().toLowerCase();
+        resultsEl.innerHTML = '';
+        _cmdItems = [];
+        const all = staticCommands();
+        if (!q) {
+            GROUP_ORDER.forEach(group => {
+                const items = all.filter(c => c.kind === group);
+                if (!items.length) return;
+                const lbl = document.createElement('li');
+                lbl.className = 'cmd-group-label';
+                lbl.setAttribute('aria-hidden', 'true');
+                lbl.textContent = group;
+                resultsEl.appendChild(lbl);
+                items.forEach(appendItem);
+            });
+        } else {
+            appendItem(webSearchCommand(query.trim()));
+            all.map(c => ({ c, s: fuzzyScore(c.search || c.label, q) }))
+                .filter(x => x.s >= 0)
+                .sort((a, b) => b.s - a.s)
+                .slice(0, 12)
+                .forEach(x => appendItem(x.c));
+        }
+        if (!_cmdItems.length) {
+            const empty = document.createElement('li');
+            empty.className = 'cmd-empty';
+            empty.textContent = '沒有符合的指令';
+            resultsEl.appendChild(empty);
+        }
+        _selIdx = 0;
+        updateActive();
+    }
+
+    function updateActive() {
+        resultsEl.querySelectorAll('.cmd-item').forEach((li, i) => {
+            const on = i === _selIdx;
+            li.classList.toggle('active', on);
+            li.setAttribute('aria-selected', on ? 'true' : 'false');
+            if (on) li.scrollIntoView({ block: 'nearest' });
+        });
+    }
+
+    function runIdx(idx) {
+        const c = _cmdItems[idx];
+        if (c && typeof c.run === 'function') c.run();
+    }
+
+    function isOpen() { return !palette.classList.contains('hidden'); }
+    function openPalette() {
+        _lastFocus = document.activeElement;
+        palette.classList.remove('hidden');
+        input.value = '';
+        render('');
+        input.focus();
+    }
+    function closePalette() {
+        if (!isOpen()) return;
+        palette.classList.add('hidden');
+        if (_lastFocus && typeof _lastFocus.focus === 'function') { try { _lastFocus.focus(); } catch (e) {} }
+    }
+
+    input.addEventListener('input', () => render(input.value));
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); if (_cmdItems.length) { _selIdx = (_selIdx + 1) % _cmdItems.length; updateActive(); } }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); if (_cmdItems.length) { _selIdx = (_selIdx - 1 + _cmdItems.length) % _cmdItems.length; updateActive(); } }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); runIdx(_selIdx); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePalette(); }
+    });
+    palette.querySelector('.cmd-backdrop')?.addEventListener('click', closePalette);
+
+    document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isOpen()) closePalette(); else openPalette();
+        }
+    }, true);   // capture：搶在卡片導覽等 keydown 前處理
+})();
