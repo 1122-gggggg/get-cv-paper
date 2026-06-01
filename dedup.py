@@ -151,6 +151,11 @@ def _merge_into(primary: dict[str, Any], dup: dict[str, Any]) -> None:
     if d_hf > p_hf:
         primary["hf_upvotes"] = d_hf
 
+    # OpenReview 評審分數:只 openreview 來源有,缺才補(arxiv 主紀錄保留評審訊號)
+    for field in ("or_rating", "review_avg", "review_count"):
+        if not primary.get(field) and dup.get(field):
+            primary[field] = dup[field]
+
     # 缺欄位才補
     for field in ("summary", "venue", "published"):
         if not primary.get(field) and dup.get(field):

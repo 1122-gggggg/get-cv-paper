@@ -1229,7 +1229,13 @@ function populateBadgeSlot(badgeSlot, paper) {
     if (localViews > 0)        items.push(['view-badge', `👁 ${localViews} 點閱`, '本機點閱次數（此瀏覽器/登入同步資料）']);
     // OpenReview 評審分數色階（綠 6+ / 黃 5 / 紅 ≤4）
     const orTier = orRatingTier(paper.or_rating || paper.review_avg);
-    if (orTier) items.push([`or-badge ${orTier.cls}`, orTier.label, 'OpenReview 評審平均分數']);
+    if (orTier) {
+        const cnt = paper.review_count ? ` ·${paper.review_count}` : '';
+        const tip = paper.review_count
+            ? `OpenReview 評審平均分數（${paper.review_count} 篇評審）`
+            : 'OpenReview 評審平均分數';
+        items.push([`or-badge ${orTier.cls}`, `${orTier.label}${cnt}`, tip]);
+    }
     // 熱度指數（綜合 value/velocity/hf/citations）
     const heat = computeHeatIndex({
         signal_score: getValueScore(paper),

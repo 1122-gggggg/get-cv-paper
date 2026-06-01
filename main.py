@@ -702,6 +702,10 @@ def _slim_paper(p: dict) -> dict:
         out["citation_count"] = p["citation_count"]
     if p.get("or_rating"):
         out["or_rating"] = p["or_rating"]
+    if p.get("review_avg"):
+        out["review_avg"] = p["review_avg"]
+    if p.get("review_count"):
+        out["review_count"] = p["review_count"]
     return out
 
 

@@ -134,6 +134,28 @@ class GithubRepoHelperTests(unittest.TestCase):
         self.assertIsNone(clients.github_repo_slug(None))
 
 
+class OpenReviewRatingTests(unittest.TestCase):
+    def test_parse_rating_handles_int_and_string(self):
+        self.assertEqual(clients._parse_or_rating(6), 6.0)
+        self.assertEqual(clients._parse_or_rating("8: accept, good paper"), 8.0)
+        self.assertEqual(clients._parse_or_rating("5.5"), 5.5)
+        self.assertIsNone(clients._parse_or_rating("no score"))
+        self.assertIsNone(clients._parse_or_rating(True))
+        self.assertIsNone(clients._parse_or_rating(None))
+
+    def test_ratings_extracted_from_direct_replies(self):
+        note = {"details": {"directReplies": [
+            {"content": {"rating": {"value": "6: marginally above"}}},
+            {"content": {"rating": {"value": 8}}},
+            {"content": {"comment": {"value": "nice"}}},  # 非評審,無 rating
+        ]}}
+        self.assertEqual(clients._openreview_ratings(note), [6.0, 8.0])
+
+    def test_ratings_empty_when_no_reviews(self):
+        self.assertEqual(clients._openreview_ratings({}), [])
+        self.assertEqual(clients._openreview_ratings({"details": {}}), [])
+
+
 class ProbeTests(unittest.TestCase):
     # Plain TestClient (no `with`) skips lifespan → no warmup / no network.
     def test_health_always_ok(self):

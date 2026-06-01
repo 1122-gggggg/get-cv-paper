@@ -778,6 +778,42 @@ _OPENREVIEW_VENUE_GROUPS = {
     "icml": "ICML.cc",
     "colm": "COLM",
 }
+# review 分數欄位名各 venue/年度不一,依序試;值可能是 int 或 "6: marginally above..."
+_OPENREVIEW_RATING_FIELDS = ("rating", "recommendation", "overall_rating", "review_rating")
+_OPENREVIEW_RATING_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _parse_or_rating(value: Any) -> float | None:
+    """OpenReview 評審分數正規化:int/float 直取,字串取開頭數字('6: ...' → 6)。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        m = _OPENREVIEW_RATING_RE.search(value)
+        if m:
+            try:
+                return float(m.group(0))
+            except ValueError:
+                return None
+    return None
+
+
+def _openreview_ratings(note: dict[str, Any]) -> list[float]:
+    """從一篇 submission 的 directReplies 抽出所有 official review 分數。"""
+    replies = (note.get("details") or {}).get("directReplies") or []
+    ratings: list[float] = []
+    for reply in replies:
+        content = reply.get("content") or {}
+        for field in _OPENREVIEW_RATING_FIELDS:
+            raw = content.get(field)
+            if isinstance(raw, dict):
+                raw = raw.get("value")
+            score = _parse_or_rating(raw)
+            if score is not None:
+                ratings.append(score)
+                break
+    return ratings
 
 
 async def fetch_openreview_listing(
@@ -800,7 +836,7 @@ async def fetch_openreview_listing(
 
     params = {
         "content.venue": f"{group}/{year}/Conference",
-        "details": "replyCount,invitation",
+        "details": "directReplies",  # 內嵌評審 reply,供解析 review_avg/review_count
         "limit": min(max_results, 1000),
     }
     try:
@@ -853,7 +889,7 @@ async def fetch_openreview_listing(
             ext["arxiv"] = arxiv_id
 
         forum_id = note.get("forum") or note.get("id") or ""
-        out.append({
+        paper: dict[str, Any] = {
             "title": title,
             "summary": abstract,
             "url": f"https://openreview.net/forum?id={forum_id}",
@@ -862,7 +898,14 @@ async def fetch_openreview_listing(
             "source": "openreview",
             "external_ids": ext,
             "venue": f"{venue.upper()} {year}",
-        })
+        }
+        ratings = _openreview_ratings(note)
+        if ratings:
+            avg = round(sum(ratings) / len(ratings), 1)
+            paper["review_avg"] = avg
+            paper["review_count"] = len(ratings)
+            paper["or_rating"] = avg  # 前端 badge 既有 or_rating 路徑
+        out.append(paper)
         if len(out) >= max_results:
             break
     return out
