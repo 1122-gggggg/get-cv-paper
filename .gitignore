@@ -4,3 +4,7 @@ __pycache__/
 .env
 .cache/
 .claude/
+.coverage
+htmlcov/
+.pytest_cache/
+node_modules/

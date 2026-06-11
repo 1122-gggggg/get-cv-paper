@@ -14,8 +14,9 @@ RUN npm install -g --no-audit --no-fund esbuild@0.24.2 >/dev/null && \
             esbuild "static/$f" --minify > "static/$f.min" && \
             mv "static/$f.min" "static/$f"; \
         fi; \
-    done && \
-    ls -la static/
+    done
+RUN H=$(cat static/script.js static/style.css static/disciplines.js static/value-metrics.js | sha256sum | cut -c1-8) && sed -i "s/const VERSION = '[^']*'/const VERSION = '$H'/" static/sw.js
+RUN ls -la static/
 
 # ── Stage 2: runtime ───────────────────────────────────────────
 FROM python:3.12-slim

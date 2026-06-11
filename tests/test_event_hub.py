@@ -1,5 +1,4 @@
 """Offline contract for the in-process SSE EventHub."""
-import asyncio
 import unittest
 
 from event_hub import _MAX_SUBSCRIBERS, _QUEUE_MAXSIZE, EventHub

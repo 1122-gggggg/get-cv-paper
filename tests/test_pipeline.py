@@ -193,6 +193,37 @@ class PapersSortFilterTests(unittest.TestCase):
         self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "gu")), 1)
         self.assertEqual(len(main._filter_papers_by_query(self._PAPERS, "zzz")), 0)
 
+    def test_source_counts_normalize_scalar_and_union_sources(self):
+        papers = [
+            {"title": "A", "source": "arxiv"},
+            {"title": "B", "source": ["openalex", "arxiv", "openalex"]},
+            {"title": "C", "source": ""},
+        ]
+
+        self.assertEqual(main._source_counts(papers), {"arxiv": 2, "openalex": 1})
+
+    def test_response_meta_tracks_research_coverage(self):
+        papers = [
+            {"source": ["arxiv", "openalex"], "citation_count": 3, "github_url": "https://github.com/a/b"},
+            {"source": "pubmed", "review_avg": 7.0},
+            {"source": "arxiv"},
+        ]
+
+        meta = main._papers_response_meta(
+            papers,
+            attempted=["arxiv", "openalex", "pubmed", "crossref"],
+            failures=["crossref"],
+        )
+
+        self.assertEqual(meta["count"], 3)
+        self.assertEqual(meta["source_counts"], {"arxiv": 2, "openalex": 1, "pubmed": 1})
+        self.assertEqual(meta["source_count"], 3)
+        self.assertEqual(meta["source_attempted"], ["arxiv", "openalex", "pubmed", "crossref"])
+        self.assertEqual(meta["source_failures"], ["crossref"])
+        self.assertEqual(meta["signals"]["with_citations"], 1)
+        self.assertEqual(meta["signals"]["with_code"], 1)
+        self.assertEqual(meta["signals"]["with_reviews"], 1)
+
 
 class ViewBeaconTests(unittest.TestCase):
     def test_beacon_paper_id_prefers_arxiv(self):

@@ -23,12 +23,28 @@ CRITICAL_ROUTES = {
     "/metrics",
 }
 
+REMOVED_ROUTES = {
+    "/api/rss",
+    "/api/custom",
+    "/api/personalized",
+    "/api/recommendations",
+    "/api/push/key",
+    "/api/push/subscribe",
+    "/api/push/unsubscribe",
+    "/api/push/test",
+}
+
 
 class SmokeTests(unittest.TestCase):
     def test_critical_routes_registered(self):
         paths = {getattr(r, "path", None) for r in main.app.routes}
         missing = CRITICAL_ROUTES - paths
         self.assertEqual(missing, set(), f"missing routes: {missing}")
+
+    def test_removed_subscription_and_recommendation_routes_absent(self):
+        paths = {getattr(r, "path", None) for r in main.app.routes}
+        present = REMOVED_ROUTES & paths
+        self.assertEqual(present, set(), f"removed routes still registered: {present}")
 
     def test_merge_keeps_higher_priority_primary_and_unions_signals(self):
         openalex = {

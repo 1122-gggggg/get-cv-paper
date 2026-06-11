@@ -162,7 +162,7 @@ async def _oai_fetch_page(
                 await asyncio.sleep(fallback or 5.0)
                 continue
             logger.error("OAI fetch failed for %s: %s", label, e)
-            raise HTTPException(status_code=502, detail="arXiv OAI unavailable")
+            raise HTTPException(status_code=502, detail="arXiv OAI unavailable") from e
     raise HTTPException(status_code=502, detail="arXiv OAI unavailable")
 
 

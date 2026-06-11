@@ -122,14 +122,6 @@ class PaperStore:
                 last_date TEXT NOT NULL,
                 last_at REAL NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS push_subs (
-                endpoint TEXT PRIMARY KEY,
-                p256dh TEXT NOT NULL,
-                auth TEXT NOT NULL,
-                fields TEXT NOT NULL DEFAULT '',
-                created_at REAL NOT NULL,
-                last_sent REAL
-            );
             """
         )
 
@@ -412,64 +404,6 @@ class PaperStore:
         except Exception as e:
             logger.warning("paper_store: oai_set_state failed for %s: %s", oai_set, e)
 
-    # ── web-push subscriptions (#19) ─────────────────────────────────
-    def upsert_push_sub(self, endpoint: str, p256dh: str, auth: str, fields: str) -> None:
-        if not (endpoint and p256dh and auth):
-            return
-        try:
-            with self._lock:
-                self._conn.execute(
-                    "INSERT INTO push_subs(endpoint, p256dh, auth, fields, created_at) "
-                    "VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET "
-                    "p256dh=excluded.p256dh, auth=excluded.auth, fields=excluded.fields",
-                    (endpoint, p256dh, auth, fields, time.time()),
-                )
-        except Exception as e:
-            logger.warning("paper_store: upsert_push_sub failed: %s", e)
-
-    def delete_push_sub(self, endpoint: str) -> None:
-        if not endpoint:
-            return
-        try:
-            with self._lock:
-                self._conn.execute("DELETE FROM push_subs WHERE endpoint=?", (endpoint,))
-        except Exception as e:
-            logger.warning("paper_store: delete_push_sub failed: %s", e)
-
-    def all_push_subs(self) -> list[dict[str, Any]]:
-        try:
-            with self._lock:
-                rows = self._conn.execute(
-                    "SELECT endpoint, p256dh, auth, fields, last_sent FROM push_subs"
-                ).fetchall()
-        except Exception as e:
-            logger.warning("paper_store: all_push_subs failed: %s", e)
-            return []
-        return [
-            {"endpoint": r[0], "p256dh": r[1], "auth": r[2], "fields": r[3] or "", "last_sent": r[4]}
-            for r in rows
-        ]
-
-    def mark_push_sent(self, endpoints: list[str]) -> None:
-        if not endpoints:
-            return
-        now = time.time()
-        try:
-            with self._lock:
-                self._conn.executemany(
-                    "UPDATE push_subs SET last_sent=? WHERE endpoint=?",
-                    [(now, e) for e in endpoints],
-                )
-        except Exception as e:
-            logger.warning("paper_store: mark_push_sent failed: %s", e)
-
-    def count_push_subs(self) -> int:
-        try:
-            with self._lock:
-                return int(self._conn.execute("SELECT COUNT(*) FROM push_subs").fetchone()[0])
-        except Exception:
-            return 0
-
     # ── view telemetry: anonymous per-paper open counts (no PII) ─────
     def record_view(self, paper_id: str, url: str = "", title: str = "") -> None:
         """Increment today's open-count for a paper (idempotent per UTC day bucket).
@@ -545,8 +479,9 @@ class PaperStore:
                 # axes leave snapshots whose payload was pruned; drop those orphans so
                 # get_emerging never silently skips paper_ids it can't resolve a payload for
                 self._conn.execute(
-                    "DELETE FROM metric_snapshots WHERE (paper_id, primary_cat) "
-                    "NOT IN (SELECT paper_id, primary_cat FROM papers)"
+                    "DELETE FROM metric_snapshots WHERE NOT EXISTS ("
+                    "SELECT 1 FROM papers p WHERE p.paper_id=metric_snapshots.paper_id "
+                    "AND p.primary_cat=metric_snapshots.primary_cat)"
                 )
             if deleted:
                 logger.info("paper_store: pruned %d rows older than %s", deleted, cutoff)

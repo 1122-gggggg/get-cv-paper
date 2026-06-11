@@ -1,5 +1,6 @@
 let allPapers = [];      // 7 天
 let lastDataAsOf = 0;    // 主題論文資料建構時間（毫秒），供新鮮度標記使用
+let lastPaperPayloadMeta = null;
 let monthPapers = [];    // 30 天（懶加載）
 let quarterPapers = [];  // 90 天（懶加載,用於近三月熱門）
 let currentCategory = 'all';
@@ -18,7 +19,7 @@ const RANGE_MIGRATION = {
     citations: 'week',
     signal: 'week',
 };
-const SORT_VALUES = new Set(['hot', 'latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m', 'personalized']);
+const SORT_VALUES = new Set(['hot', 'latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m']);
 const TIME_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter']);
 let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'hot';
 let currentTimeRange = localStorage.getItem('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
@@ -45,7 +46,6 @@ const SORT_META = {
     velocity:   { label: '引用速度', title: '快速升溫' },
     hf:         { label: 'HF 熱度', title: '社群熱門' },
     hot3m:      { label: '近三月熱門', title: '近三月熱門排名' },
-    personalized:{ label: '為你推薦', title: '依收藏質心個人化排序' },
 };
 
 // ── 安全：HTML escape（防 XSS，arXiv 摘要可能含 <、> 等字元）─────
@@ -205,6 +205,133 @@ function downloadText(filename, text, mime = 'text/plain') {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+const USER_STATE_EXPORT_VERSION = 1;
+const USER_STATE_BACKUP_KEY = 'user-state:last';
+const USER_STATE_PREFIXES = [
+    'visionary_favorites',
+    'visionary_read',
+    'visionary_notes',
+    'visionary_paper_tags',
+    'visionary_pinned_topics',
+    'visionary_discipline',
+    'visionary_sort',
+    'visionary_time_range',
+    'visionary_semantic_on',
+    'visionary_cross_disc_on',
+    'visionary_last_category',
+    'visionary_deleted_builtins',
+    'visionary_renamed_builtins',
+];
+let _userStateBackupTimer = null;
+
+function _isUserStateKey(key) {
+    return USER_STATE_PREFIXES.some(prefix => key === prefix || key.startsWith(prefix + ':') || key.startsWith(prefix + '_'));
+}
+
+function collectUserState() {
+    const out = {};
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && _isUserStateKey(key)) out[key] = localStorage.getItem(key);
+        }
+    } catch (e) {}
+    return out;
+}
+
+function _storageSummary(state = collectUserState()) {
+    const notes = JSON.parse(state.visionary_notes_v1 || '{}');
+    const tags = JSON.parse(state.visionary_paper_tags_v1 || '{}');
+    const favs = JSON.parse(state.visionary_favorites || '[]');
+    const reads = JSON.parse(state.visionary_read_v1 || '[]');
+    return {
+        favorites: Array.isArray(favs) ? favs.length : 0,
+        read: Array.isArray(reads) ? reads.length : 0,
+        notes: notes && typeof notes === 'object' ? Object.keys(notes).length : 0,
+        tagged: tags && typeof tags === 'object' ? Object.keys(tags).length : 0,
+    };
+}
+
+function updateStorageStatus() {
+    const el = document.getElementById('storageStatus');
+    if (!el) return;
+    try {
+        const s = _storageSummary();
+        el.textContent = `${s.favorites} 收藏 · ${s.read} 已讀 · ${s.notes} 筆記 · ${s.tagged} 標籤`;
+    } catch (e) {
+        el.textContent = '本機資料可匯出備份';
+    }
+}
+
+function _stateExportPayload(reason = 'manual') {
+    return {
+        app: 'Scholarly',
+        version: USER_STATE_EXPORT_VERSION,
+        reason,
+        exported_at: new Date().toISOString(),
+        localStorage: collectUserState(),
+    };
+}
+
+function scheduleUserStateBackup(reason = 'change') {
+    clearTimeout(_userStateBackupTimer);
+    _userStateBackupTimer = setTimeout(() => {
+        const payload = _stateExportPayload(reason);
+        if (typeof idbSet === 'function') Promise.resolve(idbSet(USER_STATE_BACKUP_KEY, payload)).catch(() => {});
+        updateStorageStatus();
+    }, 700);
+}
+
+function exportUserState() {
+    const payload = _stateExportPayload('export');
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadText(`scholarly-state-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
+    if (typeof idbSet === 'function') Promise.resolve(idbSet(USER_STATE_BACKUP_KEY, payload)).catch(() => {});
+    showToast('已匯出個人資料備份');
+}
+
+function _applyImportedUserState(payload) {
+    if (!payload || payload.app !== 'Scholarly' || typeof payload.localStorage !== 'object') {
+        throw new Error('備份格式不正確');
+    }
+    let applied = 0;
+    for (const [key, value] of Object.entries(payload.localStorage)) {
+        if (!_isUserStateKey(key) || typeof value !== 'string') continue;
+        localStorage.setItem(key, value);
+        applied += 1;
+    }
+    if (!applied) throw new Error('備份檔沒有可匯入的資料');
+    return applied;
+}
+
+async function importUserStateFile(file) {
+    if (!file) return;
+    try {
+        const payload = JSON.parse(await file.text());
+        const applied = _applyImportedUserState(payload);
+        if (typeof idbSet === 'function') {
+            await idbSet(USER_STATE_BACKUP_KEY, { ...payload, imported_at: new Date().toISOString() });
+        }
+        showToast(`已匯入 ${applied} 筆個人資料，重新載入中`);
+        setTimeout(() => location.reload(), 700);
+    } catch (e) {
+        showToast(`匯入失敗：${e.message || '無法解析備份檔'}`);
+    }
+}
+
+function bindStorageTools() {
+    const exportBtn = document.getElementById('storageExportBtn');
+    const importBtn = document.getElementById('storageImportBtn');
+    const importFile = document.getElementById('storageImportFile');
+    exportBtn?.addEventListener('click', exportUserState);
+    importBtn?.addEventListener('click', () => importFile?.click());
+    importFile?.addEventListener('change', () => {
+        const file = importFile.files && importFile.files[0];
+        importUserStateFile(file).finally(() => { importFile.value = ''; });
+    });
+    updateStorageStatus();
 }
 
 // 卡片動作浮層（引用 / 複製連結 / 分享）──共用單一元素，依需求重新定位
@@ -487,6 +614,8 @@ function renderDisciplineFilters() {
         header.type = 'button';
         header.className = 'category-btn topic-group-btn';
         header.dataset.groupName = g.name;
+        header.setAttribute('aria-haspopup', 'true');
+        header.setAttribute('aria-expanded', openSet.has(g.name) ? 'true' : 'false');
         const headLabel = document.createElement('span');
         headLabel.className = 'label-span topic-group-label';
         headLabel.innerHTML = `${g.icon ? `<span class="topic-group-icon">${g.icon}</span>` : ''}${escapeHtml(g.name)}${g.nameEn ? ` <em class="topic-group-en">${escapeHtml(g.nameEn)}</em>` : ''}`;
@@ -520,6 +649,7 @@ function renderDisciplineFilters() {
         header.addEventListener('click', (e) => {
             e.stopPropagation();
             const isOpen = wrapper.classList.toggle('open');
+            header.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
             if (isOpen) openSet.add(g.name); else openSet.delete(g.name);
             persistOpen();
         });
@@ -572,6 +702,8 @@ async function loadDynamicSubtopics(disciplineId, filtersDiv, openSet, persistOp
     header.type = 'button';
     header.className = 'category-btn topic-group-btn';
     header.dataset.groupName = groupName;
+    header.setAttribute('aria-haspopup', 'true');
+    header.setAttribute('aria-expanded', (openSet && openSet.has(groupName)) ? 'true' : 'false');
     const headLabel = document.createElement('span');
     headLabel.className = 'label-span topic-group-label';
     headLabel.innerHTML = `<span class="topic-group-icon">🔥</span>${escapeHtml(groupName)} <em class="topic-group-en">${escapeHtml(groupNameEn)}</em>`;
@@ -613,6 +745,7 @@ async function loadDynamicSubtopics(disciplineId, filtersDiv, openSet, persistOp
     header.addEventListener('click', (e) => {
         e.stopPropagation();
         const isOpen = wrapper.classList.toggle('open');
+        header.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
         if (openSet) {
             if (isOpen) openSet.add(groupName); else openSet.delete(groupName);
         }
@@ -668,7 +801,6 @@ function _dpBindCardEvents(card, id) {
             window.setTracks && window.setTracks([...next]);
             starBtn.textContent = next.has(tid) ? '★' : '☆';
             card.classList.toggle('tracked', next.has(tid));
-            window.__resyncPushFields && window.__resyncPushFields();
             return;
         }
         selectDiscipline(id);
@@ -842,67 +974,6 @@ function selectDiscipline(id) {
     location.reload();
 }
 
-// ── 相似論文 modal ─────────────────────────────────────────────
-function _extractArxivId(paper) {
-    const ext = paper.external_ids || {};
-    if (ext.arxiv) {
-        const m = String(ext.arxiv).match(/(\d{4}\.\d{4,6})/);
-        if (m) return m[1];
-    }
-    const url = paper.url || '';
-    const m2 = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,6})/i);
-    return m2 ? m2[1] : null;
-}
-
-async function openSimilarModal(paper) {
-    const modal = document.getElementById('similarModal');
-    if (!modal) return;
-    const seedEl = document.getElementById('similarSeed');
-    const bodyEl = document.getElementById('similarBody');
-    if (seedEl) seedEl.innerHTML = `<div class="similar-seed-title">${escapeHtml(paper.title)}</div>`;
-    if (bodyEl) bodyEl.innerHTML = '<div class="similar-loading">載入中…</div>';
-    modal.classList.remove('hidden');
-    trapModal('similarModal', closeSimilarModal);
-    setTimeout(() => document.getElementById('similarCloseBtn')?.focus(), 30);
-
-    const arxivId = _extractArxivId(paper);
-    if (!arxivId) {
-        if (bodyEl) bodyEl.innerHTML = '<div class="similar-empty">此論文無 arXiv ID，無法推薦相似論文。</div>';
-        return;
-    }
-    try {
-        const r = await fetch(`/api/recommendations?arxiv_id=${encodeURIComponent(arxivId)}&limit=10`);
-        if (!r.ok) throw new Error('rec failed');
-        const data = await r.json();
-        const papers = data.papers || [];
-        if (!papers.length) {
-            if (bodyEl) bodyEl.innerHTML = '<div class="similar-empty">尚無相似論文資料（Semantic Scholar 可能還沒索引這篇）。</div>';
-            return;
-        }
-        if (bodyEl) {
-            bodyEl.innerHTML = papers.map(p => {
-                const title = escapeHtml(p.title || '');
-                const url = escapeHtml(p.url || '#');
-                const authors = (p.authors || []).slice(0, 4).join(', ');
-                const venue = p.venue ? `<span class="sim-venue">${escapeHtml(p.venue)}</span>` : '';
-                const yr = p.year ? `<span class="sim-year">${escapeHtml(String(p.year))}</span>` : '';
-                const cit = p.citation_count ? `<span class="sim-cit">📊 ${escapeHtml(String(p.citation_count))}</span>` : '';
-                return `<a class="sim-item" href="${url}" target="_blank" rel="noopener noreferrer">
-                    <div class="sim-title">${title}</div>
-                    <div class="sim-meta">${escapeHtml(authors)} ${venue} ${yr} ${cit}</div>
-                </a>`;
-            }).join('');
-        }
-    } catch (e) {
-        if (bodyEl) bodyEl.innerHTML = `<div class="similar-empty">載入失敗：${escapeHtml(e.message || 'unknown')}</div>`;
-    }
-}
-
-function closeSimilarModal() {
-    document.getElementById('similarModal')?.classList.add('hidden');
-    releaseModal('similarModal');
-}
-
 // ── 最近搜尋（每個 discipline 各自 5 筆） ───────────────────────
 const _RECENT_SEARCHES_MAX = 5;
 function _recentSearchesKey() {
@@ -988,6 +1059,7 @@ function savePinnedTopics() {
     const pinnedBtns = document.querySelectorAll('.category-btn[data-pinned="true"]');
     const topics = Array.from(pinnedBtns).map(b => b.dataset.filter);
     localStorage.setItem(PINNED_TOPICS_KEY, JSON.stringify(topics));
+    scheduleUserStateBackup('pinned-topics');
 }
 
 function addPinnedBtn(topic, save = true) {
@@ -1041,134 +1113,6 @@ function deletePinnedBtn(btn) {
     savePinnedTopics();
 }
 
-// ── 自訂訂閱系統(#17) ───────────────────────────────────────────
-// 直接組合 arXiv 查詢(cat/keyword/author/id),跨領域共用,單一 localStorage key。
-const CUSTOM_FEEDS_KEY = 'visionary_custom_feeds_v1';
-
-function loadCustomFeeds() {
-    try {
-        const arr = JSON.parse(localStorage.getItem(CUSTOM_FEEDS_KEY) || '[]');
-        return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-}
-function saveCustomFeeds(feeds) {
-    localStorage.setItem(CUSTOM_FEEDS_KEY, JSON.stringify(feeds));
-}
-function getCustomFeed(id) {
-    return loadCustomFeeds().find(f => f.id === id) || null;
-}
-function _csvToList(raw) {
-    return (raw || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 12);
-}
-function _customFeedQuery(feed, extra) {
-    const p = new URLSearchParams();
-    if (feed.cats?.length)     p.set('cats', feed.cats.join(','));
-    if (feed.keywords?.length) p.set('keywords', feed.keywords.join(','));
-    if (feed.authors?.length)  p.set('authors', feed.authors.join(','));
-    if (feed.ids?.length)      p.set('ids', feed.ids.join(','));
-    Object.entries(extra || {}).forEach(([k, v]) => p.set(k, String(v)));
-    return p.toString();
-}
-function _customFeedSummary(feed) {
-    const parts = [];
-    if (feed.cats?.length)     parts.push(`分類 ${feed.cats.join('/')}`);
-    if (feed.keywords?.length) parts.push(`「${feed.keywords.join('／')}」`);
-    if (feed.authors?.length)  parts.push(`作者 ${feed.authors.join('、')}`);
-    if (feed.ids?.length)      parts.push(`${feed.ids.length} 篇指定 ID`);
-    return parts.join(' · ');
-}
-
-function renderCustomFeedBtns() {
-    const filtersDiv = document.querySelector('.category-filters');
-    if (!filtersDiv) return;
-    filtersDiv.querySelectorAll('.custom-feed-btn').forEach(el => el.remove());
-    const addBtn = document.getElementById('addCustomFeedBtn');
-    for (const feed of loadCustomFeeds()) {
-        const btn = document.createElement('button');
-        btn.className = 'category-btn custom-feed-btn';
-        btn.dataset.filter = feed.id;
-        btn.dataset.customFeed = 'true';
-        btn.title = _customFeedSummary(feed) || feed.name;
-
-        const icon = document.createElement('span');
-        icon.className = 'pin-icon';
-        icon.textContent = '🛰️';
-        const label = document.createElement('span');
-        label.className = 'label-span';
-        label.textContent = feed.name;
-        btn.appendChild(icon);
-        btn.appendChild(label);
-
-        if (addBtn) filtersDiv.insertBefore(btn, addBtn);
-        else filtersDiv.appendChild(btn);
-    }
-}
-
-function deleteCustomFeed(id) {
-    saveCustomFeeds(loadCustomFeeds().filter(f => f.id !== id));
-    if (currentCategory === id) {
-        currentCategory = 'all';
-        const allBtn = document.querySelector('.category-btn[data-filter="all"]');
-        if (allBtn) {
-            document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
-            allBtn.classList.add('active');
-        }
-        filterPapers();
-    }
-    renderCustomFeedBtns();
-}
-
-let _cfEditId = null;
-function openCustomFeedModal(editId) {
-    const modal = document.getElementById('customFeedModal');
-    if (!modal) return;
-    _cfEditId = editId || null;
-    const feed = editId ? getCustomFeed(editId) : null;
-    document.getElementById('cfTitle').textContent = feed ? '編輯自訂訂閱' : '建立自訂訂閱';
-    document.getElementById('cfName').value     = feed?.name || '';
-    document.getElementById('cfCats').value     = (feed?.cats || []).join(', ');
-    document.getElementById('cfKeywords').value = (feed?.keywords || []).join(', ');
-    document.getElementById('cfAuthors').value  = (feed?.authors || []).join(', ');
-    document.getElementById('cfIds').value      = (feed?.ids || []).join(', ');
-    document.getElementById('cfDelete').hidden  = !feed;
-    modal.classList.remove('hidden');
-    trapModal('customFeedModal', closeCustomFeedModal);
-    setTimeout(() => document.getElementById('cfName').focus(), 30);
-}
-function closeCustomFeedModal() {
-    document.getElementById('customFeedModal')?.classList.add('hidden');
-    releaseModal('customFeedModal');
-    _cfEditId = null;
-}
-function _submitCustomFeed(e) {
-    if (e) e.preventDefault();
-    const name = document.getElementById('cfName').value.trim();
-    const cats = _csvToList(document.getElementById('cfCats').value);
-    const keywords = _csvToList(document.getElementById('cfKeywords').value);
-    const authors = _csvToList(document.getElementById('cfAuthors').value);
-    const ids = _csvToList(document.getElementById('cfIds').value)
-        .map(s => (s.match(/\d{4}\.\d{4,6}/) || [s])[0]);
-    if (!name) { showToast('請輸入訂閱名稱'); return; }
-    if (!(cats.length || keywords.length || authors.length || ids.length)) {
-        showToast('至少填一個條件:分類 / 關鍵字 / 作者 / ID');
-        return;
-    }
-    const feeds = loadCustomFeeds();
-    if (_cfEditId) {
-        const f = feeds.find(x => x.id === _cfEditId);
-        if (f) Object.assign(f, { name, cats, keywords, authors, ids });
-    } else {
-        _cfEditId = `custom_${Date.now().toString(36)}`;
-        feeds.push({ id: _cfEditId, name, cats, keywords, authors, ids });
-    }
-    saveCustomFeeds(feeds);
-    renderCustomFeedBtns();
-    const targetId = _cfEditId;
-    closeCustomFeedModal();
-    const btn = document.querySelector(`.custom-feed-btn[data-filter="${CSS.escape(targetId)}"]`);
-    if (btn) _selectCategory(targetId, btn);
-}
-
 // ── 已讀系統 ───────────────────────────────────────────────────
 const READ_KEY = 'visionary_read_v1';
 let readSet = new Set(JSON.parse(localStorage.getItem(READ_KEY) || '[]'));
@@ -1198,6 +1142,7 @@ async function showNewSinceVisit() {
 
 function saveReadSet() {
     localStorage.setItem(READ_KEY, JSON.stringify([...readSet]));
+    scheduleUserStateBackup('read');
 }
 
 function toggleRead(url, card) {
@@ -1229,6 +1174,7 @@ try { notesMap = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}'); } catch (e
 
 function saveNotes() {
     localStorage.setItem(NOTES_KEY, JSON.stringify(notesMap));
+    scheduleUserStateBackup('notes');
 }
 
 function openNotePanel(url, card) {
@@ -1240,7 +1186,7 @@ function openNotePanel(url, card) {
     }
     textarea.value = notesMap[url] || '';
     panel.classList.add('open');
-    textarea.focus();
+    requestAnimationFrame(() => textarea.focus());
 }
 
 function saveNote(url, card) {
@@ -1266,6 +1212,7 @@ function saveNote(url, card) {
 
 function saveFavorites() {
     localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
+    scheduleUserStateBackup('favorites');
 }
 
 // ── 每篇論文自訂標籤 ─────────────────────────────────────────
@@ -1275,6 +1222,7 @@ try { paperTags = JSON.parse(localStorage.getItem(PAPER_TAGS_KEY) || '{}'); } ca
 
 function savePaperTags() {
     localStorage.setItem(PAPER_TAGS_KEY, JSON.stringify(paperTags));
+    scheduleUserStateBackup('paper-tags');
 }
 
 function getPaperTags(url) { return paperTags[url] || []; }
@@ -1431,6 +1379,7 @@ function stopLoaderMessages() {
 }
 
 const PAPERS_SWR_MAX_AGE = 24 * 60 * 60 * 1000; // 24h：本機只做秒開，新鮮度由後端 SWR 保證
+const PAPER_FETCH_MAX = 80; // 與後端 warmup canonical bucket 對齊，避免 50/80 形成兩套 cache
 
 // ── IndexedDB papers cache（取代 localStorage：容量大、async、跨 tab）─────
 const _IDB_DB = 'visionary';
@@ -1476,32 +1425,89 @@ async function idbSet(key, value) {
         } catch (_) { resolve(); }
     });
 }
-async function _readPapersIDB(disc) {
+function _paperFetchMaxForDays(days) {
+    return Number(days) >= 30 ? 5000 : PAPER_FETCH_MAX;
+}
+
+function _paperFetchOptions(opts = {}) {
+    const days = Number(opts.days || 7);
+    const max = Number(opts.max || _paperFetchMaxForDays(days));
+    const topic = (opts.topic || '').trim();
+    return { days, max, topic };
+}
+
+function _papersCacheKey(disc, opts = {}) {
+    const o = _paperFetchOptions(opts);
+    return `papers:${disc}:d=${o.days}:m=${o.max}:t=${o.topic}`;
+}
+
+function _paperPayloadMeta(data) {
+    return {
+        as_of: data?.as_of || null,
+        count: data?.count || (Array.isArray(data?.papers) ? data.papers.length : 0),
+        source_counts: data?.source_counts || {},
+        source_count: data?.source_count || 0,
+        source_attempted: data?.source_attempted || [],
+        source_failures: data?.source_failures || [],
+        signals: data?.signals || {},
+        from_l2: !!data?.from_l2,
+    };
+}
+
+function _paperApiUrl(disc, opts = {}) {
+    const o = _paperFetchOptions(opts);
+    const params = new URLSearchParams({
+        max_results: String(o.max),
+        days: String(o.days),
+        discipline: disc,
+    });
+    if (o.topic) params.set('topic', o.topic);
+    return `/api/papers?${params.toString()}`;
+}
+
+async function _readPaperPayloadIDB(disc, opts = {}) {
     try {
-        const v = await idbGet(`papers:${disc}`);
+        const o = _paperFetchOptions(opts);
+        let v = await idbGet(_papersCacheKey(disc, o));
+        if (!v && o.days === 7 && o.max === PAPER_FETCH_MAX && !o.topic) {
+            v = await idbGet(`papers:${disc}`);
+        }
         if (!v?.papers) return null;
         if (Date.now() - (v.t || 0) > PAPERS_SWR_MAX_AGE) return null;
-        return v.papers;
+        return v;
     } catch (_) { return null; }
 }
-async function _writePapersIDB(disc, papers) {
-    try { await idbSet(`papers:${disc}`, { t: Date.now(), papers }); } catch (_) {}
+
+async function _readPapersIDB(disc, opts = {}) {
+    const payload = await _readPaperPayloadIDB(disc, opts);
+    return payload?.papers || null;
+}
+
+async function _writePapersIDB(disc, papers, meta = {}, opts = {}) {
+    try { await idbSet(_papersCacheKey(disc, opts), { t: Date.now(), papers, meta }); } catch (_) {}
+}
+
+async function _fetchPaperPayload(disc, opts = {}) {
+    const res = await fetch(_paperApiUrl(disc, opts));
+    if (!res.ok) throw new Error('Failed to fetch data');
+    const data = await res.json();
+    const meta = _paperPayloadMeta(data);
+    await _writePapersIDB(disc, data.papers || [], meta, opts);
+    return { data, meta };
 }
 
 // SW 背景刷新完成後通知前端 → 本函式重抓並渲染（同 disc 去重）
 let _papersInflight = null;
 
 async function _fetchAndApply(disc) {
-    const url = `/api/papers?max_results=50&discipline=${encodeURIComponent(disc)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Failed to fetch data');
-    const data = await res.json();
+    const opts = { days: 7, max: PAPER_FETCH_MAX };
+    const { data, meta } = await _fetchPaperPayload(disc, opts);
     if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return; // 切過 disc 後丟掉舊回應
     lastDataAsOf = Number.isFinite(data.as_of) ? data.as_of * 1000 : Date.now();
-    allPapers = indexPapers(data.papers);
+    lastPaperPayloadMeta = meta;
+    allPapers = indexPapers(data.papers || []);
     await filterPapers();
     scheduleBadgeUpdate();
-    _writePapersIDB(disc, data.papers);
     hideLiveRefreshPill();  // 已套用最新資料 → 收起提示
 }
 
@@ -1587,8 +1593,10 @@ async function fetchPapers() {
 
     // L1:IndexedDB(本機 24h)— 若 SSR 命中已渲染,IDB 結果只在更新時覆蓋
     try {
-        const cachedPapers = await _readPapersIDB(disc);
+        const cachedPayload = await _readPaperPayloadIDB(disc, { days: 7, max: PAPER_FETCH_MAX });
+        const cachedPapers = cachedPayload?.papers;
         if (cachedPapers?.length && cachedPapers.length > (ssrPapers?.length || 0)) {
+            lastPaperPayloadMeta = cachedPayload.meta || null;
             allPapers = indexPapers(cachedPapers);
             usedCache = true;
             await filterPapers();
@@ -1602,17 +1610,22 @@ async function fetchPapers() {
     } catch (e) {
         if (!usedCache) {
             console.error(e);
-            alert('獲取論文失敗，請稍後再試。 Error: ' + e.message);
+            showToast('獲取論文失敗，請稍後再試。 Error: ' + e.message);
             loader.classList.add('hidden');
         }
     } finally {
         stopLoaderMessages();
+        if (usedCache || allPapers.length) prewarmExtendedPaperRanges();
     }
 }
 
 function _onSWApiUpdated(payload) {
     if (payload?.path !== '/api/papers') return;
     const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    const params = new URLSearchParams(payload.search || '');
+    const payloadDisc = params.get('discipline') || 'cv';
+    const payloadDays = Number(params.get('days') || 7);
+    if (payloadDisc !== disc || payloadDays !== 7) return;
     if (_papersInflight) return;
     _papersInflight = (async () => {
         try { await _fetchAndApply(disc); }
@@ -1802,6 +1815,98 @@ function renderPagination(total) {
     papersGrid.appendChild(nav);
 }
 
+const SOURCE_LABELS = {
+    arxiv: 'arXiv',
+    s2: 'S2',
+    s2_search: 'S2',
+    openalex: 'OpenAlex',
+    crossref: 'Crossref',
+    biorxiv: 'bioRxiv',
+    medrxiv: 'medRxiv',
+    chemrxiv: 'ChemRxiv',
+    pubmed: 'PubMed',
+    hf_daily: 'HF Daily',
+    openreview: 'OpenReview',
+};
+
+function paperSourceNames(paper) {
+    const raw = paper?.source;
+    const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    const seen = new Set();
+    const out = [];
+    for (const item of arr) {
+        const key = String(item || '').trim().toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(key);
+    }
+    return out;
+}
+
+function computeCoverageStats(papers) {
+    const sourceCounts = {};
+    let bridge = 0;
+    let withCitations = 0;
+    let withCode = 0;
+    let withReviews = 0;
+    for (const paper of papers || []) {
+        const sources = paperSourceNames(paper);
+        if (sources.length > 1 || Number(paper.source_count || 0) > 1) bridge += 1;
+        for (const src of sources) sourceCounts[src] = (sourceCounts[src] || 0) + 1;
+        if (getCitationCount(paper.url || '', paper) > 0) withCitations += 1;
+        if (paper.github_url || Number(paper.github_stars || 0) > 0) withCode += 1;
+        if (paper.review_avg || paper.or_rating) withReviews += 1;
+    }
+    return {
+        sourceCounts,
+        sourceCount: Object.keys(sourceCounts).length,
+        bridge,
+        withCitations,
+        withCode,
+        withReviews,
+    };
+}
+
+function _coverageChip(label, value, title, cls = '') {
+    const chip = document.createElement('span');
+    chip.className = `coverage-chip ${cls}`.trim();
+    if (title) chip.title = title;
+    chip.textContent = `${label} ${value}`;
+    return chip;
+}
+
+function renderCoverageBar(papers) {
+    const bar = document.getElementById('coverageBar');
+    if (!bar) return;
+    bar.innerHTML = '';
+    if (!papers?.length) {
+        bar.classList.add('hidden');
+        return;
+    }
+    const stats = computeCoverageStats(papers);
+    bar.appendChild(_coverageChip('來源', stats.sourceCount, '目前結果涵蓋的資料來源數'));
+
+    const topSources = Object.entries(stats.sourceCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4);
+    for (const [source, count] of topSources) {
+        bar.appendChild(_coverageChip(SOURCE_LABELS[source] || source, count, '目前結果中的來源分布', 'source-chip'));
+    }
+    if (stats.bridge > 0) bar.appendChild(_coverageChip('跨源佐證', stats.bridge, '同一篇論文被多個來源收錄'));
+    if (stats.withCitations > 0) bar.appendChild(_coverageChip('引用訊號', stats.withCitations, '已帶引用數或 Semantic Scholar 補強的論文'));
+    if (stats.withCode > 0) bar.appendChild(_coverageChip('程式碼', stats.withCode, '已偵測到 GitHub 或 Papers with Code 訊號的論文'));
+    if (stats.withReviews > 0) bar.appendChild(_coverageChip('評審', stats.withReviews, '含 OpenReview 或評審平均分數的論文'));
+
+    const failures = lastPaperPayloadMeta?.source_failures || [];
+    if (failures.length > 0) {
+        bar.appendChild(_coverageChip('部分來源延遲', failures.length, `本次資料來源暫時失敗：${failures.join(', ')}`, 'warn'));
+    }
+    if (lastPaperPayloadMeta?.from_l2) {
+        bar.appendChild(_coverageChip('離線快照', '已啟用', '上游來源不可用時由本機 SQLite 快照提供', 'warn'));
+    }
+    bar.classList.remove('hidden');
+}
+
 // ── 會議/期刊出處偵測（VENUE_PATTERNS 在 applyDiscipline 時填入）─
 
 function detectVenue(paper) {
@@ -1858,14 +1963,6 @@ function _bindPapersGridDelegation() {
         if (readBtn && card.contains(readBtn)) {
             e.stopPropagation();
             toggleRead(url, card);
-            return;
-        }
-
-        const similarBtn = e.target.closest('.similar-btn');
-        if (similarBtn && card.contains(similarBtn)) {
-            e.stopPropagation();
-            const paper = currentFilteredPapers.find(p => p.url === url);
-            if (paper) openSimilarModal(paper);
             return;
         }
 
@@ -1999,6 +2096,7 @@ function buildCard(paper, index) {
     const titleLink = card.querySelector('.paper-title-link');
     titleLink.href = paper.url;
     titleLink.textContent = paper.title;
+    titleLink.setAttribute('aria-label', (paper.title || '論文') + '（在新分頁開啟）');
 
     // 我的領域(#14)/全領域熱榜(#20):標出論文來自哪個領域
     if ((currentCategory === 'my_fields' || currentCategory === 'hot') && (paper.field_name || (Array.isArray(paper.fields) && paper.fields.length))) {
@@ -2079,6 +2177,7 @@ function buildCard(paper, index) {
         a.rel = 'noopener noreferrer';
         a.className = 'github-link-btn';
         a.title = '查看程式碼';
+        a.setAttribute('aria-label', '查看程式碼（在新分頁開啟）');
         a.innerHTML = `<svg width="13" height="13"><use href="#icon-github"/></svg>Code${escapeHtml(starsText)}`;
         githubSlot.replaceWith(a);
     } else {
@@ -2118,6 +2217,7 @@ function renderPapers(papers, customTitle) {
         noResults.classList.remove('hidden');
         papersGrid.classList.add('hidden');
         loader.classList.add('hidden');
+        renderCoverageBar([]);
         // 空結果時仍保留排序/時間範圍 UI,使用者可調整條件再試
         if (themeEl) themeEl.textContent = '';
         if (metaEl) metaEl.textContent = '';
@@ -2130,6 +2230,7 @@ function renderPapers(papers, customTitle) {
     document.getElementById('topicSuggestions')?.classList.add('hidden');
     papersGrid.classList.remove('hidden');
     loader.classList.add('hidden');
+    renderCoverageBar(papers);
 
     const totalPages = Math.ceil(papers.length / PAPERS_PER_PAGE);
     if (currentPage > totalPages) currentPage = totalPages;
@@ -2188,7 +2289,7 @@ function renderPapers(papers, customTitle) {
 // ── Semantic Scholar 引用次數 ──────────────────────────────────
 const S2_CACHE_KEY = 's2_citations_v1';
 const S2_TTL = 6 * 3600 * 1000; // 6 小時
-const S2_MAX = 10000;
+const S2_MAX = 4000;
 let s2Cache = {};
 try { s2Cache = JSON.parse(localStorage.getItem(S2_CACHE_KEY) || '{}'); } catch (e) { }
 function purgeS2() {
@@ -2197,6 +2298,7 @@ function purgeS2() {
     keys.sort((a, b) => (s2Cache[a]?.at || 0) - (s2Cache[b]?.at || 0));
     for (let i = 0; i < keys.length - S2_MAX; i++) delete s2Cache[keys[i]];
 }
+purgeS2();
 
 function getArxivId(url) {
     const m = url.match(/abs\/(\d{4}\.\d+)/);
@@ -2442,7 +2544,7 @@ async function fetchCitationCounts(papers) {
 // ── Papers with Code ──────────────────────────────────────────
 const PWC_CACHE_KEY = 'pwc_cache_v1';
 const PWC_TTL = 24 * 3600 * 1000; // 24 小時
-const PWC_MAX = 10000;
+const PWC_MAX = 3000;
 let pwcCache = {};
 try { pwcCache = JSON.parse(localStorage.getItem(PWC_CACHE_KEY) || '{}'); } catch(e) {}
 function purgePwc() {
@@ -2451,6 +2553,7 @@ function purgePwc() {
     keys.sort((a, b) => (pwcCache[a]?.at || 0) - (pwcCache[b]?.at || 0));
     for (let i = 0; i < keys.length - PWC_MAX; i++) delete pwcCache[keys[i]];
 }
+purgePwc();
 
 function getPwcData(url) {
     const id = getArxivId(url);
@@ -2503,7 +2606,7 @@ function _matchCatTerm(term, tLc, sLc) {
 }
 
 function applyFilter(pool, query) {
-    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || currentCategory === 'my_fields' || currentCategory === 'hot' || currentCategory.startsWith('custom_') || CONF_FILTERS.has(currentCategory)
+    const cat = currentCategory === 'all' || currentCategory === 'favorites' || currentCategory === 'top_conf' || currentCategory === 'hf_daily' || currentCategory === 'emerging' || currentCategory === 'popular' || currentCategory === 'reviews' || currentCategory === 'my_fields' || currentCategory === 'hot' || CONF_FILTERS.has(currentCategory)
         ? null
         : currentCategory.toLowerCase();
     const confKey = CONF_FILTERS.get(currentCategory);
@@ -2566,13 +2669,19 @@ function buildMetricTitle() {
 
 async function ensureMonthPapers() {
     if (monthPapers.length > 0) return;
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    try {
+        const cached = await _readPapersIDB(disc, { days: 30 });
+        if (cached?.length) {
+            monthPapers = indexPapers(cached);
+            return;
+        }
+    } catch (e) {}
     loader.classList.remove('hidden');
     papersGrid.classList.add('hidden');
     try {
-        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
-        const res = await fetch(`/api/papers?days=30&discipline=${encodeURIComponent(disc)}`);
-        if (!res.ok) throw new Error();
-        monthPapers = indexPapers((await res.json()).papers);
+        const { data } = await _fetchPaperPayload(disc, { days: 30 });
+        monthPapers = indexPapers(data.papers || []);
     } catch (e) {
         monthPapers = allPapers; // fallback
     } finally {
@@ -2583,19 +2692,52 @@ async function ensureMonthPapers() {
 
 async function ensureQuarterPapers() {
     if (quarterPapers.length > 0) return;
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    try {
+        const cached = await _readPapersIDB(disc, { days: 90 });
+        if (cached?.length) {
+            quarterPapers = indexPapers(cached);
+            return;
+        }
+    } catch (e) {}
     loader.classList.remove('hidden');
     papersGrid.classList.add('hidden');
     try {
-        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
-        const res = await fetch(`/api/papers?days=90&discipline=${encodeURIComponent(disc)}`);
-        if (!res.ok) throw new Error();
-        quarterPapers = indexPapers((await res.json()).papers);
+        const { data } = await _fetchPaperPayload(disc, { days: 90 });
+        quarterPapers = indexPapers(data.papers || []);
     } catch (e) {
         quarterPapers = monthPapers.length ? monthPapers : allPapers;
     } finally {
         loader.classList.add('hidden');
         papersGrid.classList.remove('hidden');
     }
+}
+
+let _prewarmRangeDisc = null;
+function prewarmExtendedPaperRanges() {
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+    if (_prewarmRangeDisc === disc) return;
+    _prewarmRangeDisc = disc;
+    const run = async () => {
+        for (const days of [30, 90]) {
+            try {
+                const cached = await _readPapersIDB(disc, { days });
+                if (cached?.length) {
+                    if (days === 30 && monthPapers.length === 0) monthPapers = indexPapers(cached);
+                    if (days === 90 && quarterPapers.length === 0) quarterPapers = indexPapers(cached);
+                    continue;
+                }
+                const { data } = await _fetchPaperPayload(disc, { days });
+                const papers = indexPapers(data.papers || []);
+                if (days === 30 && monthPapers.length === 0) monthPapers = papers;
+                if (days === 90 && quarterPapers.length === 0) quarterPapers = papers;
+            } catch (e) {
+                break;
+            }
+        }
+    };
+    if ('requestIdleCallback' in window) window.requestIdleCallback(() => run(), { timeout: 2500 });
+    else setTimeout(run, 1200);
 }
 
 async function papersForCurrentTimeRange() {
@@ -2751,7 +2893,7 @@ async function filterPapers() {
             renderPapers(papers, `🤗 HuggingFace 每日精選${suffix}`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('HF Daily 載入失敗：' + e.message);
+            showToast('HF Daily 載入失敗：' + e.message);
         }
         return;
     }
@@ -2782,7 +2924,7 @@ async function filterPapers() {
             renderPapers(papers, `🚀 爆發中（${ACTIVE_DISCIPLINE?.name || ''} · 近 7 天 · ${sortLabel} · ${papers.length} 篇）`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('爆發中載入失敗：' + e.message);
+            showToast('爆發中載入失敗：' + e.message);
         }
         return;
     }
@@ -2814,7 +2956,7 @@ async function filterPapers() {
             renderPapers(papers, `🌐 全領域熱榜（跨領域 · 近 7 天 · ${sortLabel} · ${papers.length} 篇）`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('全領域熱榜載入失敗：' + e.message);
+            showToast('全領域熱榜載入失敗：' + e.message);
         }
         return;
     }
@@ -2841,7 +2983,7 @@ async function filterPapers() {
             renderPapers(papers, `🔥 熱門（近 7 天 · ${sortLabel} · ${papers.length} 篇）`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('熱門載入失敗：' + e.message);
+            showToast('熱門載入失敗：' + e.message);
         }
         return;
     }
@@ -2868,7 +3010,7 @@ async function filterPapers() {
             renderPapers(papers, `📊 評審熱度（ICLR/NeurIPS/ICML/COLM · ${sortLabel} · ${papers.length} 篇）`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('評審熱度載入失敗：' + e.message);
+            showToast('評審熱度載入失敗：' + e.message);
         }
         return;
     }
@@ -2891,39 +3033,7 @@ async function filterPapers() {
             renderPapers(papers, `${confName} 相關論文（${getTimeRangeMeta().label} · 依${getSortMeta().label}）`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('搜尋失敗：' + e.message);
-        }
-        return;
-    }
-
-    // 自訂訂閱(#17):直接打 /api/custom,組合 arXiv cat/keyword/author/id 查詢
-    if (currentCategory.startsWith('custom_')) {
-        const feed = getCustomFeed(currentCategory);
-        if (!feed) {
-            renderPapers([], '🛰️ 自訂訂閱（找不到，請重建）');
-            return;
-        }
-        papersGrid.classList.add('hidden');
-        noResults.classList.add('hidden');
-        loader.classList.remove('hidden');
-        try {
-            const days = getTimeRangeMeta().days || 30;
-            const qs = _customFeedQuery(feed, { days, max_results: 100 });
-            const res = await fetch(`/api/custom?${qs}`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            let papers = indexPapers(Array.isArray(data.papers) ? data.papers : []);
-            if (query) papers = applyFilter(papers, query);
-            papers = applyTimeRange(papers);
-            await prepareMetricData(papers, sortValue);
-            papers = sortPapersByMetric(papers, sortValue);
-            if (!papers.length) {
-                showToast('此自訂訂閱目前沒有命中,試著放寬條件或拉長時間範圍');
-            }
-            renderPapers(papers, `🛰️ ${feed.name}（${getTimeRangeMeta().label} · 依${getSortMeta().label} · ${papers.length} 篇）`);
-        } catch (e) {
-            loader.classList.add('hidden');
-            alert('自訂訂閱載入失敗：' + e.message);
+            showToast('搜尋失敗：' + e.message);
         }
         return;
     }
@@ -2957,7 +3067,7 @@ async function filterPapers() {
             renderPapers(papers, `🗂️ 我的領域（${names} · ${getTimeRangeMeta().label} · 依${getSortMeta().label} · ${papers.length} 篇）`);
         } catch (e) {
             loader.classList.add('hidden');
-            alert('我的領域載入失敗：' + e.message);
+            showToast('我的領域載入失敗：' + e.message);
         }
         return;
     }
@@ -2966,49 +3076,9 @@ async function filterPapers() {
     let filtered = applyFilter(pool, query);
     filtered = applyTimeRange(filtered);
 
-    if (sortValue === 'personalized') {
-        const reranked = await applyPersonalizedRerank(filtered);
-        if (reranked) {
-            renderPapers(reranked, buildMetricTitle());
-            return;
-        }
-        // 失敗或無收藏:fallback 到 latest
-    }
-    await prepareMetricData(filtered, sortValue === 'personalized' ? 'latest' : sortValue);
-    filtered = sortPapersByMetric(filtered, sortValue === 'personalized' ? 'latest' : sortValue);
+    await prepareMetricData(filtered, sortValue);
+    filtered = sortPapersByMetric(filtered, sortValue);
     renderPapers(filtered, buildMetricTitle());
-}
-
-// 個人化重排:取收藏的 arxiv id,呼叫 /api/personalized,失敗回 null 走 fallback
-async function applyPersonalizedRerank(filtered) {
-    const favIds = [];
-    for (const url of favorites) {
-        const m = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,6})/i);
-        if (m) favIds.push(m[1]);
-    }
-    if (favIds.length < 3) {
-        alert('「為你推薦」需要至少 3 篇收藏的 arXiv 論文。');
-        return null;
-    }
-    const disc = ACTIVE_DISCIPLINE?.id || '';
-    try {
-        const url = `/api/personalized?favorites=${encodeURIComponent(favIds.slice(0, 50).join(','))}&discipline=${encodeURIComponent(disc)}&top_k=60&blend=0.4`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const reranked = data.papers || [];
-        if (!reranked.length) return null;
-        // 與 filtered 取交集(保 filter / time-range),保 reranked 順序
-        const allowedUrls = new Set(filtered.map(p => p.url));
-        const out = reranked.filter(p => allowedUrls.has(p.url));
-        // reranked 可能少於 filtered;補上未排到的 filtered 維持完整度
-        const seen = new Set(out.map(p => p.url));
-        for (const p of filtered) if (!seen.has(p.url)) out.push(p);
-        return indexPapers(out);
-    } catch (e) {
-        console.warn('personalized rerank failed:', e);
-        return null;
-    }
 }
 
 async function filterByTag(tag) {
@@ -3049,7 +3119,7 @@ async function searchAllPapers(query) {
     } catch (e) {
         if (e.name === 'AbortError') return;
         loader.classList.add('hidden');
-        alert('搜尋失敗：' + e.message);
+        showToast('搜尋失敗：' + e.message);
     }
 }
 
@@ -3272,11 +3342,17 @@ let RENAMED_BUILTIN_KEY = 'visionary_renamed_builtins';
 function loadDeletedBuiltins() {
     try { return new Set(JSON.parse(localStorage.getItem(DELETED_BUILTIN_KEY) || '[]')); } catch (e) { return new Set(); }
 }
-function saveDeletedBuiltins(s) { localStorage.setItem(DELETED_BUILTIN_KEY, JSON.stringify([...s])); }
+function saveDeletedBuiltins(s) {
+    localStorage.setItem(DELETED_BUILTIN_KEY, JSON.stringify([...s]));
+    scheduleUserStateBackup('deleted-builtins');
+}
 function loadRenamedBuiltins() {
     try { return JSON.parse(localStorage.getItem(RENAMED_BUILTIN_KEY) || '{}'); } catch (e) { return {}; }
 }
-function saveRenamedBuiltins(map) { localStorage.setItem(RENAMED_BUILTIN_KEY, JSON.stringify(map)); }
+function saveRenamedBuiltins(map) {
+    localStorage.setItem(RENAMED_BUILTIN_KEY, JSON.stringify(map));
+    scheduleUserStateBackup('renamed-builtins');
+}
 
 // 特殊 filter：只改顯示名，不改 data-filter（篩選邏輯依賴它）
 // 由 applyDiscipline 依當前 discipline 動態重建
@@ -3369,7 +3445,6 @@ let _topicFeedToken = 0;
 
 function _isTopicFilter(filter) {
     if (!filter || _RESERVED_CATEGORIES.has(filter)) return false;
-    if (filter.startsWith('custom_')) return false;   // 自訂訂閱走自己的 /api/custom 分支
     if (typeof CONF_FILTERS !== 'undefined' && CONF_FILTERS.has(filter)) return false;
     return true;
 }
@@ -3436,7 +3511,6 @@ function bindCategoryBtns() {
         }
         const btn = e.target.closest('.category-btn');
         if (!btn || btn.classList.contains('top-conf-btn') || btn.classList.contains('topic-group-btn')) return;
-        if (btn.id === 'addCustomFeedBtn') { openCustomFeedModal(); return; }
         _selectCategory(btn.dataset.filter, btn);
     });
 
@@ -3555,13 +3629,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('switchDisciplineBtn')?.addEventListener('click', () => {
         openDisciplinePicker({ closable: true });
     });
-    document.getElementById('rssSubscribeBtn')?.addEventListener('click', () => {
-        const days = getTimeRangeMeta().days || 7;
-        const url = currentCategory === 'hot'
-            ? `/api/rss?view=hot&days=${days}`
-            : `/api/rss?discipline=${encodeURIComponent(window.getActiveDiscipline?.()?.id || 'cv')}&days=${days}`;
-        window.open(url, '_blank', 'noopener');
-    });
     document.getElementById('disciplinePickerClose')?.addEventListener('click', closeDisciplinePicker);
     document.querySelector('#disciplinePicker .dp-backdrop')?.addEventListener('click', () => {
         // 僅在已有選定 discipline 時允許點背景關閉
@@ -3582,7 +3649,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     applyBuiltinModifications();
     loadPinnedTopics();
-    renderCustomFeedBtns();
     bindCategoryBtns();
 
     // 恢復上次的分類（URL cat 優先；找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
@@ -3671,15 +3737,19 @@ document.addEventListener('DOMContentLoaded', () => {
     let confSubmenuTimer = null;
     if (confSubmenu) document.body.appendChild(confSubmenu);
 
+    function setConfExpanded(on) {
+        topConfWrapper?.querySelector('.top-conf-btn')?.setAttribute('aria-expanded', on ? 'true' : 'false');
+    }
     function openConfSubmenu() {
         clearTimeout(confSubmenuTimer);
         const rect = topConfWrapper.getBoundingClientRect();
         confSubmenu.style.top = (rect.bottom + 8) + 'px';
         confSubmenu.style.left = rect.left + 'px';
         confSubmenu.classList.add('open');
+        setConfExpanded(true);
     }
     function closeConfSubmenu() {
-        confSubmenuTimer = setTimeout(() => confSubmenu.classList.remove('open'), 120);
+        confSubmenuTimer = setTimeout(() => { confSubmenu.classList.remove('open'); setConfExpanded(false); }, 120);
     }
     if (topConfWrapper && confSubmenu) {
         topConfWrapper.addEventListener('mouseenter', openConfSubmenu);
@@ -3690,10 +3760,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // 觸控/click 也能開啟（避免手機/平板無法叫出 conf submenu）
         const topConfBtn = topConfWrapper.querySelector('.top-conf-btn');
         if (topConfBtn) {
+            topConfBtn.setAttribute('aria-haspopup', 'true');
+            topConfBtn.setAttribute('aria-expanded', confSubmenu.classList.contains('open') ? 'true' : 'false');
             topConfBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (confSubmenu.classList.contains('open')) {
                     confSubmenu.classList.remove('open');
+                    setConfExpanded(false);
                 } else {
                     openConfSubmenu();
                 }
@@ -3705,6 +3778,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (confSubmenu.contains(e.target)) return;
             if (topConfWrapper.contains(e.target)) return;
             confSubmenu.classList.remove('open');
+            setConfExpanded(false);
         });
 
         // conf-item 點擊委派（confSubmenu 已移至 body，在此統一綁定）
@@ -3750,6 +3824,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!TIME_RANGE_VALUES.has(next) || next === currentTimeRange) return;
                 currentTimeRange = next;
                 try { localStorage.setItem('visionary_time_range_v1', next); } catch (e) {}
+                scheduleUserStateBackup('time-range');
                 updateTimeRangeUI();
                 await filterPapers();
                 writeUrlState();  // #11
@@ -3791,10 +3866,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!SORT_VALUES.has(val)) return;
                 currentSortValue = val;
                 try { localStorage.setItem('visionary_sort_v3', val); } catch (e) {}
+                scheduleUserStateBackup('sort');
                 // 近三月熱門:語意上就是 90 天窗 + 引用排序,自動切到 quarter
                 if (val === 'hot3m' && currentTimeRange !== 'quarter') {
                     currentTimeRange = 'quarter';
                     try { localStorage.setItem('visionary_time_range_v1', 'quarter'); } catch (e) {}
+                    scheduleUserStateBackup('time-range');
                     updateTimeRangeUI();
                 }
                 sortLabel.textContent = getSortMeta(val).label;
@@ -3822,7 +3899,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = ctxTarget;
         hideCtxMenu();
         if (!btn) return;
-        if (btn.dataset.customFeed === 'true') { openCustomFeedModal(btn.dataset.filter); return; }
         editBtnLabel(btn);
     });
     document.getElementById('ctxDelete').addEventListener('click', (e) => {
@@ -3830,25 +3906,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = ctxTarget;
         hideCtxMenu();
         if (!btn) return;
-        if (btn.dataset.customFeed === 'true') {
-            deleteCustomFeed(btn.dataset.filter);
-            showToast('已刪除自訂訂閱');
-            return;
-        }
         deleteCategoryBtn(btn);
     });
 
-    // ── 自訂訂閱 modal 綁定(#17) ──────────────────────────────
-    document.getElementById('cfForm')?.addEventListener('submit', _submitCustomFeed);
-    document.getElementById('cfClose')?.addEventListener('click', closeCustomFeedModal);
-    document.querySelector('#customFeedModal .cf-backdrop')?.addEventListener('click', closeCustomFeedModal);
-    document.getElementById('cfDelete')?.addEventListener('click', () => {
-        if (_cfEditId) { deleteCustomFeed(_cfEditId); showToast('已刪除自訂訂閱'); }
-        closeCustomFeedModal();
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeCustomFeedModal();
-    });
+    bindStorageTools();
     document.addEventListener('click', hideCtxMenu);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtxMenu(); });
 
@@ -3886,12 +3947,14 @@ document.addEventListener('DOMContentLoaded', () => {
     semanticToggle.addEventListener('click', () => {
         window._SEMANTIC_ON = !window._SEMANTIC_ON;
         try { localStorage.setItem('visionary_semantic_on', window._SEMANTIC_ON ? '1' : '0'); } catch (e) {}
+        scheduleUserStateBackup('semantic');
         syncSemanticUI();
         if (window._SEMANTIC_ON) searchInput.focus();
     });
     crossDiscToggle.addEventListener('click', () => {
         window._CROSS_DISC_ON = !window._CROSS_DISC_ON;
         try { localStorage.setItem('visionary_cross_disc_on', window._CROSS_DISC_ON ? '1' : '0'); } catch (e) {}
+        scheduleUserStateBackup('cross-discipline');
         syncSemanticUI();
     });
     syncSemanticUI();
@@ -3931,13 +3994,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // ── 相似論文 modal 關閉 ───────────────────────────────────────
-    document.getElementById('similarCloseBtn')?.addEventListener('click', closeSimilarModal);
-    document.querySelector('#similarModal .similar-backdrop')?.addEventListener('click', closeSimilarModal);
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeSimilarModal();
-    });
-
     // ── 空狀態「清除搜尋」按鈕 ────────────────────────────────
     const clearSearchBtn = document.getElementById('clearSearchBtn');
     if (clearSearchBtn) {
@@ -3967,12 +4023,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cards.length === 0) return;
         idx = Math.max(0, Math.min(idx, cards.length - 1));
         focusedCardIdx = idx;
-        cards.forEach((c, i) => c.style.outline = i === idx ? '2px solid rgba(168,85,247,0.7)' : '');
+        cards.forEach((c, i) => {
+            const on = i === idx;
+            c.style.outline = on ? '2px solid rgba(168,85,247,0.7)' : '';
+            c.classList.toggle('kbd-focused', on);
+        });
         cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function clearHighlight() {
-        getVisibleCards().forEach(c => c.style.outline = '');
+        getVisibleCards().forEach(c => { c.style.outline = ''; c.classList.remove('kbd-focused'); });
         focusedCardIdx = -1;
     }
 
@@ -4118,6 +4178,7 @@ function updateStats() {
         _statsEls.fresh.textContent = `🆕 新增 ${newCount}`;
         _statsEls.fresh.classList.toggle('hidden', newCount === 0);
     }
+    updateStorageStatus();
 }
 
 setTimeout(updateStats, 300);
@@ -4150,108 +4211,6 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
     });
 }
 
-// ── #19 Web-Push 訂閱（每日追蹤領域爆發摘要）──────────────────────
-(function initWebPush() {
-    const btn = document.getElementById('pushSubscribeBtn');
-    if (!btn) return;
-    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-    if (!supported || location.protocol !== 'https:') return;
-
-    let publicKey = '';
-    let busy = false;
-
-    function urlB64ToUint8Array(b64) {
-        const pad = '='.repeat((4 - (b64.length % 4)) % 4);
-        const base = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
-        const raw = atob(base);
-        const out = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-        return out;
-    }
-
-    async function currentSub() {
-        const reg = await navigator.serviceWorker.ready;
-        return reg.pushManager.getSubscription();
-    }
-
-    function setLabel(subscribed) {
-        btn.textContent = subscribed ? '🔔 推播已開（點擊關閉）' : '🔔 推播訂閱';
-        btn.classList.toggle('active', !!subscribed);
-    }
-
-    async function subscribe() {
-        const perm = await Notification.requestPermission();
-        if (perm !== 'granted') { showToast('需要通知權限才能開啟推播'); return; }
-        const reg = await navigator.serviceWorker.ready;
-        const sub = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlB64ToUint8Array(publicKey),
-        });
-        const fields = (window.getTracks?.() || []);
-        const res = await fetch('/api/push/subscribe', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ subscription: sub.toJSON(), fields }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        fetch('/api/push/test', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ endpoint: sub.endpoint }),
-        }).catch(() => {});
-        setLabel(true);
-        showToast(fields.length ? `已開啟推播 · 追蹤 ${fields.length} 個領域` : '已開啟推播');
-    }
-
-    async function unsubscribe() {
-        const sub = await currentSub();
-        if (sub) {
-            await fetch('/api/push/unsubscribe', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ endpoint: sub.endpoint }),
-            }).catch(() => {});
-            await sub.unsubscribe().catch(() => {});
-        }
-        setLabel(false);
-        showToast('已關閉推播');
-    }
-
-    btn.addEventListener('click', async () => {
-        if (busy) return;
-        busy = true;
-        try {
-            const sub = await currentSub();
-            if (sub) await unsubscribe(); else await subscribe();
-        } catch (e) {
-            showToast('推播設定失敗：' + (e.message || e));
-        } finally {
-            busy = false;
-        }
-    });
-
-    // 已訂閱者切換追蹤領域 → 背景同步 fields(供每日摘要個人化)
-    window.__resyncPushFields = async function () {
-        try {
-            const sub = await currentSub();
-            if (!sub) return;
-            await fetch('/api/push/subscribe', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ subscription: sub.toJSON(), fields: (window.getTracks?.() || []) }),
-            });
-        } catch (_) { /* best-effort */ }
-    };
-
-    (async () => {
-        try {
-            const res = await fetch('/api/push/key');
-            const data = await res.json();
-            if (!data.enabled || !data.publicKey) return;   // 伺服器未設定 VAPID → 隱藏按鈕
-            publicKey = data.publicKey;
-            btn.hidden = false;
-            setLabel(!!(await currentSub()));
-        } catch (_) { /* push 不可用,保持隱藏 */ }
-    })();
-})();
-
-
 // ── 鍵盤快捷鍵說明按鈕 ────────────────────────────────────────
 document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
     document.getElementById('kbdHint')?.classList.toggle('visible');
@@ -4263,6 +4222,9 @@ document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
     const input = document.getElementById('cmdInput');
     const resultsEl = document.getElementById('cmdResults');
     if (!palette || !input || !resultsEl) return;
+
+    resultsEl.setAttribute('role', 'listbox');
+    if (resultsEl.id) input.setAttribute('aria-controls', resultsEl.id);
 
     let _cmdItems = [];   // 目前渲染的可執行項目（依 DOM 順序）
     let _selIdx = 0;
@@ -4290,7 +4252,7 @@ document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
         });
 
         document.querySelectorAll('.category-btn[data-filter], .topic-item[data-filter], .conf-item[data-filter]').forEach(btn => {
-            if (btn.classList.contains('topic-group-btn') || btn.id === 'addCustomFeedBtn') return;
+            if (btn.classList.contains('topic-group-btn')) return;
             const label = (typeof getLabelText === 'function' ? getLabelText(btn) : btn.textContent.trim());
             if (!label) return;
             push('分類', '📂', label, label + ' ' + (btn.dataset.filter || ''), () => { closePalette(); btn.click(); });
@@ -4340,6 +4302,7 @@ document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
         const idx = _cmdItems.length;
         const li = document.createElement('li');
         li.className = 'cmd-item';
+        li.id = 'cmd-opt-' + idx;
         li.setAttribute('role', 'option');
         li.innerHTML = `<span class="cmd-item-icon"></span><span class="cmd-item-label"></span>${c.kind ? '<span class="cmd-item-kind"></span>' : ''}`;
         li.querySelector('.cmd-item-icon').textContent = c.icon || '•';
@@ -4387,12 +4350,15 @@ document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
     }
 
     function updateActive() {
+        let activeId = '';
         resultsEl.querySelectorAll('.cmd-item').forEach((li, i) => {
             const on = i === _selIdx;
             li.classList.toggle('active', on);
             li.setAttribute('aria-selected', on ? 'true' : 'false');
-            if (on) li.scrollIntoView({ block: 'nearest' });
+            if (on) { activeId = li.id; li.scrollIntoView({ block: 'nearest' }); }
         });
+        if (activeId) input.setAttribute('aria-activedescendant', activeId);
+        else input.removeAttribute('aria-activedescendant');
     }
 
     function runIdx(idx) {
@@ -4406,7 +4372,7 @@ document.getElementById('kbdHintBtn')?.addEventListener('click', () => {
         palette.classList.remove('hidden');
         input.value = '';
         render('');
-        input.focus();
+        requestAnimationFrame(() => input.focus());
     }
     function closePalette() {
         if (!isOpen()) return;

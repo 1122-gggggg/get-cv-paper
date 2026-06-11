@@ -36,9 +36,6 @@
     <link rel="manifest" href="/static/manifest.json">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
     <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
-    <!-- Google Fonts：critical (Inter + Outfit) preload；decorative 用 media trick 不阻塞首屏 -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Critical CSS inline:第一屏需要的最小規則,避免 FOUC + 加速 first paint -->
     <style>
       :root{--bg-color:#080c18;--text-primary:#eef2ff;--text-secondary:#8b9cc8;--card-bg:rgba(14,20,40,0.72);--card-border:rgba(255,255,255,0.07);--side-bg:#0f172a}
@@ -58,13 +55,8 @@
       @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
       body.light-mode{--bg-color:#eef1fb;--text-primary:#141930;--text-secondary:#3d4e72;--card-bg:#fff;--card-border:rgba(79,70,229,.14)}
     </style>
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'">
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap"></noscript>
     <link rel="stylesheet" href="/static/style.css" fetchpriority="high">
     <link rel="stylesheet" href="/static/washi.css" fetchpriority="high">
-    <!-- 預先發 /api/papers 預設 cv 領域，與 CSS/JS 平行下載，省 1 RTT -->
-    <link rel="preload" as="fetch" href="/api/papers?max_results=50&amp;discipline=cv" fetchpriority="high" crossorigin="anonymous">
     <!-- DNS prefetch for upstream APIs (loaded lazily after first paper render) -->
     <link rel="dns-prefetch" href="//api.semanticscholar.org">
     <link rel="dns-prefetch" href="//paperswithcode.com">
@@ -107,15 +99,13 @@
         <aside class="side">
             <div class="side-brand" id="brandHome" role="button" tabindex="0" title="回到主頁（顯示全部論文）">
                 <span class="brand-mark" aria-hidden="true">📚</span>
-                <h1 class="logo" id="brandLogo">Scholarly<span>.</span></h1>
+                <span class="logo" id="brandLogo" role="img" aria-label="Scholarly">Scholarly<span aria-hidden="true">.</span></span>
             </div>
             <div class="side-discipline">
                 <button id="switchDisciplineBtn" class="switch-discipline-btn" title="切換研究領域">
                     <span id="activeDisciplineBadge" class="discipline-badge">選擇領域</span>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                 </button>
-                <button id="rssSubscribeBtn" class="rss-subscribe-btn" type="button" title="訂閱 RSS：目前領域最新論文（在「全領域熱榜」時則訂閱跨領域熱榜）">📡 RSS 訂閱</button>
-                <button id="pushSubscribeBtn" class="rss-subscribe-btn push-subscribe-btn" type="button" hidden title="開啟瀏覽器推播：每天把你追蹤領域的爆發論文整理通知你">🔔 推播訂閱</button>
             </div>
             <div class="side-section-label">檢視 <span class="hint">按主題篩選</span></div>
             <nav class="side-nav">
@@ -140,8 +130,7 @@
                                 <!-- Conf items injected dynamically per discipline -->
                             </div>
                         </div>
-                        <button class="category-btn add-custom-feed-btn" id="addCustomFeedBtn" title="建立自訂訂閱：組合 arXiv 分類 / 關鍵字 / 作者 / 論文 ID">➕ 自訂訂閱</button>
-                        <!-- Custom feed chips (#17) + Topic buttons injected dynamically -->
+                        <!-- Topic buttons injected dynamically -->
                     </div>
                     <button class="filter-arrow filter-arrow-right" id="filterArrowRight" aria-label="向右捲動" hidden>&#8250;</button>
                 </div>
@@ -152,6 +141,17 @@
                 <span class="stat-pill" id="statFav">⭐ 收藏 0</span>
                 <span class="stat-pill" id="statNotes">📝 筆記 0</span>
                 <span class="stat-pill" id="statTotal">📚 0 篇</span>
+            </div>
+            <div class="storage-tools" id="storageTools" aria-label="資料保全">
+                <div class="storage-tools-head">
+                    <span class="storage-title">資料保全</span>
+                    <span class="storage-status" id="storageStatus">本機備份待同步</span>
+                </div>
+                <div class="storage-actions">
+                    <button id="storageExportBtn" type="button" title="匯出收藏、已讀、筆記、標籤與偏好設定">匯出</button>
+                    <button id="storageImportBtn" type="button" title="匯入先前匯出的個人資料">匯入</button>
+                    <input id="storageImportFile" type="file" accept="application/json" hidden>
+                </div>
             </div>
             <div class="side-foot">
                 <div class="side-foot-item"><kbd>J</kbd><kbd>K</kbd> 上一篇 / 下一篇</div>
@@ -202,12 +202,12 @@
                         <button class="sort-item" data-value="velocity">🚀 引用速度 <span>Velocity</span></button>
                         <button class="sort-item" data-value="hf">🤗 HF 熱度 <span>Upvotes</span></button>
                         <button class="sort-item" data-value="hot3m">🔥 近三月熱門 <span>Hot 3M</span></button>
-                        <button class="sort-item" data-value="personalized">✨ 為你推薦 <span>For You</span></button>
                     </div>
                 </div>
                 <button id="favExportBtn" class="fav-export-btn hidden" title="匯出收藏為 BibTeX">⬇ 匯出 BibTeX</button>
                 <span class="count-meta"></span>
             </div>
+            <div id="coverageBar" class="coverage-bar hidden" aria-live="polite"></div>
             <div id="loader" class="loader-container">
                 <div class="spinner"></div>
                 <p id="loaderText">正在自動為您抓取最新論文...</p>
@@ -235,19 +235,6 @@
                     <button class="read-btn" title="切換已讀狀態">
                         <svg width="12" height="12"><use href="#icon-circle"/></svg>
                         <span class="read-label">未讀</span>
-                    </button>
-                    <button class="similar-btn" title="相似論文">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="3"/>
-                            <circle cx="4" cy="6" r="2"/>
-                            <circle cx="20" cy="6" r="2"/>
-                            <circle cx="4" cy="18" r="2"/>
-                            <circle cx="20" cy="18" r="2"/>
-                            <line x1="6" y1="6.5" x2="10" y2="11"/>
-                            <line x1="18" y1="6.5" x2="14" y2="11"/>
-                            <line x1="6" y1="17.5" x2="10" y2="13"/>
-                            <line x1="18" y1="17.5" x2="14" y2="13"/>
-                        </svg>
                     </button>
                     <div>
                         <span class="venue-badge-slot"></span>
@@ -285,7 +272,7 @@
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h4v6H6.5L5 16V9a2 2 0 0 1 2-2zm9 0h4v6h-4.5L14 16V9a2 2 0 0 1 2-2z"/></svg>
                             <span class="cite-label">引用</span>
                         </button>
-                        <a class="paper-link" target="_blank" rel="noopener noreferrer">
+                        <a class="paper-link" target="_blank" rel="noopener noreferrer" aria-label="閱讀論文（在新分頁開啟）">
                             閱讀論文
                             <svg width="16" height="16"><use href="#icon-external"/></svg>
                         </a>
@@ -348,59 +335,6 @@
 
     <button id="kbdHintBtn" class="kbd-hint-btn" title="鍵盤快捷鍵說明">?</button>
     <button id="backToTopBtn" class="back-to-top" title="回到頂部">↑</button>
-
-    <!-- 相似論文 modal -->
-    <div id="similarModal" class="similar-modal hidden">
-        <div class="similar-backdrop"></div>
-        <div class="similar-panel" role="dialog" aria-modal="true" aria-labelledby="similarTitle">
-            <div class="similar-head">
-                <h3 class="similar-title" id="similarTitle">相似論文</h3>
-                <button id="similarCloseBtn" class="similar-close" title="關閉" aria-label="關閉">×</button>
-            </div>
-            <div class="similar-seed" id="similarSeed"></div>
-            <div class="similar-body" id="similarBody">
-                <div class="similar-loading">載入中…</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 自訂訂閱 modal (#17) -->
-    <div id="customFeedModal" class="cf-modal hidden">
-        <div class="cf-backdrop"></div>
-        <div class="cf-panel" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
-            <div class="cf-head">
-                <h3 class="cf-title" id="cfTitle">建立自訂訂閱</h3>
-                <button id="cfClose" class="cf-close" title="關閉" aria-label="關閉">×</button>
-            </div>
-            <p class="cf-hint">直接組合 arXiv 查詢，填任一欄即可。多個值用逗號分隔；同欄位用 OR、跨欄位用 AND。</p>
-            <form id="cfForm" class="cf-form">
-                <label class="cf-field">
-                    <span>名稱</span>
-                    <input id="cfName" type="text" maxlength="40" placeholder="例如：我的擴散模型雷達" autocomplete="off" required>
-                </label>
-                <label class="cf-field">
-                    <span>arXiv 分類 <em>cat</em></span>
-                    <input id="cfCats" type="text" placeholder="cs.CV, cs.LG, stat.ML" autocomplete="off">
-                </label>
-                <label class="cf-field">
-                    <span>關鍵字 <em>全文片語</em></span>
-                    <input id="cfKeywords" type="text" placeholder="diffusion model, flow matching" autocomplete="off">
-                </label>
-                <label class="cf-field">
-                    <span>作者 <em>au</em></span>
-                    <input id="cfAuthors" type="text" placeholder="Kaiming He, Yann LeCun" autocomplete="off">
-                </label>
-                <label class="cf-field">
-                    <span>arXiv ID</span>
-                    <input id="cfIds" type="text" placeholder="2401.00001, 2312.12345" autocomplete="off">
-                </label>
-                <div class="cf-actions">
-                    <button type="button" id="cfDelete" class="cf-btn cf-btn-danger" hidden>刪除此訂閱</button>
-                    <button type="submit" class="cf-btn cf-btn-primary">儲存並查看</button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     <!-- 命令面板 (#13) — Ctrl/Cmd-K -->
     <div id="cmdPalette" class="cmd-palette hidden" role="dialog" aria-modal="true" aria-label="命令面板">

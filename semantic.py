@@ -8,6 +8,7 @@ All calls go through the shared httpx client.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -63,7 +64,7 @@ def _resolve_db_path() -> Path | None:
 
 class _EmbedCache:
     def __init__(self, maxsize: int = 5000) -> None:
-        self._mem: "OrderedDict[str, list[float]]" = OrderedDict()
+        self._mem: OrderedDict[str, list[float]] = OrderedDict()
         self._max = maxsize
         self._lock = threading.Lock()
         self._put_count = 0
@@ -204,7 +205,7 @@ def _query_text(q: str) -> str:
 def _mean_pool(token_vecs: list[list[float]]) -> list[float]:
     if not token_vecs:
         return []
-    return [sum(col) / len(col) for col in zip(*token_vecs)]
+    return [sum(col) / len(col) for col in zip(*token_vecs, strict=False)]
 
 
 def _flatten_vec(v: Any) -> list[float] | None:
@@ -258,7 +259,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     s = 0.0
     na = 0.0
     nb = 0.0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=False):
         s += x * y
         na += x * x
         nb += y * y
@@ -294,7 +295,7 @@ async def _embed_papers(
         if len(vecs) != len(chunk):
             logger.warning("semantic: shape mismatch (%d != %d)", len(vecs), len(chunk))
             continue
-        for k, v in zip(keys, vecs):
+        for k, v in zip(keys, vecs, strict=False):
             _cache.put(k, v)
             out[k] = v
     return out
@@ -338,75 +339,13 @@ def cache_stats() -> dict[str, int]:
     return {"size": len(_cache), "max": _cache._max, "disk": _cache.disk_size()}
 
 
-async def rerank_by_centroid(
-    client: httpx.AsyncClient,
-    favorite_papers: list[dict[str, Any]],
-    candidate_papers: list[dict[str, Any]],
-    top_k: int = 30,
-    blend: float = 0.4,
-) -> list[dict[str, Any]]:
-    """以使用者收藏的論文 embedding 取質心,對 candidates 重新排序。
-
-    `blend` 控制原始順序 vs 個人化分數的權重:0=純個人化,1=純原始。
-    回傳前 top_k 個 candidates,每篇附 `personal_score` (0..1)。
-    """
-    if not favorite_papers or not candidate_papers:
-        return candidate_papers[:top_k]
-
-    fav_vecs_map = await _embed_papers(client, favorite_papers)
-    fav_vecs = [v for v in fav_vecs_map.values() if v]
-    if not fav_vecs:
-        return candidate_papers[:top_k]
-
-    # 多質心:把收藏分群成 1-3 個興趣中心,候選取「最相近的興趣」分數,
-    # 避免把多元興趣平均成一個模糊質心。
-    centroids = _multi_centroids(fav_vecs)
-    if not centroids:
-        return candidate_papers[:top_k]
-
-    # 冷啟動:收藏太少(<3)時質心噪音大,提高 blend 偏向原始排序避免過擬合。
-    eff_blend = blend
-    if len(fav_vecs) < 3:
-        eff_blend = min(1.0, blend + 0.25)
-
-    cand_vecs_map = await _embed_papers(client, candidate_papers)
-
-    scored: list[tuple[float, int, dict[str, Any]]] = []
-    fav_keys = set(fav_vecs_map.keys())
-    n_cand = len(candidate_papers)
-    for idx, p in enumerate(candidate_papers):
-        k = _paper_key(p)
-        if not k or k in fav_keys:
-            # 跳過已收藏的(不要把收藏放回推薦列表)
-            continue
-        v = cand_vecs_map.get(k)
-        if not v:
-            scored.append((0.0, idx, p))
-            continue
-        sim = max(_cosine(c, v) for c in centroids)  # -1..1,取最相近興趣
-        personal = (sim + 1.0) / 2.0  # 0..1
-        # 原始排名也歸一化(idx 越小越前)
-        pos_score = 1.0 - (idx / max(1, n_cand))
-        score = eff_blend * pos_score + (1.0 - eff_blend) * personal
-        scored.append((score, idx, p))
-
-    scored.sort(key=lambda x: (-x[0], x[1]))
-
-    out: list[dict[str, Any]] = []
-    for s, _idx, p in scored[:top_k]:
-        item = dict(p)
-        item["personal_score"] = round(s, 4)
-        out.append(item)
-    return out
-
-
 # ── 動態子題聚類 (k-means on cached embeddings) ────────────────
 _STOPWORDS = frozenset({
     "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "with", "by", "from",
     "is", "are", "be", "as", "at", "this", "that", "we", "our", "their", "its",
     "using", "based", "via", "novel", "new", "method", "approach", "model", "models",
     "framework", "task", "tasks", "study", "studies", "paper", "results", "result",
-    "show", "shows", "propose", "proposed", "show", "however", "while", "but",
+    "show", "shows", "propose", "proposed", "however", "while", "but",
     "can", "may", "have", "has", "such", "across", "each", "more", "than", "also",
     "first", "second", "well", "many", "most", "use", "used", "uses", "given",
     "data", "training", "performance", "quality", "high", "low", "large", "small",
@@ -436,7 +375,7 @@ def _kmeans_pp_seed(vecs: list[list[float]], k: int) -> list[list[float]]:
         r = _random.random() * total
         acc = 0.0
         pick = vecs[-1]
-        for v, d in zip(vecs, dists):
+        for v, d in zip(vecs, dists, strict=False):
             acc += d
             if acc >= r:
                 pick = v
@@ -575,14 +514,14 @@ async def cluster_papers(
         return []
 
     k_eff = max(2, min(k, len(vecs) // min_cluster))
-    assign, _ = _kmeans(vecs, k_eff)
+    assign, _ = await asyncio.to_thread(_kmeans, vecs, k_eff)
 
     buckets: dict[int, list[dict[str, Any]]] = {}
     for i, p in enumerate(papers_aligned):
         buckets.setdefault(assign[i], []).append(p)
 
     out: list[dict[str, Any]] = []
-    for cid, members in buckets.items():
+    for _cid, members in buckets.items():
         if len(members) < min_cluster:
             continue
         label = _cluster_label(members)

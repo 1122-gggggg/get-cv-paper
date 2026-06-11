@@ -6,7 +6,6 @@ adapters in clients.py, discipline map in disciplines.py.
 from __future__ import annotations
 
 import asyncio
-import gc
 import html as _html
 import json as _json
 import logging
@@ -17,9 +16,9 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 import httpx
 from dotenv import load_dotenv
@@ -33,7 +32,6 @@ from cache import CachedJSON, LRUStore, etag_response, make_etag
 from clients import (
     ARXIV_UA,
     extract_github_url,
-    fetch_arxiv_custom,
     fetch_arxiv_listing,
     fetch_arxiv_search,
     fetch_biorxiv_listing,
@@ -48,7 +46,6 @@ from clients import (
     fetch_s2_author_papers,
     fetch_s2_author_search,
     fetch_s2_batch,
-    fetch_s2_recommendations,
     fetch_s2_search,
     github_repo_slug,
     s2_fos_for_cat,
@@ -58,14 +55,12 @@ from disciplines import DEFAULT_DISCIPLINE, DISCIPLINES, discipline
 from event_hub import EventHub
 from oai_harvest import harvest_arxiv_oai
 from paper_store import PaperStore, _paper_id as _derive_paper_id
-from webpush import push_service
 from semantic import (
     HF_EMBED_MODEL,
     HF_TOKEN,
     cache_stats as semantic_cache_stats,
     cluster_papers,
     hybrid_rank,
-    rerank_by_centroid,
 )
 
 load_dotenv()
@@ -186,8 +181,6 @@ def _client() -> httpx.AsyncClient:
 # Server-side stale 6h,讓使用者永遠 < 50ms,刷新成本攤到背景。
 _papers_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=64)
 _trending_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=8)
-# 使用者自訂 feed:每組 cats/keywords/authors/ids 一個 key,共享 SWR
-_custom_cache = CachedJSON(ttl=10 * 60, stale_ttl=6 * 3600, max_keys=128)
 # 突發偵測:每 30 分新鮮、24h stale,讀 metric_snapshots delta(每日才變)
 _emerging_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=32)
 _hot_cache = CachedJSON(ttl=15 * 60, stale_ttl=12 * 3600, max_keys=16)
@@ -242,22 +235,6 @@ _HOT_DISCIPLINES = _WARMUP_DISCIPLINES + _WARMUP_DISCIPLINES_TIER2
 _HOT_DEFAULT_LIMIT = 40
 _HOT_LIMIT_MAX = 100
 _HOT_WINDOW_MAX = 30
-_RSS_DAYS_MAX = 30
-_RSS_ITEMS_MAX = 80
-_RSS_SUMMARY_MAX = 600
-# Web-Push 每日摘要 (#19):跨領域熱榜挑使用者追蹤領域命中的爆發論文 → 推播。
-# enabled 取決於 VAPID 金鑰是否就緒(webpush.push_service);未設定時整條 pipeline 靜默。
-try:
-    _DIGEST_INTERVAL = min(7 * 86400, max(3600, int(os.environ.get("DIGEST_INTERVAL_SECONDS", "86400"))))
-except (TypeError, ValueError):
-    _DIGEST_INTERVAL = 86400
-_DIGEST_FIRST_DELAY = 600        # 開機後等 10 分鐘(暖機完)再發第一輪
-_DIGEST_MIN_GAP = 12 * 3600      # 同一訂閱 12h 內不重複打擾
-_DIGEST_HOT_WINDOW = 3
-_DIGEST_HOT_LIMIT = 40
-_DIGEST_BODY_PAPERS = 3          # 通知內文最多列幾篇
-_PUSH_FIELDS_MAX = 16            # 每個訂閱最多記幾個追蹤領域
-_PUSH_ENDPOINT_MAX = 1024
 _CITATIONS_MAX = 200
 _PWC_IDS_MAX = 100
 _GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")  # 有 token → 5000 req/hr,無 → 60
@@ -381,7 +358,7 @@ async def _flush_task() -> None:
         try:
             await asyncio.sleep(60)
             for s in (_s2_store, _pwc_store):
-                s.flush()
+                await asyncio.to_thread(s.flush)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -657,7 +634,6 @@ async def lifespan(app: FastAPI):
     cleanup = asyncio.create_task(_paper_cleanup_task())
     stars = asyncio.create_task(_stars_loop())
     oai = asyncio.create_task(_oai_harvest_loop()) if _OAI_ENABLED and _OAI_SETS else None
-    digest = asyncio.create_task(_digest_loop()) if push_service.enabled else None
     try:
         yield
     finally:
@@ -668,10 +644,8 @@ async def lifespan(app: FastAPI):
         stars.cancel()
         if oai is not None:
             oai.cancel()
-        if digest is not None:
-            digest.cancel()
         for s in (_s2_store, _pwc_store):
-            s.flush()
+            await asyncio.to_thread(s.flush)
         _paper_store.close()
         if _http_client is not None:
             await _http_client.aclose()
@@ -699,7 +673,7 @@ class HeadersMiddleware:
             elif path.endswith((".woff2", ".woff", ".ttf", ".png", ".jpg", ".webp")):
                 headers["Cache-Control"] = "public, max-age=2592000, immutable"
             elif path.endswith("/disciplines.js"):
-                headers["Cache-Control"] = "public, max-age=604800, must-revalidate"
+                headers["Cache-Control"] = "public, max-age=300, must-revalidate"
             elif path.endswith((".css", ".js", ".svg")):
                 headers["Cache-Control"] = "public, max-age=300, must-revalidate"
             else:
@@ -721,6 +695,7 @@ class HeadersMiddleware:
                 "connect-src 'self'; "
                 "frame-ancestors 'self'; "
                 "font-src 'self' data: https://fonts.gstatic.com; "
+                "object-src 'none'; "
                 "base-uri 'self'; form-action 'self'"
             )
 
@@ -907,6 +882,61 @@ def _slim_paper(p: dict) -> dict:
     if p.get("review_count"):
         out["review_count"] = p["review_count"]
     return out
+
+
+def _paper_source_names(p: dict[str, Any]) -> list[str]:
+    raw = p.get("source")
+    if isinstance(raw, str):
+        candidates = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        candidates = [str(x) for x in raw]
+    else:
+        candidates = []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in candidates:
+        name = item.strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _source_counts(papers: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for paper in papers:
+        for name in _paper_source_names(paper):
+            counts[name] = counts.get(name, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _positive_number(value: Any) -> bool:
+    try:
+        return float(value or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _papers_response_meta(
+    papers: list[dict[str, Any]],
+    attempted: list[str] | None = None,
+    failures: list[str] | None = None,
+) -> dict[str, Any]:
+    source_counts = _source_counts(papers)
+    signals = {
+        "with_citations": sum(1 for p in papers if _positive_number(p.get("citation_count"))),
+        "with_code": sum(1 for p in papers if p.get("github_url") or _positive_number(p.get("github_stars"))),
+        "with_reviews": sum(1 for p in papers if p.get("review_avg") or p.get("or_rating")),
+    }
+    return {
+        "count": len(papers),
+        "source_counts": source_counts,
+        "source_count": len(source_counts),
+        "source_attempted": list(attempted or []),
+        "source_failures": list(failures or []),
+        "signals": signals,
+    }
 
 
 def _ssr_compact(p: dict, citation_count: int | None = None) -> dict:
@@ -1128,6 +1158,7 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
     async def build():
         c = _client()
         failures: list[str] = []
+        attempted: list[str] = []
 
         async def _safe(name: str, coro):
             try:
@@ -1137,34 +1168,39 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
                 failures.append(name)
                 return []
 
+        def _add_source(name: str, coro) -> None:
+            attempted.append(name)
+            tasks.append(_safe(name, coro))
+
         arxiv_terms = _arxiv_terms_for_topic(topic) or None
-        tasks = [_safe("arxiv", fetch_arxiv_listing(
+        tasks = []
+        _add_source("arxiv", fetch_arxiv_listing(
             c, disc["cat"], days, arxiv_max, cats=disc_cats or None, terms=arxiv_terms,
-        ))]
+        ))
         if s2_max > 0:
             s2_query = topic or disc.get("name") or disc.get("cat") or ""
-            tasks.append(_safe("s2", fetch_s2_search(
+            _add_source("s2", fetch_s2_search(
                 c, query=s2_query, fos=s2_fos_for_cat(disc.get("cat", "")),
                 days=days, max_results=s2_max,
-            )))
+            ))
         if openalex_max > 0:
-            tasks.append(_safe("openalex", fetch_openalex_listing(
+            _add_source("openalex", fetch_openalex_listing(
                 c, concept_id=openalex_concept, days=days, max_results=openalex_max,
                 search_query=topic or (None if openalex_concept else disc.get("name")),
-            )))
+            ))
         if crossref_max > 0:
-            tasks.append(_safe("crossref", fetch_crossref_listing(
+            _add_source("crossref", fetch_crossref_listing(
                 c, subject=crossref_subject, days=days, max_results=crossref_max,
                 search_query=topic or (None if crossref_subject else disc.get("name")),
-            )))
+            ))
         if biorxiv_max > 0:
-            tasks.append(_safe("biorxiv", fetch_biorxiv_listing(c, "biorxiv", days, biorxiv_max)))
+            _add_source("biorxiv", fetch_biorxiv_listing(c, "biorxiv", days, biorxiv_max))
         if medrxiv_max > 0:
-            tasks.append(_safe("medrxiv", fetch_biorxiv_listing(c, "medrxiv", days, medrxiv_max)))
+            _add_source("medrxiv", fetch_biorxiv_listing(c, "medrxiv", days, medrxiv_max))
         if chemrxiv_max > 0:
-            tasks.append(_safe("chemrxiv", fetch_chemrxiv_listing(c, days, chemrxiv_max)))
+            _add_source("chemrxiv", fetch_chemrxiv_listing(c, days, chemrxiv_max))
         if pubmed_max > 0:
-            tasks.append(_safe("pubmed", fetch_pubmed_listing(c, pubmed_mesh, days, pubmed_max)))
+            _add_source("pubmed", fetch_pubmed_listing(c, pubmed_mesh, days, pubmed_max))
 
         sources = await asyncio.gather(*tasks)
         merged = merge_sources(*sources)
@@ -1188,7 +1224,12 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
                     raise RuntimeError(
                         f"topic feed sources failed for {discipline_id}/{topic}: {failures}"
                     )
-                return {"papers": [], "arxiv_native": arxiv_native, "topic": topic}
+                return {
+                    "papers": [],
+                    "arxiv_native": arxiv_native,
+                    "topic": topic,
+                    **_papers_response_meta([], attempted, failures),
+                }
             # L2 fallback: upstream 全掛時,改從 SQLite 撈最近 days 內的歷史紀錄
             if primary_cat:
                 try:
@@ -1200,11 +1241,13 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
                     l2 = []
                 if l2:
                     logger.info("L2 fallback for %s: %d papers", discipline_id, len(l2))
+                    l2 = l2[:_PAPERS_RESPONSE_CAP]
                     return {
-                        "papers": l2[:_PAPERS_RESPONSE_CAP],
+                        "papers": l2,
                         "arxiv_native": arxiv_native,
                         "from_l2": True,
                         "as_of": int(time.time()),
+                        **_papers_response_meta(l2, attempted, failures),
                     }
             raise RuntimeError(f"all sources empty for {discipline_id}")
         # rank-before-truncate:跨來源以最新日期全域排序後才截斷,避免「先接進來的
@@ -1213,7 +1256,12 @@ def _papers_build_spec(discipline_id: str, days: int, max_results: int, topic: s
         if len(merged) > _PAPERS_RESPONSE_CAP:
             merged = merged[:_PAPERS_RESPONSE_CAP]
         as_of = int(time.time())
-        result = {"papers": merged, "arxiv_native": arxiv_native, "as_of": as_of}
+        result = {
+            "papers": merged,
+            "arxiv_native": arxiv_native,
+            "as_of": as_of,
+            **_papers_response_meta(merged, attempted, failures),
+        }
         if topic:
             result["topic"] = topic
         else:
@@ -1262,7 +1310,15 @@ async def get_papers(
         if q:
             papers = _filter_papers_by_query(papers, q)
         papers = _sort_papers(papers, sort if sort in _PAPERS_SORT_KEYS else "latest")
-        payload = {**payload, "papers": papers, "count": len(papers)}
+        payload = {
+            **payload,
+            "papers": papers,
+            **_papers_response_meta(
+                papers,
+                payload.get("source_attempted") or [],
+                payload.get("source_failures") or [],
+            ),
+        }
         body = _json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         etag = make_etag(body)
     return etag_response(request, body, etag)
@@ -1320,7 +1376,7 @@ async def get_combined_feed(
 
     merged: list[dict] = []
     index: dict[str, int] = {}
-    for fid, pool in zip(field_ids, pools):
+    for fid, pool in zip(field_ids, pools, strict=False):
         if isinstance(pool, Exception):
             logger.warning("feed: pool unavailable for %s: %s", fid, pool)
             continue
@@ -1388,7 +1444,7 @@ async def stream(request: Request) -> StreamingResponse:
                     yield b": ping\n\n"
                     continue
                 data = _json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-                yield f"data: {data}\n\n".encode("utf-8")
+                yield f"data: {data}\n\n".encode()
         finally:
             _event_hub.unsubscribe(queue)
 
@@ -1401,81 +1457,6 @@ async def stream(request: Request) -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
-
-
-_CUSTOM_FEED_MAX_ITEMS = 12   # cats/keywords/authors 各自上限
-_CUSTOM_FEED_MAX_IDS = 50
-
-
-def _custom_feed_build_spec(
-    cats: list[str], keywords: list[str], authors: list[str],
-    ids: list[str], days: int, max_results: int,
-):
-    """回傳 (cache_key, builder) — 使用者自訂 feed。"""
-    cache_key = (
-        "custom:" + "+".join(cats) + "|kw:" + "+".join(keywords)
-        + "|au:" + "+".join(authors) + "|id:" + "+".join(ids)
-        + f"|{days}:{max_results}"
-    )
-
-    async def build():
-        try:
-            raw = await fetch_arxiv_custom(
-                _client(), cats=cats, keywords=keywords, authors=authors,
-                ids=ids, days=days, max_results=max_results,
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning("custom feed build failed: %s", e)
-            raise RuntimeError("custom feed upstream failed") from e
-        merged = merge_sources(raw)
-        merged = [_slim_paper(p) for p in merged]
-        merged = _sort_papers(merged, "latest")
-        if len(merged) > _PAPERS_RESPONSE_CAP:
-            merged = merged[:_PAPERS_RESPONSE_CAP]
-        return {"papers": merged, "count": len(merged), "custom": True}
-
-    return cache_key, build
-
-
-@app.get("/api/custom")
-async def get_custom_feed(
-    request: Request,
-    cats: str = "",
-    keywords: str = "",
-    authors: str = "",
-    ids: str = "",
-    days: int = 30,
-    max_results: int = 100,
-    sort: str = "latest",
-    q: str = "",
-):
-    """使用者自訂 feed:cats/keywords/authors/ids 任一組合(逗號分隔)。"""
-    days = _bounded_int(days, default=30, min_value=1, max_value=_PAPERS_DAYS_MAX)
-    max_results = _bounded_int(max_results, default=100, min_value=1, max_value=300)
-    cat_list = _unique_csv(cats, max_items=_CUSTOM_FEED_MAX_ITEMS, field_name="cats")
-    kw_list = _unique_csv(keywords, max_items=_CUSTOM_FEED_MAX_ITEMS, field_name="keywords")
-    au_list = _unique_csv(authors, max_items=_CUSTOM_FEED_MAX_ITEMS, field_name="authors")
-    id_list = _valid_arxiv_ids(_unique_csv(ids, max_items=_CUSTOM_FEED_MAX_IDS, field_name="ids"))
-    if not (cat_list or kw_list or au_list or id_list):
-        raise HTTPException(status_code=400, detail="empty custom feed spec")
-    cache_key, builder = _custom_feed_build_spec(
-        cat_list, kw_list, au_list, id_list, days, max_results,
-    )
-    body, etag = await _custom_cache.get_or_build(cache_key, builder)
-    sort = (sort or "latest").lower()
-    q = (q or "").strip()
-    if q or (sort in _PAPERS_SORT_KEYS and sort != "latest"):
-        payload = _json.loads(body)
-        papers = payload.get("papers", [])
-        if q:
-            papers = _filter_papers_by_query(papers, q)
-        papers = _sort_papers(papers, sort if sort in _PAPERS_SORT_KEYS else "latest")
-        payload = {**payload, "papers": papers, "count": len(papers)}
-        body = _json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        etag = make_etag(body)
-    return etag_response(request, body, etag)
 
 
 @app.get("/api/trending")
@@ -1590,7 +1571,7 @@ async def _hot_build(window: int, limit: int) -> dict:
     )
     agg: dict[str, dict] = {}
     any_delta = False
-    for (did, cat, name), deltas in zip(specs, deltas_lists):
+    for (did, cat, name), deltas in zip(specs, deltas_lists, strict=False):
         if deltas:
             any_delta = True
         for d in deltas:
@@ -1662,266 +1643,6 @@ async def get_hot(request: Request, window: int = 7, limit: int = _HOT_DEFAULT_L
         cache_key, lambda: _hot_build(window, limit)
     )
     return etag_response(request, body, etag)
-
-
-# ── RSS 2.0 訂閱輸出 (#20) ──────────────────────────────────────
-def _rfc822(published: str | None) -> str:
-    """ISO/日期字串 → RFC822 (RSS pubDate)。解析失敗回空字串(該 item 省略 pubDate)。"""
-    if not published:
-        return ""
-    try:
-        dt = datetime.fromisoformat(str(published).strip().replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return format_datetime(dt)
-    except (ValueError, TypeError):
-        return ""
-
-
-def _rss_xml(title: str, link: str, description: str, self_url: str, papers: list[dict]) -> bytes:
-    items: list[str] = []
-    for p in papers[:_RSS_ITEMS_MAX]:
-        url = str(p.get("url") or "")
-        if not url:
-            continue
-        url_x = _html.escape(url)
-        t = _html.escape(str(p.get("title") or "(untitled)"))
-        authors = p.get("authors") or []
-        auth = _html.escape(", ".join(authors[:8])) if isinstance(authors, list) else ""
-        summ = _html.escape(str(p.get("summary") or "")[:_RSS_SUMMARY_MAX])
-        desc = f"{auth} — {summ}" if auth else summ
-        pub = _rfc822(p.get("published"))
-        pub_el = f"<pubDate>{pub}</pubDate>" if pub else ""
-        items.append(
-            f"<item><title>{t}</title><link>{url_x}</link>"
-            f'<guid isPermaLink="true">{url_x}</guid>{pub_el}'
-            f"<description>{desc}</description></item>"
-        )
-    body = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">\n<channel>\n'
-        f"<title>{_html.escape(title)}</title>"
-        f"<link>{_html.escape(link)}</link>"
-        f"<description>{_html.escape(description)}</description>"
-        f'<atom:link href="{_html.escape(self_url)}" rel="self" type="application/rss+xml"/>\n'
-        + "\n".join(items)
-        + "\n</channel>\n</rss>\n"
-    )
-    return body.encode("utf-8")
-
-
-@app.get("/api/rss")
-async def get_rss(
-    request: Request,
-    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
-    days: int = 7,
-    view: str = "",
-):
-    """RSS 2.0 訂閱:預設某領域最新論文;view=hot 則輸出全領域熱榜。"""
-    days = _bounded_int(days, default=7, min_value=1, max_value=_RSS_DAYS_MAX)
-    self_url = str(request.url)
-    base = "https://allenvisionary.duckdns.org/"
-
-    if view == "hot":
-        body, _etag = await _hot_cache.get_or_build(
-            f"{days}:{_HOT_DEFAULT_LIMIT}", lambda: _hot_build(days, _HOT_DEFAULT_LIMIT)
-        )
-        papers = (_json.loads(body) or {}).get("papers") or []
-        xml = _rss_xml(
-            "全領域熱榜 · Visionary Papers",
-            base, "跨領域近期爆發中的論文(citation/HF/star burst)", self_url, papers,
-        )
-        return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
-
-    if discipline_id not in DISCIPLINES:
-        raise HTTPException(status_code=404, detail="unknown discipline")
-    d = discipline(discipline_id)
-    key, builder = _papers_build_spec(discipline_id, days, _WARMUP_MAX)
-    body, _etag = await _papers_cache.get_or_build(key, builder)
-    papers = (_json.loads(body) or {}).get("papers") or []
-    name = d.get("name") or discipline_id
-    xml = _rss_xml(
-        f"{name} 最新論文 · Visionary Papers",
-        f"{base}?discipline={discipline_id}",
-        f"{name} 近 {days} 天最新論文",
-        self_url, papers,
-    )
-    return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
-
-
-# ── Web-Push 訂閱 + 每日摘要 (#19) ──────────────────────────────
-def _clean_fields(raw: Any) -> str:
-    """訂閱附帶的追蹤領域 → 逗號分隔字串(只留合法 discipline id)。"""
-    if not isinstance(raw, list):
-        return ""
-    out: list[str] = []
-    for f in raw:
-        fid = str(f).strip()[:40]
-        if fid in DISCIPLINES and fid not in out:
-            out.append(fid)
-        if len(out) >= _PUSH_FIELDS_MAX:
-            break
-    return ",".join(out)
-
-
-@app.get("/api/push/key")
-async def push_key():
-    """前端據此決定是否顯示訂閱 UI;未設定 VAPID 時 enabled=false。"""
-    return {"enabled": push_service.enabled, "publicKey": push_service.public_key}
-
-
-def _parse_subscription(data: dict) -> tuple[str, str, str]:
-    sub = data.get("subscription")
-    if not isinstance(sub, dict):
-        raise HTTPException(status_code=400, detail="missing subscription")
-    endpoint = str(sub.get("endpoint") or "").strip()[:_PUSH_ENDPOINT_MAX]
-    keys = sub.get("keys") if isinstance(sub.get("keys"), dict) else {}
-    p256dh = str(keys.get("p256dh") or "").strip()
-    auth = str(keys.get("auth") or "").strip()
-    if not (endpoint.startswith("https://") and p256dh and auth):
-        raise HTTPException(status_code=400, detail="invalid subscription")
-    return endpoint, p256dh, auth
-
-
-@app.post("/api/push/subscribe")
-async def push_subscribe(request: Request):
-    """Body: {subscription: <PushSubscription.toJSON()>, fields: [discipline_id,...]}."""
-    if not push_service.enabled:
-        return {"ok": False, "enabled": False}
-    try:
-        data = _json.loads(await request.body() or b"{}")
-    except (ValueError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="invalid body")
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="invalid body")
-    endpoint, p256dh, auth = _parse_subscription(data)
-    fields = _clean_fields(data.get("fields"))
-    await asyncio.to_thread(_paper_store.upsert_push_sub, endpoint, p256dh, auth, fields)
-    return {"ok": True, "enabled": True, "fields": fields.split(",") if fields else []}
-
-
-@app.post("/api/push/unsubscribe")
-async def push_unsubscribe(request: Request):
-    """Body: {endpoint}."""
-    try:
-        data = _json.loads(await request.body() or b"{}")
-    except (ValueError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="invalid body")
-    endpoint = str((data or {}).get("endpoint") or "").strip()[:_PUSH_ENDPOINT_MAX]
-    if endpoint:
-        await asyncio.to_thread(_paper_store.delete_push_sub, endpoint)
-    return {"ok": True}
-
-
-def _digest_payload_for(fields: list[str], hot: dict) -> dict | None:
-    """挑出命中追蹤領域的爆發論文;沒命中就退回全領域 top。回 None = 沒料可推。"""
-    papers = hot.get("papers") or []
-    if not papers:
-        return None
-    fset = set(fields)
-    if fset:
-        matched = [p for p in papers if fset.intersection(p.get("fields") or [])]
-        picked = matched or papers
-    else:
-        picked = papers
-    top = picked[:_DIGEST_BODY_PAPERS]
-    if not top:
-        return None
-    lines = [str(p.get("title") or "").strip() for p in top if p.get("title")]
-    lead = top[0]
-    scope = "你追蹤的領域" if (fset and any(fset.intersection(p.get("fields") or []) for p in top)) else "全領域"
-    return {
-        "title": f"🔥 {scope}有 {len(picked)} 篇論文正在爆發",
-        "body": " · ".join(lines)[:180],
-        "url": str(lead.get("url") or "https://allenvisionary.duckdns.org/"),
-        "tag": "visionary-digest",
-        "count": len(picked),
-    }
-
-
-async def _send_digest_round() -> int:
-    """建跨領域熱榜 → 對每個訂閱組合個人化通知 → 送出。回實際送出數。"""
-    if not push_service.enabled:
-        return 0
-    subs = await asyncio.to_thread(_paper_store.all_push_subs)
-    if not subs:
-        return 0
-    hot = await _hot_build(_DIGEST_HOT_WINDOW, _DIGEST_HOT_LIMIT)
-    if not (hot.get("papers")):
-        return 0
-    now = time.time()
-    sent_eps: list[str] = []
-    dead_eps: list[str] = []
-    for s in subs:
-        last = s.get("last_sent") or 0
-        if last and (now - last) < _DIGEST_MIN_GAP:
-            continue
-        fields = s["fields"].split(",") if s.get("fields") else []
-        payload = _digest_payload_for(fields, hot)
-        if not payload:
-            continue
-        sub_info = {"endpoint": s["endpoint"], "keys": {"p256dh": s["p256dh"], "auth": s["auth"]}}
-        status = await asyncio.to_thread(
-            push_service.send, sub_info, _json.dumps(payload, ensure_ascii=False)
-        )
-        if status in (404, 410):
-            dead_eps.append(s["endpoint"])
-        elif status:
-            sent_eps.append(s["endpoint"])
-    if sent_eps:
-        await asyncio.to_thread(_paper_store.mark_push_sent, sent_eps)
-    for ep in dead_eps:
-        await asyncio.to_thread(_paper_store.delete_push_sub, ep)
-    if sent_eps or dead_eps:
-        logger.info("digest: sent=%d pruned=%d", len(sent_eps), len(dead_eps))
-    return len(sent_eps)
-
-
-async def _digest_loop() -> None:
-    """每日摘要排程。VAPID 未設定時 push_service.enabled=False,本迴圈純睡眠。"""
-    if not push_service.enabled:
-        logger.info("digest loop: push disabled, idle")
-        return
-    await asyncio.sleep(_DIGEST_FIRST_DELAY)
-    while True:
-        try:
-            await _send_digest_round()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning("digest loop error: %s", e)
-        await asyncio.sleep(_DIGEST_INTERVAL)
-
-
-@app.post("/api/push/test")
-async def push_test(request: Request):
-    """手動觸發:對 body.endpoint 指定的訂閱送一則測試通知(驗證金鑰/SW 正常)。"""
-    if not push_service.enabled:
-        return {"ok": False, "enabled": False}
-    try:
-        data = _json.loads(await request.body() or b"{}")
-    except (ValueError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="invalid body")
-    endpoint = str((data or {}).get("endpoint") or "").strip()[:_PUSH_ENDPOINT_MAX]
-    target = None
-    for s in await asyncio.to_thread(_paper_store.all_push_subs):
-        if s["endpoint"] == endpoint:
-            target = s
-            break
-    if not target:
-        raise HTTPException(status_code=404, detail="subscription not found")
-    payload = {
-        "title": "✅ Visionary 推播已開通",
-        "body": "之後每天會把你追蹤領域的爆發論文整理給你。",
-        "url": "https://allenvisionary.duckdns.org/",
-        "tag": "visionary-test",
-    }
-    sub_info = {"endpoint": target["endpoint"], "keys": {"p256dh": target["p256dh"], "auth": target["auth"]}}
-    status = await asyncio.to_thread(push_service.send, sub_info, _json.dumps(payload, ensure_ascii=False))
-    if status in (404, 410):
-        await asyncio.to_thread(_paper_store.delete_push_sub, endpoint)
-        raise HTTPException(status_code=410, detail="subscription expired")
-    return {"ok": bool(status), "status": status}
 
 
 @app.get("/api/search")
@@ -2015,65 +1736,6 @@ def list_disciplines():
     return {
         "disciplines": [{"id": k, **v} for k, v in DISCIPLINES.items()],
         "default": DEFAULT_DISCIPLINE,
-    }
-
-
-# ── 個人化重排:以收藏質心 cosine 排序 candidates ──────────────
-@app.get("/api/personalized")
-async def get_personalized(
-    favorites: str = Query("", description="comma-separated arXiv IDs of user favorites"),
-    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
-    top_k: int = 30,
-    blend: float = 0.4,
-):
-    """以使用者收藏(arxiv IDs)取 embedding 質心,對該領域 paper pool 重排。
-
-    無 HF_TOKEN 或收藏為空時回原始順序。
-    """
-    if not HF_TOKEN:
-        raise HTTPException(status_code=503, detail="personalized rerank unavailable (HF_TOKEN missing)")
-    fav_ids = _valid_arxiv_ids(_unique_csv(favorites, max_items=50, field_name="favorites"))
-    if not fav_ids:
-        return {"papers": [], "discipline": discipline_id, "reason": "no_favorites"}
-
-    top_k = _bounded_int(top_k, default=30, min_value=1, max_value=100)
-    blend = max(0.0, min(1.0, float(blend)))
-
-    try:
-        candidates = await _papers_for_discipline(discipline_id)
-    except Exception as e:
-        logger.warning("personalized: pool unavailable for %s: %s", discipline_id, e)
-        raise HTTPException(status_code=503, detail=f"pool unavailable: {e}") from e
-    if not candidates:
-        return {"papers": [], "discipline": discipline_id, "reason": "empty_pool"}
-
-    # 找 favorites 對應 paper dict(從 pool 取;或現組一個只含 id 的最小 dict)
-    fav_id_set = set(fav_ids)
-    fav_papers: list[dict] = []
-    seen: set[str] = set()
-    for p in candidates:
-        pid = (p.get("id") or "").strip()
-        if pid in fav_id_set and pid not in seen:
-            seen.add(pid)
-            fav_papers.append(p)
-    # 沒在 pool 找到的(可能跨領域)用最小占位 dict,讓 _paper_key 仍能命中 embed cache
-    for pid in fav_id_set - seen:
-        fav_papers.append({"id": pid, "title": "", "summary": ""})
-
-    try:
-        reranked = await rerank_by_centroid(
-            _client(), fav_papers, candidates[:300], top_k=top_k, blend=blend,
-        )
-    except Exception as e:
-        logger.warning("personalized: rerank failed: %s", e)
-        raise HTTPException(status_code=502, detail=f"rerank failed: {e}") from e
-
-    return {
-        "papers": reranked,
-        "discipline": discipline_id,
-        "fav_count": len(fav_id_set),
-        "pool_size": min(300, len(candidates)),
-        "blend": blend,
     }
 
 
@@ -2290,10 +1952,6 @@ def prometheus_metrics(request: Request, key: str = ""):
             "cv_process_rss_bytes", rss,
             help_text="Resident set size in bytes",
         ))
-    lines.append(_prom_format(
-        "cv_gc_objects", len(gc.get_objects()),
-        help_text="Live Python objects tracked by gc",
-    ))
     # cache hit/miss counters
     for cname, cobj in (
         ("papers", _papers_cache),
@@ -2434,8 +2092,8 @@ async def record_view(request: Request):
     try:
         raw = await request.body()
         data = _json.loads(raw) if raw else {}
-    except (ValueError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="invalid body")
+    except (ValueError, UnicodeDecodeError) as e:
+        raise HTTPException(status_code=400, detail="invalid body") from e
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="invalid body")
     arxiv_id = str(data.get("arxiv_id") or "").strip()[:40]
@@ -2464,31 +2122,6 @@ async def get_popular(request: Request, days: int = 7, limit: int = 40):
     body, etag = await _popular_cache.get_or_build(cache_key, build)
     return etag_response(request, body, etag)
 
-
-# ── 相似論文推薦 (Semantic Scholar) ─────────────────────────────
-_recs_cache = CachedJSON(ttl=2 * 3600, stale_ttl=24 * 3600, max_keys=128)
-
-
-@app.get("/api/recommendations")
-async def get_recommendations(
-    request: Request,
-    arxiv_id: str = Query(..., min_length=4),
-    limit: int = 10,
-):
-    arxiv_id = arxiv_id.strip()
-    if not arxiv_id:
-        raise HTTPException(status_code=400, detail="missing arxiv_id")
-    limit = _bounded_int(limit, default=10, min_value=1, max_value=50)
-    cache_key = f"{arxiv_id}:{limit}"
-
-    async def build():
-        return {
-            "seed": arxiv_id,
-            "papers": await fetch_s2_recommendations(_client(), arxiv_id, limit=limit),
-        }
-
-    body, etag = await _recs_cache.get_or_build(cache_key, build)
-    return etag_response(request, body, etag)
 
 
 # ── 作者搜尋 / 作者論文 (S2) ────────────────────────────────────

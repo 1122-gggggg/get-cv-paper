@@ -13,7 +13,8 @@ import logging
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 from fastapi import Request
 from fastapi.responses import Response
@@ -48,7 +49,7 @@ class LRUStore:
         self.ttl = ttl
         self.persist = persist and cache_dir is not None
         self.path: Path | None = (cache_dir / f"{name}.json") if cache_dir else None
-        self._data: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self._data: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._dirty = False
         self._load()
 
@@ -135,7 +136,7 @@ class CachedJSON:
         self.ttl = ttl
         self.stale_ttl = stale_ttl
         self.max_keys = max_keys
-        self._entries: "OrderedDict[str, tuple[float, bytes, str]]" = OrderedDict()
+        self._entries: OrderedDict[str, tuple[float, bytes, str]] = OrderedDict()
         self._inflight: dict[str, asyncio.Future] = {}
         # 計數:供 /api/metrics 觀測 cache 效益
         self.metrics: dict[str, int] = {

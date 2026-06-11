@@ -6,6 +6,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 jobs:
   test:
     name: Test
@@ -23,10 +26,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest ruff
-      - name: Lint (critical errors only)
-        run: ruff check --select=E9,F63,F7,F82 .
+          pip install pytest pytest-cov ruff mypy
+      - name: Lint (full ruff ruleset)
+        run: ruff check .
+      - name: Type check (non-blocking)
+        run: mypy . --ignore-missing-imports
+        continue-on-error: true
+      - name: Lint JS (bug-catcher rules)
+        run: npx --yes eslint@9 .
+        continue-on-error: true
       - name: Import check
         run: python -c "import main"
-      - name: Tests
-        run: pytest -q
+      - name: Tests + coverage
+        run: pytest -q --cov --cov-report=term-missing --cov-fail-under=55
