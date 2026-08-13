@@ -1880,7 +1880,7 @@ async def get_citations(
         except Exception:
             pass
 
-    result: dict[str, dict] = {}
+    result: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
     for aid in ids:
         cached = _s2_store.get(aid)
@@ -1908,10 +1908,10 @@ async def get_citations(
                     if not venue or title not in need_venue:
                         continue
                     aid = need_venue[title]
-                    entry = result.get(aid)
-                    if entry is None:
+                    cached_entry = result.get(aid)
+                    if cached_entry is None:
                         continue
-                    enriched = {**entry, "venue": venue}
+                    enriched = {**cached_entry, "venue": venue}
                     result[aid] = enriched
                     _s2_store.set(aid, enriched)
             except Exception as e:

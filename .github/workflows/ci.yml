@@ -2,6 +2,7 @@
 # (git pull + docker compose up -d --build); Fly.io auto-deploy was removed.
 
 name: CI
+
 on:
   push:
     branches:
@@ -9,10 +10,19 @@ on:
   pull_request:
     branches:
       - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,21 +31,41 @@ jobs:
           cache: pip
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.19"
+          cache: npm
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov ruff mypy
-      - name: Lint (full ruff ruleset)
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          npm ci
+      - name: Lint Python
         run: ruff check .
-      - name: Type check (non-blocking)
+      - name: Type check Python
         run: mypy . --ignore-missing-imports
-        continue-on-error: true
-      - name: Lint JS (bug-catcher rules)
-        run: npx --yes eslint@9 .
-        continue-on-error: true
+      - name: Lint JavaScript
+        run: npm run lint
+      - name: Test JavaScript
+        run: npm test
       - name: Import check
         run: python -c "import main"
-      - name: Tests + coverage
+      - name: Test Python with coverage
         run: pytest -q --cov --cov-report=term-missing --cov-fail-under=55
+      - name: Build production image
+        run: docker build --tag scholarly-ci .
+      - name: Smoke production health endpoint
+        run: |
+          docker run --detach --rm --name scholarly-ci --publish 8000:8000 scholarly-ci
+          cleanup() {
+            status=$?
+            docker logs scholarly-ci || true
+            docker stop scholarly-ci || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error http://127.0.0.1:8000/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1

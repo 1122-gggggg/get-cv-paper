@@ -4,6 +4,9 @@ Guards the parse → validate → serve path that every feed depends on, plus th
 XML-hardening (defusedxml) and arXiv-id boundary validation added in P3.
 """
 import unittest
+from typing import cast
+
+import httpx
 
 import clients
 import main
@@ -96,7 +99,7 @@ class ArxivListingQueryTests(unittest.TestCase):
                 return _FakeResp()
 
         asyncio.run(clients.fetch_arxiv_listing(
-            _FakeClient(), "cs.CV", 7, 50, **kwargs
+            cast(httpx.AsyncClient, _FakeClient()), "cs.CV", 7, 50, **kwargs
         ))
         return captured["search_query"]
 

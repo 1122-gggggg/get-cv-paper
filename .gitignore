@@ -8,3 +8,6 @@ __pycache__/
 htmlcov/
 .pytest_cache/
 node_modules/
+.serena/
+.mypy_cache/
+.ruff_cache/

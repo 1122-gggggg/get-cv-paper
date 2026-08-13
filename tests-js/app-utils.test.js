@@ -1,14 +1,11 @@
-'use strict';
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const test = require('node:test');
-const vm = require('node:vm');
-
-const root = path.resolve(__dirname, '..');
-const utilsPath = path.join(root, 'static', 'app-utils.js');
-const scriptPath = path.join(root, 'static', 'script.js');
+const utilsPath = fileURLToPath(new URL("../static/app-utils.js", import.meta.url));
+const scriptPath = fileURLToPath(new URL("../static/script.js", import.meta.url));
 
 class MemoryStorage {
     constructor(entries = []) {

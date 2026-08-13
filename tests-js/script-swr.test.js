@@ -1,12 +1,10 @@
-'use strict';
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const test = require('node:test');
-const vm = require('node:vm');
-
-const sourcePath = path.resolve(__dirname, '..', 'static', 'script.js');
+const sourcePath = fileURLToPath(new URL("../static/script.js", import.meta.url));
 
 function sourceBetween(source, startMarker, endMarker) {
     const start = source.indexOf(startMarker);

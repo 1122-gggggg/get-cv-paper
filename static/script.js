@@ -181,7 +181,7 @@ async function copyText(text) {
             await navigator.clipboard.writeText(text);
             return true;
         }
-    } catch (e) { /* fall through to legacy path */ }
+    } catch (_error) { /* fall through to legacy path */ }
     try {
         const ta = document.createElement('textarea');
         ta.value = text;
@@ -193,7 +193,7 @@ async function copyText(text) {
         const ok = document.execCommand('copy');
         ta.remove();
         return ok;
-    } catch (e) {
+    } catch (_error) {
         return false;
     }
 }
@@ -854,7 +854,7 @@ async function loadDynamicSubtopics(disciplineId, filtersDiv, openSet, persistOp
     if (!disciplineId || !filtersDiv) return;
     // 避免短時間重複 fetch(切回同 discipline 時)
     if (_SUBTOPIC_INFLIGHT.has(disciplineId)) {
-        try { await _SUBTOPIC_INFLIGHT.get(disciplineId); } catch (e) {}
+        try { await _SUBTOPIC_INFLIGHT.get(disciplineId); } catch (_error) {}
         return;
     }
     const p = (async () => {
@@ -1106,7 +1106,7 @@ function releaseModal(modalId) {
     document.getElementById(modalId)?.removeEventListener('keydown', st.handler);
     _modalTrap.delete(modalId);
     if (st.prevFocus && typeof st.prevFocus.focus === 'function') {
-        try { st.prevFocus.focus(); } catch (e) {}
+        try { st.prevFocus.focus(); } catch (_error) {}
     }
 }
 
@@ -1156,7 +1156,7 @@ function selectDiscipline(id) {
         p.delete('cat');
         const qs = p.toString();
         window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
-    } catch (e) {}
+    } catch (_error) {}
     // 切換領域 → reload 使整個 UI／localStorage 狀態重新初始化
     location.reload();
 }
@@ -1491,7 +1491,7 @@ function sendViewBeacon(url, paper) {
     try {
         const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
         if (navigator.sendBeacon && navigator.sendBeacon('/api/view', blob)) return;
-    } catch (e) { /* fall through to fetch */ }
+    } catch (_error) { /* fall through to fetch */ }
     fetch('/api/view', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2834,7 +2834,7 @@ async function fetchCitationCounts(papers) {
         }
         purgeS2();
         scheduleSave(S2_CACHE_KEY, () => s2Cache);
-    } catch (e) { /* ignore */ }
+    } catch (_error) { /* ignore */ }
     finish();
 }
 
@@ -2889,7 +2889,7 @@ async function fetchPwcData(papers) {
         purgePwc();
         scheduleSave(PWC_CACHE_KEY, () => pwcCache);
         return true;
-    } catch (e) {
+    } catch (_error) {
         return false;
     }
 }
@@ -2973,13 +2973,13 @@ async function ensureMonthPapers() {
             monthPapers = indexPapers(cached);
             return;
         }
-    } catch (e) {}
+    } catch (_error) {}
     loader.classList.remove('hidden');
     papersGrid.classList.add('hidden');
     try {
         const { data } = await _fetchPaperPayload(disc, { days: 30 });
         monthPapers = indexPapers(data.papers || []);
-    } catch (e) {
+    } catch (_error) {
         monthPapers = allPapers; // fallback
     } finally {
         loader.classList.add('hidden');
@@ -2996,13 +2996,13 @@ async function ensureQuarterPapers() {
             quarterPapers = indexPapers(cached);
             return;
         }
-    } catch (e) {}
+    } catch (_error) {}
     loader.classList.remove('hidden');
     papersGrid.classList.add('hidden');
     try {
         const { data } = await _fetchPaperPayload(disc, { days: 90 });
         quarterPapers = indexPapers(data.papers || []);
-    } catch (e) {
+    } catch (_error) {
         quarterPapers = monthPapers.length ? monthPapers : allPapers;
     } finally {
         loader.classList.add('hidden');
@@ -3028,7 +3028,7 @@ function prewarmExtendedPaperRanges() {
                 const papers = indexPapers(data.papers || []);
                 if (days === 30 && monthPapers.length === 0) monthPapers = papers;
                 if (days === 90 && quarterPapers.length === 0) quarterPapers = papers;
-            } catch (e) {
+            } catch (_error) {
                 break;
             }
         }
@@ -3857,7 +3857,7 @@ function readUrlState() {
     try {
         const p = new URLSearchParams(window.location.search);
         return { d: p.get('d'), cat: p.get('cat'), q: p.get('q'), sort: p.get('sort'), range: p.get('range') };
-    } catch (e) {
+    } catch (_error) {
         return {};
     }
 }
@@ -3876,7 +3876,7 @@ function writeUrlState() {
         if (q) p.set('q', q); else p.delete('q');
         const qs = p.toString();
         window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
-    } catch (e) {}
+    } catch (_error) {}
 }
 
 function applyUrlStateLive(s) {
@@ -4029,7 +4029,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 else searchAllPapers(_urlState.q);
             }
             writeUrlState();  // 正規化 URL（清掉預設值參數）
-        } catch (e) {}
+        } catch (_error) {}
     });
     initLiveStream();  // #15 SSE 即時推播
 
