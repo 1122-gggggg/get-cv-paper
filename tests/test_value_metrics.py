@@ -29,6 +29,14 @@ def score_for(input_literal: str) -> int:
     return run_node_expr(f"metrics.computeValueMetrics({input_literal}).score")
 
 
+class ModuleBoundaryTests(unittest.TestCase):
+    def test_metrics_module_remains_requireable_from_commonjs(self):
+        self.assertEqual(
+            run_node_expr("Object.keys(metrics).sort()"),
+            ["computeValueMetrics", "formatCompact", "logScale"],
+        )
+
+
 class ValueMetricsTests(unittest.TestCase):
     def test_high_signal_paper_is_ranked_hot(self):
         result = run_node_expr(
