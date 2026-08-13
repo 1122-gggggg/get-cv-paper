@@ -48,6 +48,25 @@ class OneShotFailingStorage extends MemoryStorage {
         super.setItem(key, value);
     }
 }
+class QuotaStorage extends MemoryStorage {
+    constructor(entries, maxBytes) {
+        super(entries);
+        this.maxBytes = maxBytes;
+    }
+
+    setItem(key, value) {
+        const next = new Map(this.values);
+        next.set(String(key), String(value));
+        const bytes = [...next].reduce(
+            (total, [entryKey, entryValue]) => total + entryKey.length + entryValue.length,
+            0,
+        );
+        if (bytes > this.maxBytes) throw new Error('Quota exceeded');
+        this.values = next;
+    }
+}
+
+
 
 function loadUtils({ storage, unavailable = false } = {}) {
     const window = {};
@@ -198,4 +217,26 @@ test('backup import restores every affected key after a storage write failure', 
     assert.equal(storage.getItem('visionary_favorites'), '["existing favorite"]');
     assert.equal(storage.getItem('visionary_notes_v1'), '{"existing":"note"}');
     assert.equal(storage.getItem('visionary_read_v1'), null);
+});
+test('backup import restores overwritten state after a quota failure frees imported keys', () => {
+    const originalNotes = `{"existing":"${'x'.repeat(100)}"}`;
+    const originalFavorites = '["f"]';
+    const storage = new QuotaStorage(
+        [
+            ['visionary_notes_v1', originalNotes],
+            ['visionary_favorites', originalFavorites],
+        ],
+        158,
+    );
+    const sandbox = loadImportApi(storage);
+    const payload = makePayload({
+        visionary_notes_v1: '{"new":"x"}',
+        visionary_read_v1: `["${'y'.repeat(70)}"]`,
+        visionary_favorites: `["${'z'.repeat(80)}"]`,
+    });
+
+    assert.throws(() => applyImportedState(sandbox, payload), /本機儲存/);
+    assert.equal(storage.getItem('visionary_notes_v1'), originalNotes);
+    assert.equal(storage.getItem('visionary_read_v1'), null);
+    assert.equal(storage.getItem('visionary_favorites'), originalFavorites);
 });

@@ -429,9 +429,11 @@ function _validateImportedUserState(payload) {
 }
 
 function _restoreImportedUserState(snapshot) {
+    for (const [key] of snapshot) _storage.remove(key);
     for (const [key, value] of snapshot) {
-        if (value === null) _storage.remove(key);
-        else _storage.set(key, value);
+        if (value !== null && !_storage.set(key, value)) {
+            throw new Error('無法還原原有資料');
+        }
     }
 }
 
