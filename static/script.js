@@ -1826,10 +1826,8 @@ retryLoadBtn?.addEventListener('click', retryPaperLoad);
 function _isCurrentPapersPayload(payload) {
     if (payload?.path !== '/api/papers') return false;
     const disc = ACTIVE_DISCIPLINE?.id || 'cv';
-    const params = new URLSearchParams(payload.search || '');
-    const payloadDisc = params.get('discipline') || 'cv';
-    const payloadDays = Number(params.get('days') || 7);
-    return payloadDisc === disc && payloadDays === 7;
+    const mainFeedUrl = _paperApiUrl(disc, { days: 7, max: PAPER_FETCH_MAX });
+    return `${payload.path}${payload.search || ''}` === mainFeedUrl;
 }
 
 function _onSWApiUpdated(payload) {
