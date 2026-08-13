@@ -14,12 +14,13 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from collections.abc import Callable
 
 import httpx
@@ -89,6 +90,8 @@ class _BetterStackHandler(logging.Handler):
             "Content-Type": "application/json",
         })
         self._ship_tasks: set[asyncio.Task[None]] = set()
+        self._ship_lock = threading.Lock()
+        self._closing = False
 
     async def _ship(self, payload: dict) -> None:
         async with self._sema:
@@ -99,12 +102,19 @@ class _BetterStackHandler(logging.Handler):
 
 
     async def aclose(self) -> None:
-        tasks = tuple(self._ship_tasks)
+        with self._ship_lock:
+            self._closing = True
+        logging.getLogger().removeHandler(self)
+        with self._ship_lock:
+            tasks = tuple(self._ship_tasks)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await self._client.aclose()
         super().close()
     def emit(self, record: logging.LogRecord) -> None:
+        with self._ship_lock:
+            if self._closing:
+                return
         try:
             payload = {
                 "dt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(record.created)),
@@ -116,12 +126,16 @@ class _BetterStackHandler(logging.Handler):
                 payload["exception"] = logging.Formatter().formatException(record.exc_info)
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(self._ship(payload))
-                self._ship_tasks.add(task)
+                with self._ship_lock:
+                    if self._closing:
+                        return
+                    task = loop.create_task(self._ship(payload))
+                    self._ship_tasks.add(task)
 
                 def discard(done: asyncio.Future[None]) -> None:
                     if isinstance(done, asyncio.Task):
-                        self._ship_tasks.discard(done)
+                        with self._ship_lock:
+                            self._ship_tasks.discard(done)
 
                 task.add_done_callback(discard)
             except RuntimeError:
@@ -1340,10 +1354,10 @@ async def get_papers(
     request: Request,
     max_results: int = 1000,
     days: int = 7,
-    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    discipline_id: Annotated[str, Query(alias="discipline")] = DEFAULT_DISCIPLINE,
     sort: str = "latest",
-    q: str = Query("", max_length=256),
-    topic: str = Query("", max_length=64),
+    q: Annotated[str, Query(max_length=256)] = "",
+    topic: Annotated[str, Query(max_length=64)] = "",
 ):
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
     max_results = _bounded_int(
@@ -1400,10 +1414,10 @@ def _valid_field_ids(raw: str) -> list[str]:
 @app.get("/api/feed")
 async def get_combined_feed(
     request: Request,
-    fields: str = Query("", max_length=256),
+    fields: Annotated[str, Query(max_length=256)] = "",
     days: int = 7,
     sort: str = "latest",
-    q: str = Query("", max_length=256),
+    q: Annotated[str, Query(max_length=256)] = "",
     max_results: int = 300,
 ):
     """合併「我的領域」feed(#14):多個 discipline 併成單一去重、排序的串流。
@@ -1552,7 +1566,7 @@ def _emergence_score(d: dict) -> dict:
 @app.get("/api/emerging")
 async def get_emerging(
     request: Request,
-    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    discipline_id: Annotated[str, Query(alias="discipline")] = DEFAULT_DISCIPLINE,
     window: int = 7,
     limit: int = _EMERGING_LIMIT,
 ):
@@ -1725,7 +1739,7 @@ async def _papers_for_discipline(discipline_id: str) -> list[dict]:
 @app.get("/api/semantic-search")
 async def semantic_search(
     q: str = Query(..., max_length=256),
-    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    discipline_id: Annotated[str, Query(alias="discipline")] = DEFAULT_DISCIPLINE,
     top_k: int = 30,
     cross: bool = False,
 ):
@@ -1797,7 +1811,7 @@ def list_disciplines():
 # ── 動態子題:k-means on cached embeddings ───────────────────────
 @app.get("/api/subtopics")
 async def list_subtopics(
-    discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
+    discipline_id: Annotated[str, Query(alias="discipline")] = DEFAULT_DISCIPLINE,
     k: int = 6,
 ):
     """回傳 [{label, count, sample_titles}],只用既存 embedding cache,不打 HF。
@@ -1836,8 +1850,8 @@ async def list_subtopics(
 @app.get("/api/citations")
 async def get_citations(
     request: Request,
-    arxiv_ids: str = Query("", description="comma-separated arXiv IDs"),
-    titles: str = Query("", description="JSON {arxiv_id: title} 用於 DBLP fallback"),
+    arxiv_ids: Annotated[str, Query(description="comma-separated arXiv IDs")] = "",
+    titles: Annotated[str, Query(description="JSON {arxiv_id: title} 用於 DBLP fallback")] = "",
 ):
     ids = _unique_csv(arxiv_ids, max_items=_CITATIONS_MAX, field_name="ids")
     if not ids:
@@ -2088,7 +2102,7 @@ _openreview_cache = CachedJSON(ttl=30 * 60, stale_ttl=24 * 3600, max_keys=32)
 @app.get("/api/openreview")
 async def get_openreview(
     request: Request,
-    venue: str = Query("iclr"),
+    venue: Annotated[str, Query()] = "iclr",
     year: int | None = None,
     days: int = _OPENREVIEW_DAYS_MAX,
     max_results: int = 200,

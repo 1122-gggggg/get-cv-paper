@@ -156,6 +156,56 @@ class BetterStackHandlerTests(unittest.TestCase):
             self.assertEqual(handler._ship_tasks, set())
 
         asyncio.run(scenario())
+    def test_aclose_rejects_emit_after_closing_begins(self):
+        async def scenario():
+            order: list[str] = []
+            first_started = asyncio.Event()
+            late_started = asyncio.Event()
+            allow_first = asyncio.Event()
+            allow_late = asyncio.Event()
+
+            class Client:
+                async def post(self, _endpoint, json):
+                    message = json["message"]
+                    order.append(f"post:{message}")
+                    if message == "first":
+                        first_started.set()
+                        await allow_first.wait()
+                    else:
+                        late_started.set()
+                        await allow_late.wait()
+                    order.append(f"shipped:{message}")
+
+                async def aclose(self):
+                    order.append("client.close")
+
+            with patch("httpx.AsyncClient", return_value=Client()):
+                handler = main._BetterStackHandler("token")
+            root = logging.getLogger()
+            root.addHandler(handler)
+            closing: asyncio.Task[None] | None = None
+            try:
+                handler.emit(logging.LogRecord("test", logging.ERROR, __file__, 0, "first", (), None))
+                await asyncio.wait_for(first_started.wait(), timeout=1)
+                closing = asyncio.create_task(handler.aclose())
+                await asyncio.sleep(0)
+                handler.emit(logging.LogRecord("test", logging.ERROR, __file__, 0, "late", (), None))
+                await asyncio.sleep(0)
+                allow_first.set()
+                await closing
+
+                self.assertFalse(late_started.is_set())
+                self.assertEqual(order, ["post:first", "shipped:first", "client.close"])
+                self.assertNotIn(handler, root.handlers)
+            finally:
+                root.removeHandler(handler)
+                allow_first.set()
+                allow_late.set()
+                if closing is not None and not closing.done():
+                    await closing
+                await asyncio.sleep(0)
+
+        asyncio.run(scenario())
 
 
 if __name__ == "__main__":
