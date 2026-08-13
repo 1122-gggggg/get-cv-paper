@@ -129,6 +129,30 @@ test('unchanged API ETags do not broadcast an update and use conditional revalid
     assert.deepEqual(worker.messages, []);
 });
 
+test('cached paper revalidation broadcasts refresh failures for offline and non-OK responses', async () => {
+    const request = new Request('https://scholarly.test/api/papers?discipline=cv');
+    const scenarios = [
+        async () => { throw new Error('offline'); },
+        async () => new Response('unavailable', { status: 503 }),
+    ];
+
+    for (const fetchImpl of scenarios) {
+        const worker = createWorker(fetchImpl);
+        const cache = await worker.caches.open(worker.apiCache);
+        await cache.put(request, new Response('cached', { headers: { ETag: '"old"' } }));
+
+        const event = dispatchFetch(worker, '/api/papers?discipline=cv');
+        const response = await event.responsePromise;
+        assert.equal(await response.text(), 'cached');
+        assert.equal(event.waitUntilCalls.length, 1);
+        await Promise.all(event.waitUntilCalls);
+        assert.equal(worker.messages.length, 1);
+        assert.equal(worker.messages[0].type, 'api-refresh-failed');
+        assert.equal(worker.messages[0].path, '/api/papers');
+        assert.equal(worker.messages[0].search, '?discipline=cv');
+    }
+});
+
 test('changed API ETags broadcast exactly one update after caching', async () => {
     const worker = createWorker(async () => new Response('fresh', { headers: { ETag: '"new"' } }));
     const request = new Request('https://scholarly.test/api/papers?discipline=cv');

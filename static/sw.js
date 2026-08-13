@@ -79,6 +79,11 @@ async function apiSWR(request, url, event) {
     const cached = await cache.match(request);
     const cachedEtag = cached?.headers.get('ETag') || null;
     const networkRequest = conditionalRequest(request, cached);
+    const reportRefreshFailure = async () => {
+        if (cached && url.pathname === '/api/papers') {
+            await broadcast({ type: 'api-refresh-failed', path: url.pathname, search: url.search });
+        }
+    };
     const networkPromise = fetch(networkRequest).then(async (response) => {
         if (response?.status === 304 && cached) return cached;
         if (response?.status === 200) {
@@ -87,9 +92,14 @@ async function apiSWR(request, url, event) {
             if (stored && (!cached || cachedEtag !== nextEtag)) {
                 await broadcast({ type: 'api-updated', path: url.pathname, search: url.search });
             }
+        } else if (cached && !response?.ok) {
+            await reportRefreshFailure();
         }
         return response;
-    }).catch(() => null);
+    }).catch(async () => {
+        await reportRefreshFailure();
+        return null;
+    });
 
     if (cached) {
         event.waitUntil(networkPromise);

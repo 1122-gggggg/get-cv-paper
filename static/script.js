@@ -1823,13 +1823,18 @@ async function fetchPapers() {
 }
 retryLoadBtn?.addEventListener('click', retryPaperLoad);
 
-function _onSWApiUpdated(payload) {
-    if (payload?.path !== '/api/papers') return;
+function _isCurrentPapersPayload(payload) {
+    if (payload?.path !== '/api/papers') return false;
     const disc = ACTIVE_DISCIPLINE?.id || 'cv';
     const params = new URLSearchParams(payload.search || '');
     const payloadDisc = params.get('discipline') || 'cv';
     const payloadDays = Number(params.get('days') || 7);
-    if (payloadDisc !== disc || payloadDays !== 7) return;
+    return payloadDisc === disc && payloadDays === 7;
+}
+
+function _onSWApiUpdated(payload) {
+    if (!_isCurrentPapersPayload(payload)) return;
+    const disc = ACTIVE_DISCIPLINE?.id || 'cv';
     if (_papersInflight) return;
     _papersInflight = (async () => {
         try { await _fetchAndApply(disc); }
@@ -1837,9 +1842,17 @@ function _onSWApiUpdated(payload) {
         finally { _papersInflight = null; }
     })();
 }
+
+function _onSWApiRefreshFailed(payload) {
+    if (_isCurrentPapersPayload(payload)) {
+        showLoadStatus('網路更新失敗，正在顯示快取資料。');
+    }
+}
+
 if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', (e) => {
-        if (e.data?.type === 'api-updated') _onSWApiUpdated(e.data);
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'api-updated') _onSWApiUpdated(event.data);
+        else if (event.data?.type === 'api-refresh-failed') _onSWApiRefreshFailed(event.data);
     });
 }
 
