@@ -6,6 +6,7 @@ upstream sources are rate-limited or unreachable.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import logging
@@ -15,6 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,21 @@ class PaperStore:
             """
         )
 
+    @contextmanager
+    def _transaction(self) -> Iterator[None]:
+        """Run a write transaction while retaining the shared connection lock."""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                yield
+                self._conn.execute("COMMIT")
+            except BaseException:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+
     def upsert_many(self, papers: list[dict[str, Any]], primary_cat: str) -> int:
         if not papers or not primary_cat:
             return 0
@@ -135,8 +152,7 @@ class PaperStore:
             payload = json.dumps(p, ensure_ascii=False, default=str).encode("utf-8")
             rows.append((pid, primary_cat, _norm_published(p), payload, now))
         try:
-            with self._lock:
-                self._conn.execute("BEGIN")
+            with self._transaction():
                 self._conn.executemany(
                     "INSERT OR REPLACE INTO papers(paper_id, primary_cat, published, payload, fetched_at) "
                     "VALUES(?,?,?,?,?)",
@@ -148,13 +164,8 @@ class PaperStore:
                     "row_count=(SELECT COUNT(*) FROM papers WHERE primary_cat=?)",
                     (primary_cat, now, len(rows), primary_cat),
                 )
-                self._conn.execute("COMMIT")
             return len(rows)
         except Exception as e:
-            try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
             logger.warning("paper_store: upsert failed for %s: %s", primary_cat, e)
             return 0
 
@@ -189,8 +200,7 @@ class PaperStore:
                 fresh += 1
             snap_rows.append((pid, primary_cat, today, cit_i, hf_i, stars_i, pub, now))
         try:
-            with self._lock:
-                self._conn.execute("BEGIN")
+            with self._transaction():
                 self._conn.executemany(
                     "INSERT INTO metric_snapshots"
                     "(paper_id, primary_cat, snapshot_date, citation_count, hf_upvotes, github_stars, published, at) "
@@ -211,13 +221,8 @@ class PaperStore:
                     " at=excluded.at",
                     (primary_cat, today, len(snap_rows), fresh, now),
                 )
-                self._conn.execute("COMMIT")
             return len(snap_rows)
         except Exception as e:
-            try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
             logger.warning("paper_store: record_snapshots failed for %s: %s", primary_cat, e)
             return 0
 
@@ -469,7 +474,7 @@ class PaperStore:
         cutoff = self._cutoff(max_age_days)
         snap_cutoff = self._cutoff(snapshot_age_days)
         try:
-            with self._lock:
+            with self._transaction():
                 cur = self._conn.execute("DELETE FROM papers WHERE published<?", (cutoff,))
                 deleted = cur.rowcount or 0
                 self._conn.execute("DELETE FROM metric_snapshots WHERE snapshot_date<?", (snap_cutoff,))

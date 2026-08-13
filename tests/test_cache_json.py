@@ -1,8 +1,11 @@
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import cache
-from cache import CachedJSON
+from cache import CachedJSON, LRUStore
 
 
 class _FakeClock:
@@ -237,6 +240,60 @@ class CacheJsonStaleOnErrorTests(unittest.TestCase):
         asyncio.run(scenario())
         self.assertIn("k", c._entries)
         self.assertGreaterEqual(c.metrics["build_err"], 1)
+
+
+
+class LRUStorePersistenceTests(unittest.TestCase):
+    def test_malformed_persisted_json_is_ignored_and_length_is_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / "s2.json").write_text("{not json", encoding="utf-8")
+
+            store = LRUStore("s2", maxsize=2, ttl=60, cache_dir=cache_dir)
+
+            self.assertEqual(len(store), 0)
+            self.assertIsNone(store.get("missing"))
+
+    def test_load_filters_invalid_entries_and_caps_lru_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / "s2.json").write_text(
+                (
+                    '{"invalid":{"at":"now","v":"bad"},'
+                    '"old":{"at":1,"v":"old"},'
+                    '"new":{"at":2,"v":"new"}}'
+                ),
+                encoding="utf-8",
+            )
+
+            store = LRUStore("s2", maxsize=1, ttl=0, cache_dir=cache_dir)
+
+            self.assertEqual(len(store), 1)
+            self.assertIsNone(store.get("old"))
+            self.assertEqual(store.get("new"), "new")
+
+    def test_flush_keeps_dirty_state_when_new_write_arrives_mid_flush(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            store = LRUStore("s2", maxsize=2, ttl=60, cache_dir=cache_dir)
+            store.set("existing", "old")
+            original_write_text = Path.write_text
+            wrote_new_value = False
+
+            def write_snapshot(path, text, *args, **kwargs):
+                nonlocal wrote_new_value
+                if not wrote_new_value and path == store.path.with_suffix(".tmp"):
+                    wrote_new_value = True
+                    store.set("new", "value")
+                return original_write_text(path, text, *args, **kwargs)
+
+            with patch.object(Path, "write_text", write_snapshot):
+                store.flush()
+
+            self.assertTrue(store._dirty)
+            store.flush()
+            restored = LRUStore("s2", maxsize=2, ttl=60, cache_dir=cache_dir)
+            self.assertEqual(restored.get("new"), "value")
 
 
 if __name__ == "__main__":

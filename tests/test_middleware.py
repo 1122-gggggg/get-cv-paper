@@ -60,8 +60,7 @@ class RateLimitTests(unittest.TestCase):
 
 
 class ClientIpPrecedenceTests(unittest.TestCase):
-    """_client_ip is a staticmethod over a raw ASGI scope — exercise it directly
-    with synthetic scopes (no client, no network)."""
+    """Proxy headers are only eligible after an explicit trusted-proxy opt-in."""
 
     @staticmethod
     def _scope(headers, client=("198.51.100.7", 55555)):
@@ -71,27 +70,38 @@ class ClientIpPrecedenceTests(unittest.TestCase):
             "client": client,
         }
 
-    def test_trusted_fly_edge_header_wins_over_xff(self):
-        # Fly-Client-IP is set by the trusted edge; a client-supplied X-Forwarded-For
-        # must NOT override it (anti-spoof). Fly value is used.
+    def test_default_ignores_spoofable_proxy_headers(self):
         scope = self._scope([
             ("x-forwarded-for", "1.2.3.4, 9.9.9.9"),
             ("fly-client-ip", "203.0.113.42"),
         ])
-        self.assertEqual(RateLimitMiddleware._client_ip(scope), "203.0.113.42")
+        self.assertEqual(RateLimitMiddleware._client_ip(scope, trust_proxy_headers=False), "198.51.100.7")
 
-    def test_xff_first_hop_used_when_no_trusted_header(self):
-        # No Fly header: fall back to the first hop of X-Forwarded-For.
-        scope = self._scope([("x-forwarded-for", "1.2.3.4, 9.9.9.9")])
-        self.assertEqual(RateLimitMiddleware._client_ip(scope), "1.2.3.4")
+    def test_trusted_fly_header_wins_over_xff(self):
+        scope = self._scope([
+            ("x-forwarded-for", "1.2.3.4, 9.9.9.9"),
+            ("fly-client-ip", "203.0.113.42"),
+        ])
+        self.assertEqual(RateLimitMiddleware._client_ip(scope, trust_proxy_headers=True), "203.0.113.42")
 
-    def test_falls_back_to_client_host_when_no_proxy_headers(self):
-        scope = self._scope([], client=("10.0.0.5", 41000))
-        self.assertEqual(RateLimitMiddleware._client_ip(scope), "10.0.0.5")
+    def test_trusted_xff_uses_first_valid_hop(self):
+        scope = self._scope([("x-forwarded-for", "203.0.113.9, 9.9.9.9")])
+        self.assertEqual(RateLimitMiddleware._client_ip(scope, trust_proxy_headers=True), "203.0.113.9")
+
+    def test_invalid_proxy_values_fall_back_to_client_host(self):
+        scope = self._scope([
+            ("fly-client-ip", "not-an-ip"),
+            ("x-forwarded-for", "also-not-an-ip, 203.0.113.9"),
+        ])
+        self.assertEqual(RateLimitMiddleware._client_ip(scope, trust_proxy_headers=True), "198.51.100.7")
 
     def test_unknown_when_no_client_and_no_headers(self):
         scope = self._scope([], client=None)
-        self.assertEqual(RateLimitMiddleware._client_ip(scope), "unknown")
+        self.assertEqual(RateLimitMiddleware._client_ip(scope, trust_proxy_headers=False), "unknown")
+
+    def test_trust_proxy_headers_defaults_to_false(self):
+        middleware = RateLimitMiddleware(FastAPI())
+        self.assertFalse(middleware.trust_proxy_headers)
 
 
 class SlotRefundTests(unittest.TestCase):
@@ -132,41 +142,59 @@ class SlotRefundTests(unittest.TestCase):
         self.assertEqual(c.get("/api/ok").status_code, 429)
 
 
-class CostWeightingTests(unittest.TestCase):
-    """The limiter charges a flat cost of 1 per non-exempt /api/ request (the
-    docstring notes writes are 'high cost' but the final code reserves exactly one
-    slot per request regardless of endpoint). These assert that real behavior: an
-    endpoint like /api/semantic-search consumes the same one-slot-per-call budget
-    as a default path, while /api/health is exempt and consumes nothing."""
-
-    @staticmethod
-    def _client(burst: int, path: str):
+    def test_weighted_5xx_refunds_all_reserved_slots(self):
         app = FastAPI()
 
-        @app.get(path)
+        @app.post("/api/view")
+        def _boom():
+            from fastapi import HTTPException
+            raise HTTPException(status_code=500, detail="kaboom")
+
+        @app.get("/api/ok")
+        def _ok():
+            return {"ok": True}
+
+        app.add_middleware(RateLimitMiddleware, burst=10)
+        c = TestClient(app, raise_server_exceptions=False)
+        for _ in range(3):
+            self.assertEqual(c.post("/api/view").status_code, 500)
+        self.assertEqual(c.get("/api/ok").status_code, 200)
+
+
+class CostWeightingTests(unittest.TestCase):
+    @staticmethod
+    def _client(burst: int, path: str, method: str = "GET") -> TestClient:
+        app = FastAPI()
+
+        @app.api_route(path, methods=[method])
         def _h():
             return {"ok": True}
 
         app.add_middleware(RateLimitMiddleware, burst=burst)
         return TestClient(app)
 
-    def test_semantic_search_path_consumes_one_slot_per_call(self):
-        c = self._client(burst=2, path="/api/semantic-search")
-        self.assertEqual(c.get("/api/semantic-search").status_code, 200)
+    def test_search_reserves_three_slots(self):
+        c = self._client(burst=5, path="/api/search")
+        self.assertEqual(c.get("/api/search").status_code, 200)
+        rejected = c.get("/api/search")
+        self.assertEqual(rejected.status_code, 429)
+        self.assertGreaterEqual(int(rejected.headers["retry-after"]), 59)
+
+    def test_semantic_search_reserves_five_slots(self):
+        c = self._client(burst=5, path="/api/semantic-search")
         self.assertEqual(c.get("/api/semantic-search").status_code, 200)
         self.assertEqual(c.get("/api/semantic-search").status_code, 429)
 
-    def test_default_path_consumes_same_one_slot_per_call(self):
+    def test_view_post_reserves_ten_slots(self):
+        c = self._client(burst=10, path="/api/view", method="POST")
+        self.assertEqual(c.post("/api/view").status_code, 200)
+        self.assertEqual(c.post("/api/view").status_code, 429)
+
+    def test_default_path_reserves_one_slot(self):
         c = self._client(burst=2, path="/api/papers")
         self.assertEqual(c.get("/api/papers").status_code, 200)
         self.assertEqual(c.get("/api/papers").status_code, 200)
         self.assertEqual(c.get("/api/papers").status_code, 429)
-
-    def test_exempt_path_consumes_no_budget(self):
-        c = self._client(burst=1, path="/api/ready")
-        for _ in range(5):
-            self.assertEqual(c.get("/api/ready").status_code, 200)
-
 
 if __name__ == "__main__":
     unittest.main()

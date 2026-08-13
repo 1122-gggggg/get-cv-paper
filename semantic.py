@@ -398,10 +398,10 @@ def _kmeans(vecs: list[list[float]], k: int, max_iter: int = 12) -> tuple[list[i
         changed = 0
         for i, v in enumerate(vecs):
             best, best_sim = 0, -2.0
-            for ci, c in enumerate(centroids):
-                s = _cosine(v, c)
+            for centroid_index, centroid in enumerate(centroids):
+                s = _cosine(v, centroid)
                 if s > best_sim:
-                    best_sim, best = s, ci
+                    best_sim, best = s, centroid_index
             if assign[i] != best:
                 changed += 1
                 assign[i] = best
@@ -410,18 +410,18 @@ def _kmeans(vecs: list[list[float]], k: int, max_iter: int = 12) -> tuple[list[i
         # Update centroids (mean)
         new_cents = [[0.0] * dim for _ in range(k)]
         counts = [0] * k
-        for i, v in enumerate(vecs):
-            c = assign[i]
-            counts[c] += 1
-            for d in range(dim):
-                new_cents[c][d] += v[d]
-        for c in range(k):
-            if counts[c] > 0:
-                for d in range(dim):
-                    new_cents[c][d] /= counts[c]
+        for paper_index, vector in enumerate(vecs):
+            cluster_index = assign[paper_index]
+            counts[cluster_index] += 1
+            for dimension in range(dim):
+                new_cents[cluster_index][dimension] += vector[dimension]
+        for cluster_index in range(k):
+            if counts[cluster_index] > 0:
+                for dimension in range(dim):
+                    new_cents[cluster_index][dimension] /= counts[cluster_index]
             else:
                 # 空 cluster 給 random vec 重啟,避免維度全 0
-                new_cents[c] = list(_random.choice(vecs))
+                new_cents[cluster_index] = list(_random.choice(vecs))
         centroids = new_cents
     return assign, centroids
 
@@ -573,10 +573,10 @@ def _bm25_scores(
     docs = [_bm25_tokens(_bm25_doc_text(p)) for p in papers]
     n_docs = len(docs)
     avgdl = sum(len(d) for d in docs) / max(1, n_docs)
-    doc_tfs: list[dict[str, int]] = []
+    doc_tfs: list[_Counter[str]] = []
     df: dict[str, int] = {}
     for d in docs:
-        tf = _Counter(d)
+        tf: _Counter[str] = _Counter(d)
         doc_tfs.append(tf)
         for term in tf:
             df[term] = df.get(term, 0) + 1

@@ -41,7 +41,7 @@ class _Client:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
-    async def get(self, url, params=None, timeout=None, headers=None):
+    async def get(self, url, *, params=None, timeout=None, headers=None):
         self.calls.append({"method": "GET", "url": url, "params": dict(params or {}), "headers": headers})
         return self._responses.pop(0)
 
@@ -53,7 +53,7 @@ class _Client:
 class _BoomClient:
     """Every request raises — exercises the transport-error soft-fail branch."""
 
-    async def get(self, *a, **k):
+    async def get(self, _url, *, params=None, timeout=None, headers=None):
         raise RuntimeError("network down")
 
     async def post(self, *a, **k):
@@ -81,6 +81,18 @@ _ARXIV_ATOM = b"""<?xml version="1.0" encoding="UTF-8"?>
   </entry>
 </feed>"""
 
+_ARXIV_MISSING_TEXT = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id></id>
+    <title>Untitled</title>
+    <summary></summary>
+    <published></published>
+    <author><name></name></author>
+    <author></author>
+  </entry>
+</feed>"""
+
 
 class ArxivSearchTests(unittest.TestCase):
     def test_phrase_helper_strips_quotes(self):
@@ -103,6 +115,37 @@ class ArxivSearchTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             _run(clients.fetch_arxiv_search(client, "anything", 10))
         self.assertEqual(ctx.exception.status_code, 502)
+
+    def test_search_uses_listing_retry_path_for_503(self):
+        from unittest import mock
+
+        client = _Client([
+            _Resp(status_code=503),
+            _Resp(status_code=503),
+            _Resp(content=_ARXIV_ATOM),
+        ])
+
+        async def no_sleep(_seconds):
+            return None
+
+        with mock.patch.object(clients.asyncio, "sleep", no_sleep):
+            papers = _run(clients.fetch_arxiv_search(client, "diffusion", 10))
+
+        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(papers[0]["title"], "Diffusion Models for Everything")
+
+    def test_parse_normalizes_missing_optional_xml_text(self):
+        papers = clients._parse_arxiv_entries(_ARXIV_MISSING_TEXT, cutoff=None)
+
+        self.assertEqual(papers[0]["url"], "")
+        self.assertEqual(papers[0]["published"], "")
+        self.assertEqual(papers[0]["authors"], [])
+
+    def test_safe_http_url_rejects_non_http_and_credentials(self):
+        self.assertEqual(clients.safe_http_url("https://arxiv.org/abs/2401.00001"), "https://arxiv.org/abs/2401.00001")
+        self.assertEqual(clients.safe_http_url("ftp://arxiv.org/paper"), "")
+        self.assertEqual(clients.safe_http_url("https://user:pass@arxiv.org/paper"), "")
+        self.assertEqual(clients.safe_http_url("https:///missing-host"), "")
 
 
 class ArxivListingTermsTests(unittest.TestCase):
@@ -406,7 +449,7 @@ class _PubmedClient:
         self._efetch = efetch
         self.calls: list[str] = []
 
-    async def get(self, url, params=None, timeout=None, headers=None):
+    async def get(self, url, *, params=None, timeout=None, headers=None):
         self.calls.append(url)
         if "esearch" in url:
             return self._esearch

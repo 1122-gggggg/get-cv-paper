@@ -126,7 +126,7 @@ class _StubClient:
         self._pages = list(pages)
         self.calls: list[dict] = []
 
-    async def get(self, url, params=None, timeout=None, headers=None):
+    async def get(self, url, *, params=None, timeout=None, headers=None):
         self.calls.append(dict(params or {}))
         return _StubResponse(self._pages.pop(0))
 

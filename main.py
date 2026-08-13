@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import ipaddress
 import json as _json
 import logging
+import math
 import os
 import re
 import secrets
@@ -48,6 +50,7 @@ from clients import (
     fetch_s2_batch,
     fetch_s2_search,
     github_repo_slug,
+    safe_http_url,
     s2_fos_for_cat,
 )
 from dedup import merge_sources
@@ -85,6 +88,7 @@ class _BetterStackHandler(logging.Handler):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         })
+        self._ship_tasks: set[asyncio.Task[None]] = set()
 
     async def _ship(self, payload: dict) -> None:
         async with self._sema:
@@ -93,6 +97,13 @@ class _BetterStackHandler(logging.Handler):
             except Exception:
                 pass
 
+
+    async def aclose(self) -> None:
+        tasks = tuple(self._ship_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await self._client.aclose()
+        super().close()
     def emit(self, record: logging.LogRecord) -> None:
         try:
             payload = {
@@ -105,7 +116,14 @@ class _BetterStackHandler(logging.Handler):
                 payload["exception"] = logging.Formatter().formatException(record.exc_info)
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._ship(payload))
+                task = loop.create_task(self._ship(payload))
+                self._ship_tasks.add(task)
+
+                def discard(done: asyncio.Future[None]) -> None:
+                    if isinstance(done, asyncio.Task):
+                        self._ship_tasks.discard(done)
+
+                task.add_done_callback(discard)
             except RuntimeError:
                 # 沒 loop(極早期 import 時)就丟棄,避免阻塞
                 pass
@@ -113,7 +131,11 @@ class _BetterStackHandler(logging.Handler):
             pass
 
 
+_betterstack_handler: _BetterStackHandler | None = None
+
+
 def _init_error_sinks() -> None:
+    global _betterstack_handler
     dsn = (os.environ.get("SENTRY_DSN") or "").strip()
     bs_token = (os.environ.get("BETTERSTACK_TOKEN") or "").strip()
     if dsn:
@@ -132,9 +154,12 @@ def _init_error_sinks() -> None:
             logger.warning("Sentry init failed: %s", e)
     if bs_token:
         try:
-            h = _BetterStackHandler(bs_token, endpoint=os.environ.get("BETTERSTACK_ENDPOINT", "https://in.logs.betterstack.com"))
-            h.setFormatter(logging.Formatter("%(name)s | %(message)s"))
-            logging.getLogger().addHandler(h)
+            _betterstack_handler = _BetterStackHandler(
+                bs_token,
+                endpoint=os.environ.get("BETTERSTACK_ENDPOINT", "https://in.logs.betterstack.com"),
+            )
+            _betterstack_handler.setFormatter(logging.Formatter("%(name)s | %(message)s"))
+            logging.getLogger().addHandler(_betterstack_handler)
             logger.info("error sink: BetterStack handler attached")
         except Exception as e:
             logger.warning("BetterStack handler init failed: %s", e)
@@ -611,7 +636,7 @@ async def _reviews_aggregate() -> list[dict]:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     rated: list[dict] = []
     for res in results:
-        if isinstance(res, Exception):
+        if isinstance(res, BaseException):
             continue
         rated.extend(p for p in res if p.get("review_avg"))
     rated.sort(key=lambda p: p.get("review_avg") or 0, reverse=True)
@@ -628,27 +653,28 @@ async def lifespan(app: FastAPI):
         _INDEX_HTML = Path("static/index.html").read_text(encoding="utf-8")
     except Exception as e:
         logger.warning("index.html load failed: %s", e)
-    flush = asyncio.create_task(_flush_task())
-    warm = asyncio.create_task(_warmup_loop())
-    warm_t2 = asyncio.create_task(_warmup_loop_tier2())
-    cleanup = asyncio.create_task(_paper_cleanup_task())
-    stars = asyncio.create_task(_stars_loop())
-    oai = asyncio.create_task(_oai_harvest_loop()) if _OAI_ENABLED and _OAI_SETS else None
+    tasks: list[asyncio.Task[None]] = [
+        asyncio.create_task(_flush_task()),
+        asyncio.create_task(_warmup_loop()),
+        asyncio.create_task(_warmup_loop_tier2()),
+        asyncio.create_task(_paper_cleanup_task()),
+        asyncio.create_task(_stars_loop()),
+    ]
+    if _OAI_ENABLED and _OAI_SETS:
+        tasks.append(asyncio.create_task(_oai_harvest_loop()))
     try:
         yield
     finally:
-        flush.cancel()
-        warm.cancel()
-        warm_t2.cancel()
-        cleanup.cancel()
-        stars.cancel()
-        if oai is not None:
-            oai.cancel()
-        for s in (_s2_store, _pwc_store):
-            await asyncio.to_thread(s.flush)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for store in (_s2_store, _pwc_store):
+            await asyncio.to_thread(store.flush)
         _paper_store.close()
         if _http_client is not None:
             await _http_client.aclose()
+        if _betterstack_handler is not None:
+            await _betterstack_handler.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -715,12 +741,17 @@ class HeadersMiddleware:
 
 # ── 簡易 IP token bucket(免外部依賴,防濫用)── pure ASGI ─────────
 class RateLimitMiddleware:
-    """每 IP per-minute token bucket。寫入 user data 算高成本,GET 一律 cost=1。"""
+    """Per-IP 60-second sliding-window rate limiter with weighted API costs."""
 
-    def __init__(self, app, burst: int = 600):
+    def __init__(self, app, burst: int = 600, trust_proxy_headers: bool | None = None):
         self.app = app
         self.burst = burst
-        self._buckets: dict[str, deque] = {}
+        self.trust_proxy_headers = (
+            os.environ.get("TRUST_PROXY_HEADERS", "0") == "1"
+            if trust_proxy_headers is None
+            else trust_proxy_headers
+        )
+        self._buckets: dict[str, deque[tuple[float, object]]] = {}
         self._last_sweep = time.time()
 
     def _sweep_idle(self, now: float) -> None:
@@ -729,37 +760,57 @@ class RateLimitMiddleware:
             return
         self._last_sweep = now
         window = 60.0
-        dead = [ip for ip, dq in self._buckets.items() if not dq or now - dq[-1] > window]
+        dead = [ip for ip, dq in self._buckets.items() if not dq or now - dq[-1][0] > window]
         for ip in dead:
             self._buckets.pop(ip, None)
 
     @staticmethod
-    def _client_ip(scope) -> str:
-        # Fly-Client-IP is set by the trusted Fly edge and cannot be spoofed by
-        # the client, unlike X-Forwarded-For (kept only as a non-Fly fallback).
-        fly = ""
-        xff = ""
-        for k, v in scope.get("headers", []):
-            if k == b"fly-client-ip" and not fly:
-                fly = v.decode("latin-1").strip()
-            elif k == b"x-forwarded-for" and not xff:
-                xff = v.decode("latin-1").split(",")[0].strip()
-        if fly:
-            return fly
-        if xff:
-            return xff
-        client = scope.get("client")
-        return client[0] if client else "unknown"
+    def _valid_ip(value: str) -> str:
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            return ""
 
     @staticmethod
-    async def _reject(send) -> None:
+    def _client_ip(scope, trust_proxy_headers: bool = False) -> str:
+        client = scope.get("client")
+        socket_ip = client[0] if client else "unknown"
+        if not trust_proxy_headers:
+            return socket_ip
+        headers = scope.get("headers", [])
+        for key, value in headers:
+            if key.lower() == b"fly-client-ip":
+                fly_ip = RateLimitMiddleware._valid_ip(value.decode("latin-1").strip())
+                if fly_ip:
+                    return fly_ip
+        for key, value in headers:
+            if key.lower() == b"x-forwarded-for":
+                xff_ip = value.decode("latin-1").split(",", 1)[0].strip()
+                valid_xff_ip = RateLimitMiddleware._valid_ip(xff_ip)
+                if valid_xff_ip:
+                    return valid_xff_ip
+                break
+        return socket_ip
+
+    @staticmethod
+    def _request_cost(method: str, path: str) -> int:
+        if path == "/api/search":
+            return 3
+        if path in {"/api/semantic-search", "/api/subtopics"}:
+            return 5
+        if method.upper() == "POST" and path == "/api/view":
+            return 10
+        return 1
+
+    @staticmethod
+    async def _reject(send, retry_after: int) -> None:
         body = _json.dumps({"detail": "rate limited"}).encode("utf-8")
         await send({
             "type": "http.response.start",
             "status": 429,
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"retry-after", b"10"),
+                (b"retry-after", str(retry_after).encode("ascii")),
                 (b"content-length", str(len(body)).encode("ascii")),
             ],
         })
@@ -774,21 +825,24 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        ip = self._client_ip(scope)
+        ip = self._client_ip(scope, self.trust_proxy_headers)
         now = time.time()
         self._sweep_idle(now)
         window = 60.0
         dq = self._buckets.setdefault(ip, deque())
-        while dq and now - dq[0] > window:
+        while dq and now - dq[0][0] > window:
             dq.popleft()
 
-        if len(dq) >= self.burst:
-            await self._reject(send)
+        cost = self._request_cost(scope.get("method", "GET"), path)
+        if len(dq) + cost > self.burst:
+            retry_after = max(1, math.ceil(window - (now - dq[0][0]))) if dq else 1
+            await self._reject(send, retry_after)
             return
 
-        # reserve the slot atomically (no await between the burst check and this append)
-        # so concurrent in-flight requests for the same IP count against the budget
-        dq.append(now)
+        # Reserve every slot before awaiting the downstream app so concurrent
+        # requests observe the full cost of this in-flight request.
+        reservation = object()
+        dq.extend((now, reservation) for _ in range(cost))
         status = {"code": 200}
 
         async def send_wrapper(message):
@@ -802,11 +856,12 @@ class RateLimitMiddleware:
             status["code"] = 500
             raise
         finally:
-            if status["code"] >= 500:  # refund failed requests so failures stay free
-                try:
-                    dq.remove(now)
-                except ValueError:
-                    pass
+            if status["code"] >= 500:
+                while True:
+                    try:
+                        dq.remove((now, reservation))
+                    except ValueError:
+                        break
 
 
 app.add_middleware(RateLimitMiddleware)
@@ -852,7 +907,7 @@ def _slim_paper(p: dict) -> dict:
     out: dict[str, Any] = {
         "title": title,
         "summary": summary,
-        "url": p.get("url"),
+        "url": safe_http_url(p.get("url")),
         "published": p.get("published"),
         "authors": authors,
         "source": p.get("source"),
@@ -868,7 +923,7 @@ def _slim_paper(p: dict) -> dict:
         out["venue"] = p["venue"]
     if p.get("hf_upvotes"):
         out["hf_upvotes"] = p["hf_upvotes"]
-    github_url = p.get("github_url") or extract_github_url(p.get("summary"))
+    github_url = safe_http_url(p.get("github_url") or extract_github_url(p.get("summary")))
     if github_url:
         out["github_url"] = github_url
     if p.get("github_stars"):
@@ -941,13 +996,13 @@ def _papers_response_meta(
 
 def _ssr_compact(p: dict, citation_count: int | None = None) -> dict:
     out = {
-        "url": p.get("url"),
+        "url": safe_http_url(p.get("url")),
         "title": (p.get("title") or "")[:260],
         "summary": (p.get("summary") or "")[:280],
         "authors": p.get("authors") or [],
         "published": p.get("published"),
         "venue": p.get("venue"),
-        "github_url": p.get("github_url"),
+        "github_url": safe_http_url(p.get("github_url")),
         "hf_upvotes": p.get("hf_upvotes") or 0,
         "external_ids": p.get("external_ids") or {},
     }
@@ -1287,8 +1342,8 @@ async def get_papers(
     days: int = 7,
     discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
     sort: str = "latest",
-    q: str = "",
-    topic: str = "",
+    q: str = Query("", max_length=256),
+    topic: str = Query("", max_length=64),
 ):
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
     max_results = _bounded_int(
@@ -1345,10 +1400,10 @@ def _valid_field_ids(raw: str) -> list[str]:
 @app.get("/api/feed")
 async def get_combined_feed(
     request: Request,
-    fields: str = "",
+    fields: str = Query("", max_length=256),
     days: int = 7,
     sort: str = "latest",
-    q: str = "",
+    q: str = Query("", max_length=256),
     max_results: int = 300,
 ):
     """合併「我的領域」feed(#14):多個 discipline 併成單一去重、排序的串流。
@@ -1377,7 +1432,7 @@ async def get_combined_feed(
     merged: list[dict] = []
     index: dict[str, int] = {}
     for fid, pool in zip(field_ids, pools, strict=False):
-        if isinstance(pool, Exception):
+        if isinstance(pool, BaseException):
             logger.warning("feed: pool unavailable for %s: %s", fid, pool)
             continue
         fname = discipline(fid).get("name") or fid
@@ -1646,7 +1701,7 @@ async def get_hot(request: Request, window: int = 7, limit: int = _HOT_DEFAULT_L
 
 
 @app.get("/api/search")
-async def search_papers(q: str, max_results: int = 50):
+async def search_papers(q: str = Query(..., max_length=256), max_results: int = 50):
     query = q.strip()
     if not query:
         return {"papers": []}
@@ -1669,7 +1724,7 @@ async def _papers_for_discipline(discipline_id: str) -> list[dict]:
 
 @app.get("/api/semantic-search")
 async def semantic_search(
-    q: str,
+    q: str = Query(..., max_length=256),
     discipline_id: str = Query(DEFAULT_DISCIPLINE, alias="discipline"),
     top_k: int = 30,
     cross: bool = False,
@@ -1693,7 +1748,7 @@ async def semantic_search(
         papers: list[dict] = []
         seen: set[str] = set()
         for pool in pools:
-            if isinstance(pool, Exception):
+            if isinstance(pool, BaseException):
                 continue
             for p in pool:
                 k = p.get("id") or p.get("doi") or p.get("link") or p.get("title", "")
@@ -1826,10 +1881,15 @@ async def get_citations(
             try:
                 venues = await fetch_dblp_venues_many(_client(), list(need_venue.keys()))
                 for title, venue in venues.items():
-                    aid = need_venue.get(title)
-                    if aid and venue:
-                        result[aid] = {**result[aid], "venue": venue}
-                        _s2_store.set(aid, result[aid])
+                    if not venue or title not in need_venue:
+                        continue
+                    aid = need_venue[title]
+                    entry = result.get(aid)
+                    if entry is None:
+                        continue
+                    enriched = {**entry, "venue": venue}
+                    result[aid] = enriched
+                    _s2_store.set(aid, enriched)
             except Exception as e:
                 logger.warning("DBLP venue fallback failed: %s", e)
 
@@ -1878,16 +1938,25 @@ _METRICS_KEY = os.environ.get("METRICS_KEY", "")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
-def _metrics_guard(request: Request, key: str) -> None:
+def _metrics_guard(request: Request) -> None:
     """Fail-closed metrics auth.
 
-    With METRICS_KEY set → require an exact (constant-time) match.
-    Without a key configured → allow loopback only, so a misconfigured prod
-    deploy never exposes internals to the public edge.
+    With METRICS_KEY set → require an exact bearer token in the Authorization
+    header. Without a key configured → allow loopback only, so a misconfigured
+    production deploy never exposes internals to the public edge.
     """
     if _METRICS_KEY:
-        if not secrets.compare_digest(key, _METRICS_KEY):
-            raise HTTPException(status_code=403, detail="forbidden")
+        scheme, separator, token = request.headers.get("authorization", "").partition(" ")
+        if (
+            scheme.lower() != "bearer"
+            or not separator
+            or not secrets.compare_digest(token, _METRICS_KEY)
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="unauthorized",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return
     client = request.client
     host = client.host if client else ""
@@ -1906,21 +1975,27 @@ def _process_rss_bytes() -> int:
         pass
     try:
         import resource
-        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+
+        getrusage = getattr(resource, "getrusage", None)
+        rusage_self = getattr(resource, "RUSAGE_SELF", None)
+        if callable(getrusage) and rusage_self is not None:
+            usage = getrusage(rusage_self)
+            return int(getattr(usage, "ru_maxrss", 0)) * 1024
     except Exception:
-        return 0
+        pass
+    return 0
 
 
 @app.get("/api/metrics")
-def get_metrics(request: Request, key: str = ""):
-    """供 dashboard / 自我觀測用。設定 METRICS_KEY 環境變數後需帶 ?key=..."""
-    _metrics_guard(request, key)
+def get_metrics(request: Request):
+    """供 dashboard / 自我觀測用。設定 METRICS_KEY 時需 Bearer token。"""
+    _metrics_guard(request)
     return {
         "process_rss_bytes": _process_rss_bytes(),
         "papers_cache": _papers_cache.stats(),
         "trending_cache": _trending_cache.stats(),
-        "s2_store": {"entries": len(_s2_store._data)},
-        "pwc_store": {"entries": len(_pwc_store._data)},
+        "s2_store": {"entries": len(_s2_store)},
+        "pwc_store": {"entries": len(_pwc_store)},
         "semantic_cache": semantic_cache_stats(),
         "paper_store": _paper_store.stats(),
     }
@@ -1936,13 +2011,9 @@ def _prom_format(metric: str, value: float, labels: dict[str, str] | None = None
 
 
 @app.get("/metrics")
-def prometheus_metrics(request: Request, key: str = ""):
-    """Prometheus exposition format。受 METRICS_KEY 保護。
-
-    暴露 cache hit/miss、store 大小、warmup 結果、build error 計數、RSS。
-    用法:scrape /metrics?key=$METRICS_KEY 進 Grafana / Prometheus。
-    """
-    _metrics_guard(request, key)
+def prometheus_metrics(request: Request):
+    """Prometheus exposition format protected by METRICS_KEY when configured."""
+    _metrics_guard(request)
 
     lines: list[str] = []
     # process memory (key signal on the 512MB machine)
@@ -1984,8 +2055,8 @@ def prometheus_metrics(request: Request, key: str = ""):
         ))
 
     # KV stores
-    lines.append(_prom_format("cv_kv_entries", len(_s2_store._data), labels={"store": "s2"}, help_text="LRUStore entry count"))
-    lines.append(_prom_format("cv_kv_entries", len(_pwc_store._data), labels={"store": "pwc"}, help_text="LRUStore entry count"))
+    lines.append(_prom_format("cv_kv_entries", len(_s2_store), labels={"store": "s2"}, help_text="LRUStore entry count"))
+    lines.append(_prom_format("cv_kv_entries", len(_pwc_store), labels={"store": "pwc"}, help_text="LRUStore entry count"))
 
     # paper_store (L2 SQLite)
     try:
@@ -2097,10 +2168,8 @@ async def record_view(request: Request):
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="invalid body")
     arxiv_id = str(data.get("arxiv_id") or "").strip()[:40]
-    url = str(data.get("url") or "").strip()[:_VIEW_URL_MAX]
+    url = safe_http_url(str(data.get("url") or "").strip()[:_VIEW_URL_MAX])
     title = str(data.get("title") or "").strip()[:_VIEW_TITLE_MAX]
-    if url and not url.startswith(("http://", "https://")):
-        url = ""
     if not (arxiv_id or url or title):
         raise HTTPException(status_code=400, detail="empty beacon")
     pid = _beacon_paper_id(arxiv_id, url, title)
@@ -2130,7 +2199,7 @@ _author_papers_cache = CachedJSON(ttl=2 * 3600, stale_ttl=24 * 3600, max_keys=12
 
 
 @app.get("/api/author/search")
-async def author_search(request: Request, q: str = Query(..., min_length=2), limit: int = 5):
+async def author_search(request: Request, q: str = Query(..., min_length=2, max_length=200), limit: int = 5):
     name = q.strip()
     if not name:
         return {"authors": []}

@@ -12,15 +12,34 @@ import semantic
 from dedup import merge_sources
 
 
-CRITICAL_ROUTES = {
-    "/api/health",
-    "/api/papers",
-    "/api/trending",
-    "/api/emerging",
-    "/api/search",
-    "/api/subtopics",
-    "/api/metrics",
-    "/metrics",
+CURRENT_ROUTES = {
+    ("GET", "/"),
+    ("GET", "/sw.js"),
+    ("GET", "/robots.txt"),
+    ("GET", "/sitemap.xml"),
+    ("GET", "/api/health"),
+    ("GET", "/api/ready"),
+    ("GET", "/api/papers"),
+    ("GET", "/api/feed"),
+    ("GET", "/api/stream"),
+    ("GET", "/api/trending"),
+    ("GET", "/api/emerging"),
+    ("GET", "/api/hot"),
+    ("GET", "/api/search"),
+    ("GET", "/api/semantic-search"),
+    ("GET", "/api/disciplines"),
+    ("GET", "/api/subtopics"),
+    ("GET", "/api/citations"),
+    ("GET", "/api/pwc"),
+    ("GET", "/api/metrics"),
+    ("GET", "/metrics"),
+    ("GET", "/api/openreview"),
+    ("GET", "/api/reviews"),
+    ("POST", "/api/view"),
+    ("GET", "/api/popular"),
+    ("GET", "/api/author/search"),
+    ("GET", "/api/author/{author_id}/papers"),
+    ("GET", "/api/bibtex"),
 }
 
 REMOVED_ROUTES = {
@@ -36,9 +55,13 @@ REMOVED_ROUTES = {
 
 
 class SmokeTests(unittest.TestCase):
-    def test_critical_routes_registered(self):
-        paths = {getattr(r, "path", None) for r in main.app.routes}
-        missing = CRITICAL_ROUTES - paths
+    def test_current_routes_registered_with_expected_methods(self):
+        routes = {
+            (method, route.path)
+            for route in main.app.routes
+            for method in (getattr(route, "methods", None) or set())
+        }
+        missing = CURRENT_ROUTES - routes
         self.assertEqual(missing, set(), f"missing routes: {missing}")
 
     def test_removed_subscription_and_recommendation_routes_absent(self):

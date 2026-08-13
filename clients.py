@@ -11,7 +11,8 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TypeAlias
+from urllib.parse import urlsplit
 
 import defusedxml.ElementTree as DET
 import httpx
@@ -28,6 +29,31 @@ _ARXIV_NS = {
 }
 _ARXIV_ID_RE = re.compile(r"\(arXiv:.*?\)")
 
+HttpxParamValue: TypeAlias = str | int | float | bool | None
+HttpxParams: TypeAlias = dict[str, HttpxParamValue]
+
+
+def safe_http_url(value: Any) -> str:
+    """Return an absolute HTTP(S) URL without credentials, else an empty string."""
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    try:
+        parsed = urlsplit(candidate)
+        _ = parsed.port
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return ""
+    return candidate
+
 
 # ── arXiv ─────────────────────────────────────────────────────────
 _ARXIV_ID_NUM_RE = re.compile(r"(\d{4}\.\d{4,6})")
@@ -40,11 +66,12 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
     early_stop = cutoff is not None
     for entry in root.findall("atom:entry", _ARXIV_NS):
         title_el = entry.find("atom:title", _ARXIV_NS)
-        id_el = entry.find("atom:id", _ARXIV_NS)
-        if title_el is None or title_el.text is None or id_el is None:
+        if title_el is None:
             continue
-
-        title = _ARXIV_ID_RE.sub("", title_el.text.strip().replace("\n", " ")).strip()
+        title_text = title_el.text or ""
+        id_el = entry.find("atom:id", _ARXIV_NS)
+        id_text = id_el.text if id_el is not None and id_el.text else ""
+        title = _ARXIV_ID_RE.sub("", title_text.strip().replace("\n", " ")).strip()
 
         summary_el = entry.find("atom:summary", _ARXIV_NS)
         summary = (
@@ -54,7 +81,7 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
         )
 
         pub_el = entry.find("atom:published", _ARXIV_NS)
-        pub_raw = pub_el.text if pub_el is not None else ""
+        pub_raw = pub_el.text if pub_el is not None and pub_el.text else ""
         try:
             pub_date = datetime.strptime(pub_raw, "%Y-%m-%dT%H:%M:%SZ")
             if cutoff is not None and pub_date < cutoff:
@@ -62,24 +89,25 @@ def _parse_arxiv_entries(xml_data: bytes, cutoff: datetime | None) -> list[dict[
                     break
                 continue
             published_str = pub_date.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, TypeError):
+        except ValueError:
             published_str = pub_raw
 
-        authors = [
-            a.find("atom:name", _ARXIV_NS).text  # type: ignore[union-attr]
-            for a in entry.findall("atom:author", _ARXIV_NS)
-            if a.find("atom:name", _ARXIV_NS) is not None
-        ]
+        authors: list[str] = []
+        for author in entry.findall("atom:author", _ARXIV_NS):
+            name_el = author.find("atom:name", _ARXIV_NS)
+            name = name_el.text.strip() if name_el is not None and name_el.text else ""
+            if name:
+                authors.append(name)
 
         arxiv_id = ""
-        if id_el.text:
-            m = _ARXIV_ID_NUM_RE.search(id_el.text)
+        if id_text:
+            m = _ARXIV_ID_NUM_RE.search(id_text)
             if m:
                 arxiv_id = m.group(1)
         papers.append({
             "title": title,
             "summary": summary,
-            "url": id_el.text,
+            "url": id_text,
             "published": published_str,
             "authors": authors,
             "source": "arxiv",
@@ -99,58 +127,33 @@ async def fetch_arxiv_listing(
         cat_clause = f"({cat_clause})"
     search_query = f"{cat_clause} AND ({terms})" if terms else cat_clause
     label = "+".join(cat_list)
-    params = {
+    params: HttpxParams = {
         "search_query": search_query,
         "sortBy": "submittedDate",
         "sortOrder": "descending",
         "max_results": max_results,
     }
-    # arXiv 嚴格限流;遇 429/503 退避重試,避免整輪 warmup 把 IP 卡死
-    delays = (3.0, 8.0, 0.0)  # 最後一次不再 sleep
-    for attempt, sleep_s in enumerate(delays):
-        try:
-            r = await client.get(ARXIV_BASE, params=params, timeout=30.0)
-            if r.status_code in (429, 503):
-                if sleep_s > 0:
-                    logger.info("arXiv %d on %s, retrying in %ss", r.status_code, label, sleep_s)
-                    await asyncio.sleep(sleep_s)
-                    continue
-                raise HTTPException(status_code=502, detail="arXiv rate-limited")
-            r.raise_for_status()
-            break
-        except HTTPException:
-            raise
-        except Exception as e:
-            if attempt < len(delays) - 1:
-                await asyncio.sleep(sleep_s or 2.0)
-                continue
-            logger.error("arXiv listing failed: %s", e)
-            raise HTTPException(status_code=502, detail="arXiv upstream unavailable") from e
+    xml_data = await _arxiv_fetch_raw(client, params, label)
     cutoff = datetime.now() - timedelta(days=days)
-    return _parse_arxiv_entries(r.content, cutoff)
+    return _parse_arxiv_entries(xml_data, cutoff)
 
 
 async def fetch_arxiv_search(
     client: httpx.AsyncClient, q: str, max_results: int
 ) -> list[dict[str, Any]]:
     phrase = _arxiv_phrase(q)
-    params = {
+    params: HttpxParams = {
         "search_query": f'all:"{phrase}"',
         "sortBy": "relevance",
         "sortOrder": "descending",
         "max_results": max_results,
     }
-    try:
-        r = await client.get(ARXIV_BASE, params=params, timeout=20.0)
-        r.raise_for_status()
-    except Exception as e:
-        logger.error("arXiv search failed: %s", e)
-        raise HTTPException(status_code=502, detail="arXiv upstream unavailable") from e
-    return _parse_arxiv_entries(r.content, cutoff=None)
+    xml_data = await _arxiv_fetch_raw(client, params, f"search:{phrase}")
+    return _parse_arxiv_entries(xml_data, cutoff=None)
 
 
 async def _arxiv_fetch_raw(
-    client: httpx.AsyncClient, params: dict[str, Any], label: str,
+    client: httpx.AsyncClient, params: HttpxParams, label: str,
 ) -> bytes:
     """共用的 arXiv GET + 429/503 退避重試,回傳原始 XML bytes(失敗拋 502)。"""
     delays = (3.0, 8.0, 0.0)  # 最後一次不再 sleep
@@ -301,7 +304,7 @@ async def fetch_s2_search(
     if not query:
         return []
     year = datetime.now().year
-    params: dict[str, Any] = {
+    params: HttpxParams = {
         "query": query,
         "fields": "title,abstract,year,authors,externalIds,publicationDate,venue,citationCount",
         "limit": min(max(max_results, 10), 100),
@@ -391,7 +394,7 @@ async def fetch_openalex_listing(
     filters = [f"from_publication_date:{cutoff}"]
     if concept_id:
         filters.append(f"concepts.id:{concept_id}")
-    params: dict[str, Any] = {
+    params: HttpxParams = {
         "filter": ",".join(filters),
         "sort": "publication_date:desc",
         "per-page": min(max_results, 200),  # OpenAlex 上限 200
@@ -491,7 +494,7 @@ async def fetch_crossref_listing(
     """以 subject 過濾學科,或 query 模糊搜尋。回 journal-article only。"""
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     filters = [f"from-pub-date:{cutoff}", "type:journal-article"]
-    params: dict[str, Any] = {
+    params: HttpxParams = {
         "filter": ",".join(filters),
         "rows": min(max_results, 200),
         "sort": "published",
@@ -577,7 +580,7 @@ async def fetch_chemrxiv_listing(
 ) -> list[dict[str, Any]]:
     """從 CrossRef 撈 ChemRxiv (prefix 10.26434) 最近 days 內的預印本。"""
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    params: dict[str, Any] = {
+    params: HttpxParams = {
         "filter": f"from-posted-date:{cutoff},type:posted-content",
         "rows": min(max_results, 200),
         "sort": "published",
@@ -944,7 +947,7 @@ async def fetch_openreview_listing(
     if year is None:
         year = datetime.now().year
 
-    params = {
+    params: HttpxParams = {
         # v2 用 venueid(group path)而非 venue(人類可讀字串);後者查不到任何 note
         "content.venueid": f"{group}/{year}/Conference",
         "details": "directReplies",  # 內嵌評審 reply,供解析 review_avg/review_count
@@ -1030,7 +1033,7 @@ async def fetch_s2_author_papers(
 ) -> list[dict[str, Any]]:
     """抓某作者的近期論文。author_id 是 S2 內部 ID。soft-fail。"""
     url = f"https://api.semanticscholar.org/graph/v1/author/{author_id}/papers"
-    params = {
+    params: HttpxParams = {
         "fields": "title,abstract,year,publicationDate,externalIds,venue,citationCount",
         "limit": min(limit, 100),
     }
@@ -1071,7 +1074,7 @@ async def fetch_s2_author_search(
 ) -> list[dict[str, Any]]:
     """name → 候選 S2 author。soft-fail。"""
     url = "https://api.semanticscholar.org/graph/v1/author/search"
-    params = {
+    params: HttpxParams = {
         "query": name,
         "fields": "name,affiliations,paperCount,citationCount,hIndex",
         "limit": min(limit, 100),

@@ -1,6 +1,7 @@
 """Time-series snapshot / burst-delta contract for PaperStore."""
 import tempfile
 import unittest
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,6 +92,97 @@ class PaperStoreSnapshotTests(unittest.TestCase):
         self.store.upsert_many([p], "ml")
         got = self.store.github_urls_for_arxiv(["2401.8", "2401.404"])
         self.assertEqual(got, {"2401.8": "https://github.com/foo/bar"})
+
+
+
+class _ProbeLock:
+    """Runs one concurrent reader after a failing transaction releases its lock."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.released = threading.Event()
+        self.observed = threading.Event()
+        self._armed = True
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self._lock.release()
+        if self._armed and exc_type is not None:
+            self._armed = False
+            self.released.set()
+            self.observed.wait(timeout=2)
+        return False
+
+
+class PaperStoreTransactionTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = PaperStore(Path(self._tmp.name) / "transaction.sqlite")
+
+    def tearDown(self):
+        self.store.close()
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _paper(aid):
+        return {
+            "title": f"Paper {aid}",
+            "url": f"https://arxiv.org/abs/{aid}",
+            "external_ids": {"arxiv": aid},
+        }
+
+    def test_failed_upsert_is_rolled_back_before_other_thread_can_read_it(self):
+        self.store._conn.execute(
+            """
+            CREATE TRIGGER fail_meta_insert
+            BEFORE INSERT ON meta
+            WHEN NEW.primary_cat = 'broken'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced meta failure');
+            END;
+            """
+        )
+        probe = _ProbeLock()
+        self.store._lock = probe
+        observed: list[int] = []
+
+        def observe_after_release():
+            probe.released.wait(timeout=2)
+            observed.append(self.store.stats()["total"])
+            probe.observed.set()
+
+        reader = threading.Thread(target=observe_after_release)
+        reader.start()
+        self.assertEqual(self.store.upsert_many([self._paper("2401.00001")], "broken"), 0)
+        reader.join(timeout=2)
+
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(observed, [0])
+        with self.store._lock:
+            meta_rows = self.store._conn.execute("SELECT COUNT(*) FROM meta").fetchone()[0]
+        self.assertEqual(meta_rows, 0)
+        self.assertEqual(self.store.upsert_many([self._paper("2401.00002")], "safe"), 1)
+
+    def test_failed_snapshot_write_leaves_no_partial_snapshot_rows(self):
+        self.store._conn.execute(
+            """
+            CREATE TRIGGER fail_topic_insert
+            BEFORE INSERT ON topic_daily
+            WHEN NEW.primary_cat = 'broken'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced topic failure');
+            END;
+            """
+        )
+        self.assertEqual(self.store.record_snapshots([self._paper("2401.00003")], "broken"), 0)
+        self.assertEqual(self.store.stats()["snapshots"], 0)
+        with self.store._lock:
+            topic_rows = self.store._conn.execute("SELECT COUNT(*) FROM topic_daily").fetchone()[0]
+        self.assertEqual(topic_rows, 0)
+        self.assertEqual(self.store.record_snapshots([self._paper("2401.00004")], "safe"), 1)
 
 
 class PaperStoreViewTests(unittest.TestCase):

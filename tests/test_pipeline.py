@@ -91,7 +91,7 @@ class ArxivListingQueryTests(unittest.TestCase):
                 return None
 
         class _FakeClient:
-            async def get(self, _url, params=None, timeout=None):
+            async def get(self, _url, *, params=None, timeout=None):
                 captured["search_query"] = params["search_query"]
                 return _FakeResp()
 

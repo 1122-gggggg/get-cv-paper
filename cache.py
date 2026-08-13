@@ -11,6 +11,7 @@ import hashlib
 import json as _json
 import logging
 import time
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,8 @@ from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
 
-_JSON_DUMPS_KW = {"ensure_ascii": False, "separators": (",", ":")}
+def _compact_json(value: Any) -> str:
+    return _json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _consume_future_exception(fut: asyncio.Future) -> None:
@@ -49,48 +51,82 @@ class LRUStore:
         self.ttl = ttl
         self.persist = persist and cache_dir is not None
         self.path: Path | None = (cache_dir / f"{name}.json") if cache_dir else None
+        self._lock = threading.RLock()
         self._data: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._dirty = False
+        self._version = 0
         self._load()
 
     def _load(self) -> None:
         if not self.persist or self.path is None or not self.path.exists():
             return
-        try:
-            raw = _json.loads(self.path.read_text("utf-8"))
-            if isinstance(raw, dict):
-                self._data = OrderedDict(raw)
-        except Exception as e:
-            logger.warning("cache %s load failed: %s", self.name, e)
+        with self._lock:
+            try:
+                raw = _json.loads(self.path.read_text("utf-8"))
+                if not isinstance(raw, dict):
+                    return
+                loaded: OrderedDict[str, dict[str, Any]] = OrderedDict()
+                for key, entry in raw.items():
+                    if not isinstance(key, str) or not isinstance(entry, dict):
+                        continue
+                    at = entry.get("at")
+                    if (
+                        isinstance(at, bool)
+                        or not isinstance(at, (int, float))
+                        or "v" not in entry
+                    ):
+                        continue
+                    loaded[key] = {"at": at, "v": entry["v"]}
+                while len(loaded) > self.maxsize:
+                    loaded.popitem(last=False)
+                self._data = loaded
+            except Exception as e:
+                logger.warning("cache %s load failed: %s", self.name, e)
 
     def flush(self) -> None:
-        if not self.persist or not self._dirty or self.path is None:
+        if not self.persist or self.path is None:
             return
+        with self._lock:
+            if not self._dirty:
+                return
+            snapshot = OrderedDict(self._data)
+            version = self._version
         try:
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(_json.dumps(self._data, **_JSON_DUMPS_KW), encoding="utf-8")
+            tmp.write_text(_compact_json(snapshot), encoding="utf-8")
             tmp.replace(self.path)
-            self._dirty = False
         except Exception as e:
             logger.warning("cache %s flush failed: %s", self.name, e)
+            return
+        with self._lock:
+            if self._version == version:
+                self._dirty = False
 
     def get(self, key: str) -> Any | None:
-        entry = self._data.get(key)
-        if not entry:
-            return None
-        if self.ttl and time.time() - entry.get("at", 0) > self.ttl:
-            self._data.pop(key, None)
-            self._dirty = True
-            return None
-        self._data.move_to_end(key)
-        return entry.get("v")
+        with self._lock:
+            entry = self._data.get(key)
+            if not entry:
+                return None
+            if self.ttl and time.time() - entry["at"] > self.ttl:
+                self._data.pop(key, None)
+                self._version += 1
+                self._dirty = True
+                return None
+            self._data.move_to_end(key)
+            return entry["v"]
 
     def set(self, key: str, value: Any) -> None:
-        self._data[key] = {"at": time.time(), "v": value}
-        self._data.move_to_end(key)
-        while len(self._data) > self.maxsize:
-            self._data.popitem(last=False)
-        self._dirty = True
+        with self._lock:
+            self._data[key] = {"at": time.time(), "v": value}
+            self._data.move_to_end(key)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+            self._version += 1
+            self._dirty = True
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
 
 
 def make_etag(payload: bytes) -> str:
@@ -182,7 +218,7 @@ class CachedJSON:
         self._inflight[key] = fut
         try:
             payload = await builder()
-            body = _json.dumps(payload, **_JSON_DUMPS_KW).encode("utf-8")
+            body = _compact_json(payload).encode("utf-8")
             etag = make_etag(body)
             self._store(key, body, etag)
             self.metrics["build_ok"] += 1
@@ -245,11 +281,11 @@ class CachedJSON:
         except Exception as e:
             logger.warning("warmup failed for %s: %s", key, e)
 
-    def stats(self) -> dict[str, Any]:
-        m = dict(self.metrics)
-        total_hits = m["hit_fresh"] + m["hit_stale"]
-        total = total_hits + m["miss"]
-        m["hit_rate"] = (total_hits / total) if total else 0.0
-        m["entries"] = len(self._entries)
-        m["inflight"] = len(self._inflight)
-        return m
+    def stats(self) -> dict[str, int | float]:
+        total_hits = self.metrics["hit_fresh"] + self.metrics["hit_stale"]
+        total = total_hits + self.metrics["miss"]
+        metrics: dict[str, int | float] = dict(self.metrics)
+        metrics["hit_rate"] = (total_hits / total) if total else 0.0
+        metrics["entries"] = len(self._entries)
+        metrics["inflight"] = len(self._inflight)
+        return metrics
