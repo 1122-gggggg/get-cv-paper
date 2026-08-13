@@ -88,6 +88,23 @@ class SmokeTests(unittest.TestCase):
             "Sitemap: https://papers.example.test:8443/sitemap.xml",
             robots.text,
         )
+
+    def test_robots_sitemap_url_keeps_reserved_root_path_characters_raw(self):
+        client = TestClient(
+            main.app,
+            base_url="https://papers.example.test:8443",
+            root_path="/archive&raw",
+        )
+
+        robots = client.get("/robots.txt")
+
+        self.assertEqual(robots.status_code, 200)
+        self.assertIn(
+            "Sitemap: https://papers.example.test:8443/archive&raw/sitemap.xml",
+            robots.text,
+        )
+        self.assertNotIn("&amp;", robots.text)
+
     def test_removed_subscription_and_recommendation_routes_absent(self):
         paths = {getattr(r, "path", None) for r in main.app.routes}
         present = REMOVED_ROUTES & paths

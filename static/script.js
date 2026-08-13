@@ -788,7 +788,7 @@ function renderDisciplineFilters() {
         _storage.set(expandedKey, JSON.stringify([...openSet]));
     };
 
-    for (const g of groups) {
+    for (const [groupIndex, g] of groups.entries()) {
         const wrapper = document.createElement('div');
         wrapper.className = 'topic-group-wrapper';
 
@@ -815,7 +815,7 @@ function renderDisciplineFilters() {
 
         const submenu = document.createElement('div');
         submenu.className = 'topic-submenu';
-        submenu.id = `topicGroup-${d.id}-${g.name.replace(/\W+/g, '-')}`;
+        submenu.id = `topicGroup-${d.id}-${groupIndex}`;
         header.setAttribute('aria-controls', submenu.id);
         for (const topic of g.topics) {
             const btn = document.createElement('button');
@@ -1401,11 +1401,13 @@ function saveNote(url, card) {
         notesMap[url] = text;
         noteBtn.classList.add('has-note');
         use?.setAttribute('href', '#icon-note-filled');
+        noteBtn.setAttribute('aria-label', '編輯個人筆記');
         showToast('筆記已儲存');
     } else {
         delete notesMap[url];
         noteBtn.classList.remove('has-note');
         use?.setAttribute('href', '#icon-note');
+        noteBtn.setAttribute('aria-label', '新增個人筆記');
         showToast('筆記已清除');
     }
     saveNotes();
@@ -2476,6 +2478,10 @@ function buildCard(paper, index) {
 
     // Note button state
     const noteBtn = card.querySelector('.note-btn');
+    const notePanel = card.querySelector('.note-panel');
+    const notePanelId = `note-panel-${index}`;
+    notePanel.id = notePanelId;
+    noteBtn.setAttribute('aria-controls', notePanelId);
     noteBtn.setAttribute('aria-expanded', 'false');
     noteBtn.setAttribute('aria-label', hasNote ? '編輯個人筆記' : '新增個人筆記');
     if (hasNote) {
@@ -4153,7 +4159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sortWrapper = document.getElementById('sortWrapper');
     const sortSubmenu = document.getElementById('sortSubmenu');
     const sortLabel   = document.getElementById('sortLabel');
-    let sortTimer = null;
+    const sortTrigger = document.getElementById('sortTrigger');
     if (sortSubmenu) document.body.appendChild(sortSubmenu);
 
     function updateTimeRangeUI() {
@@ -4205,7 +4211,6 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('sortTrigger')?.setAttribute('aria-expanded', String(on));
     }
     function openSortSubmenu() {
-        clearTimeout(sortTimer);
         const rect = sortWrapper.getBoundingClientRect();
         // 右對齊：選單右端貼齊 trigger 右端，用 CSS right 定位
         sortSubmenu.style.top = (rect.bottom + 8) + 'px';
@@ -4215,22 +4220,11 @@ document.addEventListener('DOMContentLoaded', () => {
         setSortExpanded(true);
     }
     function closeSortSubmenu({ restoreFocus = false } = {}) {
-        clearTimeout(sortTimer);
         sortSubmenu.classList.remove('open');
         setSortExpanded(false);
         if (restoreFocus) document.getElementById('sortTrigger')?.focus();
     }
     if (sortWrapper && sortSubmenu) {
-        sortWrapper.addEventListener('mouseenter', openSortSubmenu);
-        sortWrapper.addEventListener('mouseleave', () => {
-            sortTimer = setTimeout(closeSortSubmenu, 120);
-        });
-        sortSubmenu.addEventListener('mouseenter', () => clearTimeout(sortTimer));
-        sortSubmenu.addEventListener('mouseleave', () => {
-            sortTimer = setTimeout(closeSortSubmenu, 120);
-        });
-
-        const sortTrigger = document.getElementById('sortTrigger');
         sortTrigger?.addEventListener('click', () => {
             if (sortSubmenu.classList.contains('open')) closeSortSubmenu();
             else openSortSubmenu();
@@ -4242,6 +4236,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 sortSubmenu.querySelector('.sort-item')?.focus();
             } else if (e.key === 'Escape') {
                 closeSortSubmenu({ restoreFocus: true });
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (
+                sortSubmenu.classList.contains('open')
+                && !sortWrapper.contains(e.target)
+                && !sortSubmenu.contains(e.target)
+            ) {
+                closeSortSubmenu();
             }
         });
         sortSubmenu.addEventListener('keydown', (e) => {

@@ -274,7 +274,7 @@ body.theme-washi .side-section-label .hint {
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: none;
-  color: var(--ink-pale-text);
+  color: var(--ink-mute);
   font-weight: 400;
 }
 
@@ -402,7 +402,7 @@ body.theme-washi .side-nav .add-topic-wrapper input {
   font-size: 12px;
   padding: 6px 14px;
 }
-body.theme-washi .side-nav .add-topic-wrapper input::placeholder { color: var(--ink-pale-text); }
+body.theme-washi .side-nav .add-topic-wrapper input::placeholder { color: var(--ink-mute); }
 body.theme-washi .side-nav .add-topic-wrapper input:focus {
   outline: none;
   border-color: transparent !important;
@@ -1319,7 +1319,7 @@ body.theme-washi .dp-search input:focus {
   background: var(--paper-shade);
   box-shadow: 0 0 0 3px var(--mustard-wash);
 }
-body.theme-washi .dp-search input::placeholder { color: var(--ink-pale-text); }
+body.theme-washi .dp-search input::placeholder { color: var(--ink-mute); }
 /* Category chips */
 body.theme-washi .dp-chip {
   background: var(--paper);
@@ -1590,6 +1590,13 @@ body.theme-washi textarea:focus-visible {
   outline-offset: 2px;
 }
 
+body.theme-washi .search-box input:focus-visible,
+body.theme-washi .side-nav .add-topic-wrapper input:focus-visible,
+body.theme-washi .dp-search input:focus-visible {
+  outline: 2px solid var(--mustard-deep);
+  outline-offset: 2px;
+}
+
 /* ============================================================
    Responsive
    ============================================================ */
@@ -1628,6 +1635,7 @@ body.theme-washi textarea:focus-visible {
   body.theme-washi .semantic-toggle { right: 88px; }
   body.theme-washi .cross-disc-toggle { right: 44px; }
   body.theme-washi .pin-search-btn { right: 0; }
+  body.theme-washi .card-action-menu button,
   body.theme-washi .no-results-action,
   body.theme-washi .fav-export-btn,
   body.theme-washi .topic-suggestions .ts-chip,

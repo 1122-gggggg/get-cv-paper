@@ -1099,7 +1099,7 @@ def sw_root():
 
 @app.get("/robots.txt")
 def robots_txt(request: Request):
-    sitemap_url = _html.escape(f"{request.base_url}sitemap.xml", quote=True)
+    sitemap_url = str(request.url_for("sitemap_xml"))
     body = (
         "User-agent: *\n"
         "Allow: /\n"
