@@ -1,5 +1,5 @@
 # ── Stage 1: minify static assets via esbuild ───────────────────
-FROM node:20-alpine AS minifier
+FROM node:26-alpine AS minifier
 WORKDIR /work
 COPY static ./static
 RUN npm install -g --no-audit --no-fund esbuild@0.24.2 >/dev/null && \
