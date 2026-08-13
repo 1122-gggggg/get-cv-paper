@@ -6,6 +6,10 @@ the cross-source merge contract the frontend depends on, and embedding-prefix
 consistency with the configured model.
 """
 import unittest
+from unittest.mock import patch
+from xml.etree import ElementTree
+
+from fastapi.testclient import TestClient
 
 import main
 import semantic
@@ -64,6 +68,26 @@ class SmokeTests(unittest.TestCase):
         missing = CURRENT_ROUTES - routes
         self.assertEqual(missing, set(), f"missing routes: {missing}")
 
+
+    def test_seo_routes_use_absolute_escaped_request_urls(self):
+        client = TestClient(main.app, base_url="https://papers.example.test:8443")
+        with patch.object(main, "DISCIPLINES", {"ai&ml": object()}):
+            sitemap = client.get("/sitemap.xml")
+
+        self.assertEqual(sitemap.status_code, 200)
+        ElementTree.fromstring(sitemap.text)
+        self.assertIn("<loc>https://papers.example.test:8443/</loc>", sitemap.text)
+        self.assertIn(
+            "<loc>https://papers.example.test:8443/?discipline=ai%26ml</loc>",
+            sitemap.text,
+        )
+
+        robots = client.get("/robots.txt")
+        self.assertEqual(robots.status_code, 200)
+        self.assertIn(
+            "Sitemap: https://papers.example.test:8443/sitemap.xml",
+            robots.text,
+        )
     def test_removed_subscription_and_recommendation_routes_absent(self):
         paths = {getattr(r, "path", None) for r in main.app.routes}
         present = REMOVED_ROUTES & paths

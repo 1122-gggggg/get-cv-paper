@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#0b0f1a">
+    <meta name="theme-color" content="#faf6ec">
     <title>Scholarly | 研究所論文追蹤</title>
-    <meta name="description" content="每日自動追蹤 arXiv 最新論文，涵蓋多個研究領域（CV / NLP / ML / Robotics / …），附中文摘要與引用統計。">
+    <meta name="description" content="每日追蹤 arXiv 最新論文，涵蓋 CV、NLP、ML、Robotics 等研究領域，附引用統計與程式碼訊號。">
     <link rel="canonical" href="/">
     <!-- Open Graph / Twitter card：分享連結時的縮圖與標題 -->
     <meta property="og:type" content="website">
@@ -38,7 +38,7 @@
     <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
     <!-- Critical CSS inline:第一屏需要的最小規則,避免 FOUC + 加速 first paint -->
     <style>
-      :root{--bg-color:#080c18;--text-primary:#eef2ff;--text-secondary:#8b9cc8;--card-bg:rgba(14,20,40,0.72);--card-border:rgba(255,255,255,0.07);--side-bg:#0f172a}
+      :root{--bg-color:#faf6ec;--text-primary:#2a2418;--text-secondary:#4d4330;--card-bg:#fdfaf2;--card-border:#e2d9c4;--side-bg:#f1eadb}
       *{margin:0;padding:0;box-sizing:border-box}
       html,body{background:var(--bg-color);color:var(--text-primary);font-family:'Inter',system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh;overflow-x:hidden;line-height:1.6}
       .app-shell{display:flex;min-height:100vh}
@@ -53,17 +53,10 @@
       .sk-block{height:48px;border-radius:8px;background:rgba(255,255,255,.04);margin:10px 0}
       .sk-title{width:78%}.sk-author{width:55%;height:8px}.sk-tag{width:38%;height:8px}
       @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
-      body.light-mode{--bg-color:#eef1fb;--text-primary:#141930;--text-secondary:#3d4e72;--card-bg:#fff;--card-border:rgba(79,70,229,.14)}
+      body.light-mode{--bg-color:#faf6ec;--text-primary:#2a2418;--text-secondary:#4d4330;--card-bg:#fdfaf2;--card-border:#e2d9c4;--side-bg:#f1eadb}
     </style>
     <link rel="stylesheet" href="/static/style.css" fetchpriority="high">
     <link rel="stylesheet" href="/static/washi.css" fetchpriority="high">
-    <!-- DNS prefetch for upstream APIs (loaded lazily after first paper render) -->
-    <link rel="dns-prefetch" href="//api.semanticscholar.org">
-    <link rel="dns-prefetch" href="//paperswithcode.com">
-    <link rel="dns-prefetch" href="//openreview.net">
-    <link rel="dns-prefetch" href="//api2.openreview.net">
-    <link rel="dns-prefetch" href="//huggingface.co">
-    <link rel="dns-prefetch" href="//api-inference.huggingface.co">
     <!-- Preload critical scripts so HTTP/2-3 multiplexing can start them early -->
     <link rel="preload" as="script" href="/static/app-utils.js">
     <link rel="preload" as="script" href="/static/disciplines.js">
@@ -75,6 +68,7 @@
     <script src="/static/script.js" defer></script>
 </head>
 <body class="theme-washi light-mode">
+    <a class="skip-link" href="#mainContent">跳至主要內容</a>
     <!-- SVG sprite：所有卡片共用，取代重複 inline SVG -->
     <svg width="0" height="0" style="position:absolute" aria-hidden="true">
         <defs>
@@ -99,10 +93,10 @@
 
     <div class="app-shell">
         <aside class="side">
-            <div class="side-brand" id="brandHome" role="button" tabindex="0" title="回到主頁（顯示全部論文）">
+            <button class="side-brand" id="brandHome" type="button" title="回到主頁（顯示全部論文）" aria-label="回到首頁，顯示全部論文">
                 <span class="brand-mark" aria-hidden="true">📚</span>
                 <span class="logo" id="brandLogo" role="img" aria-label="Scholarly">Scholarly<span aria-hidden="true">.</span></span>
-            </div>
+            </button>
             <div class="side-discipline">
                 <button id="switchDisciplineBtn" class="switch-discipline-btn" title="切換研究領域">
                     <span id="activeDisciplineBadge" class="discipline-badge">選擇領域</span>
@@ -114,21 +108,21 @@
                 <div class="category-filters-wrapper">
                     <button class="filter-arrow filter-arrow-left" id="filterArrowLeft" aria-label="向左捲動" hidden>&#8249;</button>
                     <div class="category-filters">
-                        <button class="category-btn active" data-filter="all">All</button>
-                        <button class="category-btn" data-filter="favorites">⭐ 收藏夾</button>
-                        <button class="category-btn" data-filter="my_fields" title="把你追蹤的多個研究領域合併成單一去重、排序的動態（在「切換研究領域」面板用 ☆ 追蹤）">🗂️ 我的領域</button>
-                        <button class="category-btn" data-filter="hf_daily" title="HuggingFace 每日精選（社群 upvote）">🤗 HF Daily</button>
-                        <button class="category-btn" data-filter="hot" title="跨所有領域近期爆發中的論文（citation/HF/star burst 聚合）— 大家正在關注什麼">🌐 全領域熱榜</button>
-                        <button class="category-btn" data-filter="emerging" title="近期引用／社群熱度爆發中的論文（citation + HF velocity 融合）">🚀 爆發中</button>
-                        <button class="category-btn" data-filter="popular" title="全站使用者近 7 天開啟最多的論文（匿名點擊熱度）">🔥 熱門</button>
-                        <button class="category-btn" data-filter="reviews" title="四大會議（ICLR/NeurIPS/ICML/COLM）當前審查週期評分最高的投稿">📊 評審熱度</button>
+                        <button class="category-btn active" data-filter="all" aria-pressed="true">All</button>
+                        <button class="category-btn" data-filter="favorites" aria-pressed="false">⭐ 收藏夾</button>
+                        <button class="category-btn" data-filter="my_fields" aria-pressed="false" title="把你追蹤的多個研究領域合併成單一去重、排序的動態（在「切換研究領域」面板用 ☆ 追蹤）">🗂️ 我的領域</button>
+                        <button class="category-btn" data-filter="hf_daily" aria-pressed="false" title="HuggingFace 每日精選（社群 upvote）">🤗 HF Daily</button>
+                        <button class="category-btn" data-filter="hot" aria-pressed="false" title="跨所有領域近期爆發中的論文（citation/HF/star burst 聚合）— 大家正在關注什麼">🌐 全領域熱榜</button>
+                        <button class="category-btn" data-filter="emerging" aria-pressed="false" title="近期引用／社群熱度爆發中的論文（citation + HF velocity 融合）">🚀 爆發中</button>
+                        <button class="category-btn" data-filter="popular" aria-pressed="false" title="全站使用者近 7 天開啟最多的論文（匿名點擊熱度）">🔥 熱門</button>
+                        <button class="category-btn" data-filter="reviews" aria-pressed="false" title="四大會議（ICLR/NeurIPS/ICML/COLM）當前審查週期評分最高的投稿">📊 評審熱度</button>
                         <!-- 頂會嚴選 + 子選單 -->
                         <div class="top-conf-wrapper">
-                            <button class="category-btn top-conf-btn" data-filter="top_conf" id="topConfBtn">
+                            <button class="category-btn top-conf-btn" data-filter="top_conf" id="topConfBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="confSubmenu" aria-pressed="false">
                                 🏆 頂會嚴選
                                 <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                             </button>
-                            <div class="conf-submenu" id="confSubmenu">
+                            <div class="conf-submenu" id="confSubmenu" role="menu">
                                 <!-- Conf items injected dynamically per discipline -->
                             </div>
                         </div>
@@ -169,6 +163,7 @@
             </div>
             <div class="controls">
                 <div class="search-box">
+                    <label class="sr-only" for="searchInput">搜尋論文</label>
                     <input type="search" id="searchInput" name="visionary-search" placeholder="搜尋標題、作者或關鍵字（Enter 搜全庫）" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
                     <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                     <button id="semanticToggle" class="semantic-toggle" title="切換語意搜尋（理解語句而非字面匹配）" aria-pressed="false">🧠</button>
@@ -179,7 +174,7 @@
             </div>
         </header>
 
-        <main>
+        <main id="mainContent" tabindex="-1" aria-busy="true">
             <!-- 排序/時間範圍常駐列(主題列下、結果上)。renderPapers 只更新 theme/meta,不重建這個 wrapper,避免 wrappers 被一起銷毀 -->
             <div id="countHeader" class="count-header">
                 <span class="count-theme"></span>
@@ -190,28 +185,28 @@
                     <button class="time-range-btn" data-range="quarter">三月<span>3M</span></button>
                 </div>
                 <div class="sort-wrapper" id="sortWrapper">
-                    <button class="sort-trigger" id="sortTrigger">
+                    <button class="sort-trigger" id="sortTrigger" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="sortSubmenu">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
                         <span id="sortLabel">熱與新</span>
                         <svg class="sort-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
-                    <div class="sort-submenu" id="sortSubmenu">
-                        <button class="sort-item active" data-value="hot">🔥 熱與新 <span>Hot &amp; New</span></button>
-                        <button class="sort-item" data-value="latest">⚡ 最新 <span>Newest</span></button>
-                        <button class="sort-item" data-value="popularity">🔥 熱門度 <span>Hotness</span></button>
-                        <button class="sort-item" data-value="citations">📊 引用度 <span>Citations</span></button>
-                        <button class="sort-item" data-value="value">💎 價值分數 <span>Value</span></button>
-                        <button class="sort-item" data-value="velocity">🚀 引用速度 <span>Velocity</span></button>
-                        <button class="sort-item" data-value="hf">🤗 HF 熱度 <span>Upvotes</span></button>
-                        <button class="sort-item" data-value="hot3m">🔥 近三月熱門 <span>Hot 3M</span></button>
+                    <div class="sort-submenu" id="sortSubmenu" role="menu">
+                        <button class="sort-item active" data-value="hot" role="menuitemradio" aria-checked="true">🔥 熱與新 <span>Hot &amp; New</span></button>
+                        <button class="sort-item" data-value="latest" role="menuitemradio" aria-checked="false">⚡ 最新 <span>Newest</span></button>
+                        <button class="sort-item" data-value="popularity" role="menuitemradio" aria-checked="false">🔥 熱門度 <span>Hotness</span></button>
+                        <button class="sort-item" data-value="citations" role="menuitemradio" aria-checked="false">📊 引用度 <span>Citations</span></button>
+                        <button class="sort-item" data-value="value" role="menuitemradio" aria-checked="false">💎 價值分數 <span>Value</span></button>
+                        <button class="sort-item" data-value="velocity" role="menuitemradio" aria-checked="false">🚀 引用速度 <span>Velocity</span></button>
+                        <button class="sort-item" data-value="hf" role="menuitemradio" aria-checked="false">🤗 HF 熱度 <span>Upvotes</span></button>
+                        <button class="sort-item" data-value="hot3m" role="menuitemradio" aria-checked="false">🔥 近三月熱門 <span>Hot 3M</span></button>
                     </div>
                 </div>
                 <button id="favExportBtn" class="fav-export-btn hidden" title="匯出收藏為 BibTeX">⬇ 匯出 BibTeX</button>
                 <span class="count-meta"></span>
             </div>
-            <div id="coverageBar" class="coverage-bar hidden" aria-live="polite"></div>
-            <div id="loader" class="loader-container">
-                <div class="spinner"></div>
+            <div id="coverageBar" class="coverage-bar hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+            <div id="loader" class="loader-container" role="status" aria-live="polite" aria-atomic="true" aria-busy="true">
+                <div class="spinner" aria-hidden="true"></div>
                 <p id="loaderText">正在自動為您抓取最新論文...</p>
                 <div class="skeleton-grid" aria-hidden="true">
                     <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
@@ -223,7 +218,7 @@
                 </div>
             </div>
             <div id="loadStatus" class="hidden" role="status" aria-live="polite"></div>
-            <div id="loadError" class="hidden no-results" role="alert">
+            <div id="loadError" class="hidden no-results" role="alert" aria-live="assertive" aria-atomic="true">
                 <p id="loadErrorText">目前無法載入論文，請稍後再試。</p>
                 <button id="retryLoadBtn" class="no-results-action" type="button">重新嘗試</button>
             </div>
@@ -260,7 +255,7 @@
                             <button class="tag-add-btn" title="新增標籤">＋ 標籤</button>
                         </div>
                         <div class="note-panel">
-                            <textarea class="note-textarea" placeholder="在此輸入個人筆記…（支援任意文字）"></textarea>
+                            <textarea class="note-textarea" placeholder="在此輸入個人筆記…（支援任意文字）" aria-label="個人筆記"></textarea>
                             <div class="note-actions">
                                 <button class="note-cancel-btn">取消</button>
                                 <button class="note-save-btn">儲存筆記</button>
@@ -271,11 +266,11 @@
                         <span class="paper-date"></span>
                         <span class="badge-slot"></span>
                         <span class="github-slot"></span>
-                        <button class="note-btn" title="個人筆記">
+                        <button class="note-btn" type="button" title="個人筆記" aria-expanded="false">
                             <svg width="12" height="12"><use href="#icon-note"/></svg>
                             <span class="note-label">筆記</span>
                         </button>
-                        <button class="cite-btn" title="引用 / 複製 / 分享" aria-haspopup="menu">
+                        <button class="cite-btn" type="button" title="引用 / 複製 / 分享" aria-haspopup="menu" aria-expanded="false" aria-controls="cardActionMenu">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h4v6H6.5L5 16V9a2 2 0 0 1 2-2zm9 0h4v6h-4.5L14 16V9a2 2 0 0 1 2-2z"/></svg>
                             <span class="cite-label">引用</span>
                         </button>
@@ -301,6 +296,7 @@
         </main>
         </div><!-- /.container -->
     </div><!-- /.app-shell -->
+    <div id="toastRegion" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
     <!-- 右鍵選單 -->
     <div id="ctxMenu" class="ctx-menu hidden">
@@ -326,9 +322,10 @@
             <div class="dp-header">
                 <h2 class="dp-title" id="dpTitle">選擇你的研究領域</h2>
                 <p class="dp-subtitle">主領域決定 arXiv 分類與頂會主題。點卡片切換，★ 加入追蹤清單（跨 2+ 領域論文會標為 🌉 Bridge）。</p>
-                <button id="disciplinePickerClose" class="dp-close" hidden>×</button>
+                <button id="disciplinePickerClose" class="dp-close" type="button" aria-label="關閉研究領域選擇器" hidden>×</button>
             </div>
             <div class="dp-toolbar">
+                <label class="sr-only" for="dpSearchInput">搜尋研究領域</label>
                 <div class="dp-search">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     <input id="dpSearchInput" type="search" placeholder="搜尋領域（中文、英文、arXiv 類別皆可）…" autocomplete="off" spellcheck="false">
@@ -344,12 +341,13 @@
     <button id="backToTopBtn" class="back-to-top" title="回到頂部">↑</button>
 
     <!-- 命令面板 (#13) — Ctrl/Cmd-K -->
-    <div id="cmdPalette" class="cmd-palette hidden" role="dialog" aria-modal="true" aria-label="命令面板">
+    <div id="cmdPalette" class="cmd-palette hidden" role="dialog" aria-modal="true" aria-label="命令面板" aria-hidden="true">
         <div class="cmd-backdrop"></div>
         <div class="cmd-panel">
             <div class="cmd-input-row">
+                <label class="sr-only" for="cmdInput">搜尋指令</label>
                 <svg class="cmd-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input id="cmdInput" type="text" placeholder="輸入指令或關鍵字：切換領域、分類、排序、搜尋…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="cmdResults" aria-autocomplete="list">
+                <input id="cmdInput" type="text" placeholder="輸入指令或關鍵字：切換領域、分類、排序、搜尋…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="cmdResults" aria-autocomplete="list">
                 <kbd class="cmd-esc">Esc</kbd>
             </div>
             <ul id="cmdResults" class="cmd-results" role="listbox" aria-label="指令結果"></ul>

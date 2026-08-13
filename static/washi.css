@@ -17,13 +17,14 @@ body.theme-washi {
 
   --ink:          #2a2418;
   --ink-soft:     #4d4330;
-  --ink-mute:     #8a7e63;
+  --ink-mute:     #6f644e;
   --ink-pale:     #b9ad90;
+  --ink-pale-text:#776d59;
   --ink-rule:     rgba(42,36,24,0.12);
 
   /* accents (japanese palette) */
   --mustard:        #e6b422;
-  --mustard-deep:   #b58820;
+  --mustard-deep:   #776112;
   --mustard-soft:   #fbecb0;
   --mustard-wash:   rgba(230,180,34,0.18);
 
@@ -159,6 +160,10 @@ body.theme-washi .side-brand {
   align-items: flex-start;
   gap: 6px;
   padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 /* hanko 印 — 重新利用 .brand-mark 作為紅方印章 */
 body.theme-washi .side-brand {
@@ -225,6 +230,7 @@ body.theme-washi .side-brand::after {
 /* Discipline switcher */
 body.theme-washi .side-discipline { padding: 0; }
 body.theme-washi .switch-discipline-btn {
+  min-height: 44px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--r-md);
@@ -268,7 +274,7 @@ body.theme-washi .side-section-label .hint {
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: none;
-  color: var(--ink-pale);
+  color: var(--ink-pale-text);
   font-weight: 400;
 }
 
@@ -293,7 +299,8 @@ body.theme-washi .side-nav .category-btn {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 7px 14px !important;
+  min-height: 44px;
+  padding: 9px 14px !important;
   border-radius: var(--r-pill) !important;
   background: transparent !important;
   border: 1px solid transparent !important;
@@ -307,7 +314,6 @@ body.theme-washi .side-nav .category-btn {
   transition: all .15s var(--ease-brand) !important;
   box-shadow: none;
   line-height: 1.4;
-  min-height: 0;
 }
 body.theme-washi .side-nav .category-btn:hover {
   background: var(--card-bg) !important;
@@ -352,12 +358,13 @@ body.theme-washi .conf-submenu {
   padding: 6px;
 }
 body.theme-washi .conf-submenu .conf-item {
+  min-height: 44px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--ink-soft);
   font-family: var(--font-body);
   font-size: 12px;
-  padding: 6px 10px;
+  padding: 9px 10px;
   border-radius: var(--r-sm);
   white-space: nowrap;
 }
@@ -395,7 +402,7 @@ body.theme-washi .side-nav .add-topic-wrapper input {
   font-size: 12px;
   padding: 6px 14px;
 }
-body.theme-washi .side-nav .add-topic-wrapper input::placeholder { color: var(--ink-pale); }
+body.theme-washi .side-nav .add-topic-wrapper input::placeholder { color: var(--ink-pale-text); }
 body.theme-washi .side-nav .add-topic-wrapper input:focus {
   outline: none;
   border-color: transparent !important;
@@ -578,7 +585,7 @@ body.theme-washi .search-box input {
   box-shadow: none;
   transition: all .18s var(--ease-brand);
 }
-body.theme-washi .search-box input::placeholder { color: var(--ink-mute); }
+body.theme-washi .search-box input::placeholder { color: var(--ink-pale-text); }
 body.theme-washi .search-box input:focus {
   border-color: var(--mustard);
   background: var(--card-bg);
@@ -593,6 +600,8 @@ body.theme-washi .search-icon {
 body.theme-washi .pin-search-btn {
   position: absolute;
   right: 6px;
+  min-width: 44px;
+  min-height: 44px;
   background: transparent;
   border: none;
   color: var(--ink-mute);
@@ -620,6 +629,7 @@ body.theme-washi .time-range-wrapper {
 body.theme-washi .time-range-btn {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 6px;
   border: 0;
   border-radius: var(--r-sm);
@@ -650,6 +660,7 @@ body.theme-washi .time-range-btn.active {
 body.theme-washi .sort-trigger {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 8px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -675,6 +686,7 @@ body.theme-washi .sort-submenu {
   min-width: 240px;
 }
 body.theme-washi .sort-item {
+  min-height: 44px;
   font-family: var(--font-body);
   color: var(--ink);
   padding: 9px 12px;
@@ -794,16 +806,14 @@ body.theme-washi .paper-card.is-read::after {
   pointer-events: none;
 }
 
-/* star */
 body.theme-washi .star-btn {
   position: absolute;
   top: 12px; right: 12px;
+  min-width: 44px;
+  min-height: 44px;
   background: none !important;
   border: none;
-  color: var(--ink-pale);
-  min-width: 0;
-  min-height: 0;
-  width: auto; height: auto;
+  color: var(--ink-pale-text);
   padding: 4px;
   font-size: 18px;
   border-radius: 50%;
@@ -822,6 +832,7 @@ body.theme-washi .star-btn.starred { color: var(--vermillion); }
 body.theme-washi .read-btn {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 4px;
   background: var(--paper-shade);
   border: 1px solid var(--card-border);
@@ -1052,6 +1063,7 @@ body.theme-washi .tag-chip.tag-bridge {
 }
 body.theme-washi .tag-chip .tag-remove { color: var(--mustard-deep); opacity: 0.55; }
 body.theme-washi .tag-add-btn {
+  min-height: 44px;
   background: transparent;
   border: 1px dashed var(--ink-pale);
   color: var(--ink-mute);
@@ -1104,6 +1116,7 @@ body.theme-washi .note-textarea {
   min-height: 120px;
 }
 body.theme-washi .note-cancel-btn {
+  min-height: 44px;
   background: transparent;
   border: 1px solid var(--card-border);
   color: var(--ink-mute);
@@ -1113,6 +1126,7 @@ body.theme-washi .note-cancel-btn {
   cursor: pointer;
 }
 body.theme-washi .note-save-btn {
+  min-height: 44px;
   background: var(--mustard);
   border: 1.5px solid var(--ink);
   color: var(--ink);
@@ -1213,9 +1227,11 @@ body.theme-washi .github-link-btn:hover {
   border-color: var(--ink);
 }
 
-body.theme-washi .note-btn {
+body.theme-washi .note-btn,
+body.theme-washi .cite-btn {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 4px;
   background: var(--plum-soft);
   border: 1px solid var(--plum);
@@ -1303,7 +1319,7 @@ body.theme-washi .dp-search input:focus {
   background: var(--paper-shade);
   box-shadow: 0 0 0 3px var(--mustard-wash);
 }
-body.theme-washi .dp-search input::placeholder { color: var(--ink-pale); }
+body.theme-washi .dp-search input::placeholder { color: var(--ink-pale-text); }
 /* Category chips */
 body.theme-washi .dp-chip {
   background: var(--paper);
@@ -1409,10 +1425,16 @@ body.theme-washi .dp-card-confs,
 body.theme-washi .dp-card-topics {
   color: var(--ink-mute);
 }
-body.theme-washi .dp-track-star { color: var(--ink-pale); }
+body.theme-washi .dp-track-star {
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--ink-pale-text);
+}
 body.theme-washi .dp-track-star.active,
 body.theme-washi .dp-track-star:hover { color: var(--vermillion); }
 body.theme-washi .dp-close {
+  min-width: 44px;
+  min-height: 44px;
   background: transparent;
   border: none;
   color: var(--ink-mute);
@@ -1503,6 +1525,8 @@ body.theme-washi .topic-suggestions .ts-chip:hover {
    ============================================================ */
 body.theme-washi .kbd-hint-btn,
 body.theme-washi .back-to-top {
+  min-width: 44px;
+  min-height: 44px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   color: var(--ink-soft);
@@ -1540,14 +1564,29 @@ body.theme-washi .ctx-item {
 body.theme-washi .ctx-item:hover { background: var(--paper-shade); }
 body.theme-washi .ctx-danger { color: var(--vermillion); }
 
+body.theme-washi .skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 10000;
+  padding: 10px 14px;
+  border: 2px solid var(--mustard-deep);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  transform: translateY(-150%);
+  transition: transform .15s var(--ease-brand);
+}
+body.theme-washi .skip-link:focus { transform: translateY(0); }
 /* ============================================================
    Focus states
    ============================================================ */
+body.theme-washi a:focus-visible,
 body.theme-washi button:focus-visible,
 body.theme-washi input:focus-visible,
 body.theme-washi select:focus-visible,
 body.theme-washi textarea:focus-visible {
-  outline: 2px solid var(--mustard);
+  outline: 2px solid var(--mustard-deep);
   outline-offset: 2px;
 }
 
@@ -1578,8 +1617,37 @@ body.theme-washi textarea:focus-visible {
     gap: 6px;
   }
   body.theme-washi .side-foot { display: none; }
+  body.theme-washi .search-box { min-width: 0; }
+  body.theme-washi .search-box input { padding-right: 140px; }
+  body.theme-washi .semantic-toggle,
+  body.theme-washi .cross-disc-toggle,
+  body.theme-washi .pin-search-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  body.theme-washi .semantic-toggle { right: 88px; }
+  body.theme-washi .cross-disc-toggle { right: 44px; }
+  body.theme-washi .pin-search-btn { right: 0; }
+  body.theme-washi .no-results-action,
+  body.theme-washi .fav-export-btn,
+  body.theme-washi .topic-suggestions .ts-chip,
+  body.theme-washi .recent-searches .rs-chip,
+  body.theme-washi .recent-searches .rs-clear,
+  body.theme-washi .github-link-btn,
+  body.theme-washi .paper-link,
+  body.theme-washi .dp-chip {
+    min-height: 44px;
+  }
+  body.theme-washi .github-link-btn,
+  body.theme-washi .paper-link {
+    display: inline-flex;
+    align-items: center;
+  }
   body.theme-washi .container,
-  body.theme-washi .app-shell > .container { padding: 22px 18px 60px; }
+  body.theme-washi .app-shell > .container {
+    min-width: 0;
+    padding: 22px 18px 60px;
+  }
 }
 
 /* ============================================================

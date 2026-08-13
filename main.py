@@ -17,11 +17,12 @@ import secrets
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
-from collections.abc import Callable
+from urllib.parse import urlencode
 
 import httpx
 from dotenv import load_dotenv
@@ -1097,22 +1098,31 @@ def sw_root():
 
 
 @app.get("/robots.txt")
-def robots_txt():
+def robots_txt(request: Request):
+    sitemap_url = _html.escape(f"{request.base_url}sitemap.xml", quote=True)
     body = (
         "User-agent: *\n"
         "Allow: /\n"
         "Disallow: /api/\n"
-        "Sitemap: /sitemap.xml\n"
+        f"Sitemap: {sitemap_url}\n"
     )
     return Response(content=body, media_type="text/plain")
 
 
 @app.get("/sitemap.xml")
-def sitemap_xml():
+def sitemap_xml(request: Request):
     # 列出每個 discipline 的根頁面 (CSR with query),讓爬蟲至少知道存在
-    urls = ['<url><loc>/</loc><changefreq>hourly</changefreq><priority>1.0</priority></url>']
-    for did in DISCIPLINES.keys():
-        urls.append(f'<url><loc>/?discipline={did}</loc><changefreq>daily</changefreq><priority>0.7</priority></url>')
+    base_url = str(request.base_url)
+    locations = [base_url]
+    locations.extend(f"{base_url}?{urlencode({'discipline': did})}" for did in DISCIPLINES)
+    urls = [
+        f"<url><loc>{_html.escape(location, quote=True)}</loc>"
+        f"<changefreq>{changefreq}</changefreq><priority>{priority}</priority></url>"
+        for location, changefreq, priority in [
+            (locations[0], "hourly", "1.0"),
+            *((location, "daily", "0.7") for location in locations[1:]),
+        ]
+    ]
     body = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
