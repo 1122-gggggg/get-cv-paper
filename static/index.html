@@ -65,9 +65,11 @@
     <link rel="dns-prefetch" href="//huggingface.co">
     <link rel="dns-prefetch" href="//api-inference.huggingface.co">
     <!-- Preload critical scripts so HTTP/2-3 multiplexing can start them early -->
+    <link rel="preload" as="script" href="/static/app-utils.js">
     <link rel="preload" as="script" href="/static/disciplines.js">
     <link rel="preload" as="script" href="/static/value-metrics.js">
     <link rel="preload" as="script" href="/static/script.js" fetchpriority="high">
+    <script src="/static/app-utils.js" defer></script>
     <script src="/static/disciplines.js" defer></script>
     <script src="/static/value-metrics.js" defer></script>
     <script src="/static/script.js" defer></script>
@@ -219,6 +221,11 @@
                     <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
                     <div class="skeleton-card"><div class="sk-line sk-title"></div><div class="sk-line sk-author"></div><div class="sk-block"></div><div class="sk-line sk-tag"></div></div>
                 </div>
+            </div>
+            <div id="loadStatus" class="hidden" role="status" aria-live="polite"></div>
+            <div id="loadError" class="hidden no-results" role="alert">
+                <p id="loadErrorText">目前無法載入論文，請稍後再試。</p>
+                <button id="retryLoadBtn" class="no-results-action" type="button">重新嘗試</button>
             </div>
 
             <div id="papersGrid" class="papers-grid hidden">

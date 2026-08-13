@@ -2347,14 +2347,14 @@ window.getTopicGroups = function (discipline) {
 };
 
 window.getActiveDiscipline = function () {
-    const saved = localStorage.getItem('visionary_discipline');
+    const saved = window.ScholarlyUtils.storage.get('visionary_discipline');
     if (saved && window.DISCIPLINES[saved]) return window.DISCIPLINES[saved];
     return null;
 };
 
 window.setActiveDiscipline = function (id) {
     if (!window.DISCIPLINES[id]) return;
-    localStorage.setItem('visionary_discipline', id);
+    window.ScholarlyUtils.storage.set('visionary_discipline', id);
 };
 
 // ── 跨領域 Bridge Papers（PR#3）─────────────────────────────────
@@ -2415,12 +2415,12 @@ window.detectBridgeDisciplines = function (paper) {
 // ── 多領域追蹤清單（使用者可勾選多個領域，PR#3 onboarding）────
 const TRACKS_KEY = 'visionary_tracks_v1';
 window.getTracks = function () {
-    try {
-        const arr = JSON.parse(localStorage.getItem(TRACKS_KEY) || '[]');
-        return Array.isArray(arr) ? arr.filter(id => !!window.DISCIPLINES[id]) : [];
-    } catch (e) { return []; }
+    const tracks = window.ScholarlyUtils.storage.readJson(TRACKS_KEY, []);
+    return window.ScholarlyUtils.isStringArray(tracks, Number.MAX_SAFE_INTEGER)
+        ? tracks.filter(id => !!window.DISCIPLINES[id])
+        : [];
 };
 window.setTracks = function (ids) {
     const clean = (ids || []).filter(id => !!window.DISCIPLINES[id]);
-    localStorage.setItem(TRACKS_KEY, JSON.stringify(clean));
+    window.ScholarlyUtils.storage.set(TRACKS_KEY, JSON.stringify(clean));
 };

@@ -1,10 +1,12 @@
+const { storage: _storage, safeHttpUrl, isPlainObject, isStringArray } = window.ScholarlyUtils;
+
 let allPapers = [];      // 7 天
 let lastDataAsOf = 0;    // 主題論文資料建構時間（毫秒），供新鮮度標記使用
 let lastPaperPayloadMeta = null;
 let monthPapers = [];    // 30 天（懶加載）
 let quarterPapers = [];  // 90 天（懶加載,用於近三月熱門）
 let currentCategory = 'all';
-const LEGACY_SORT_VALUE = localStorage.getItem('visionary_sort_v2') || '';
+const LEGACY_SORT_VALUE = _storage.get('visionary_sort_v2') || '';
 const SORT_MIGRATION = {
     latest: 'latest',
     hot_week: 'popularity',
@@ -21,8 +23,8 @@ const RANGE_MIGRATION = {
 };
 const SORT_VALUES = new Set(['hot', 'latest', 'popularity', 'citations', 'value', 'velocity', 'hf', 'hot3m']);
 const TIME_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter']);
-let currentSortValue = localStorage.getItem('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'hot';
-let currentTimeRange = localStorage.getItem('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
+let currentSortValue = _storage.get('visionary_sort_v3') || SORT_MIGRATION[LEGACY_SORT_VALUE] || 'hot';
+let currentTimeRange = _storage.get('visionary_time_range_v1') || RANGE_MIGRATION[LEGACY_SORT_VALUE] || 'week';
 if (!SORT_VALUES.has(currentSortValue)) currentSortValue = 'hot';
 if (!TIME_RANGE_VALUES.has(currentTimeRange)) currentTimeRange = 'week';
 const PAPERS_PER_PAGE = 9;
@@ -64,7 +66,7 @@ const _saveTimers = {};
 function scheduleSave(key, getVal, delay = 800) {
     clearTimeout(_saveTimers[key]);
     _saveTimers[key] = setTimeout(() => {
-        try { localStorage.setItem(key, JSON.stringify(getVal())); } catch (e) {}
+        _storage.set(key, JSON.stringify(getVal()));
     }, delay);
 }
 
@@ -226,43 +228,153 @@ const USER_STATE_PREFIXES = [
 ];
 let _userStateBackupTimer = null;
 
+const IMPORT_MAX_KEYS = 512;
+const IMPORT_MAX_VALUE_BYTES = 262144;
+const IMPORT_MAX_TOTAL_BYTES = 5242880;
+const USER_STATE_ARRAY_KEYS = new Set(['visionary_favorites', 'visionary_read_v1']);
+const USER_STATE_STRING_MAP_KEYS = new Set(['visionary_notes_v1']);
+
+function _matchesUserStatePrefix(key, prefix) {
+    return key === prefix || key.startsWith(`${prefix}:`) || key.startsWith(`${prefix}_`);
+}
+
 function _isUserStateKey(key) {
-    return USER_STATE_PREFIXES.some(prefix => key === prefix || key.startsWith(prefix + ':') || key.startsWith(prefix + '_'));
+    return USER_STATE_PREFIXES.some(prefix => _matchesUserStatePrefix(key, prefix));
+}
+
+function _isScopedUserStateKey(key, prefix) {
+    if (key === prefix) return true;
+    if (!key.startsWith(`${prefix}:`)) return false;
+    const disciplineId = key.slice(prefix.length + 1);
+    return !!window.DISCIPLINES?.[disciplineId];
+}
+
+function _isImportableUserStateKey(key) {
+    return USER_STATE_ARRAY_KEYS.has(key)
+        || USER_STATE_STRING_MAP_KEYS.has(key)
+        || key === 'visionary_paper_tags_v1'
+        || key === 'visionary_sort_v2'
+        || key === 'visionary_sort_v3'
+        || key === 'visionary_time_range_v1'
+        || key === 'visionary_semantic_on'
+        || key === 'visionary_cross_disc_on'
+        || key === 'visionary_discipline'
+        || _isScopedUserStateKey(key, 'visionary_pinned_topics')
+        || _isScopedUserStateKey(key, 'visionary_deleted_builtins')
+        || _isScopedUserStateKey(key, 'visionary_renamed_builtins')
+        || _isScopedUserStateKey(key, 'visionary_last_category');
+}
+
+function _isStringMap(value) {
+    return isPlainObject(value) && Object.values(value).every(item => typeof item === 'string');
+}
+
+function _isPaperTagsMap(value) {
+    return isPlainObject(value)
+        && Object.values(value).every(tags => isStringArray(tags, Number.MAX_SAFE_INTEGER));
+}
+
+function _isValidCategory(value) {
+    const valid = new Set(['all', 'favorites', 'my_fields', 'hf_daily', 'hot', 'emerging', 'popular', 'reviews', 'top_conf']);
+    for (const discipline of Object.values(window.DISCIPLINES || {})) {
+        for (const topic of discipline.topics || []) valid.add(topic);
+        for (const group of discipline.topicGroups || []) {
+            for (const topic of group.topics || []) valid.add(topic);
+        }
+        for (const conference of discipline.confs || []) {
+            if (conference.key) valid.add(`conf_${String(conference.key).replace(/\s+/g, '_')}`);
+        }
+    }
+    return valid.has(value);
+}
+
+function _parseImportedJson(value) {
+    try {
+        return JSON.parse(value);
+    } catch (_) {
+        throw new Error('備份資料格式不正確');
+    }
+}
+
+function _validateImportedValue(key, value) {
+    if (!_isImportableUserStateKey(key) || typeof value !== 'string') {
+        throw new Error('備份包含不支援的資料項目');
+    }
+
+    if (USER_STATE_ARRAY_KEYS.has(key)
+        || _isScopedUserStateKey(key, 'visionary_pinned_topics')
+        || _isScopedUserStateKey(key, 'visionary_deleted_builtins')) {
+        if (!isStringArray(_parseImportedJson(value), Number.MAX_SAFE_INTEGER)) {
+            throw new Error('備份資料格式不正確');
+        }
+        return;
+    }
+
+    if (USER_STATE_STRING_MAP_KEYS.has(key) || _isScopedUserStateKey(key, 'visionary_renamed_builtins')) {
+        if (!_isStringMap(_parseImportedJson(value))) throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (key === 'visionary_paper_tags_v1') {
+        if (!_isPaperTagsMap(_parseImportedJson(value))) throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (key === 'visionary_sort_v2') {
+        if (!Object.hasOwn(SORT_MIGRATION, value)) throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (key === 'visionary_sort_v3') {
+        if (!SORT_VALUES.has(value)) throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (key === 'visionary_time_range_v1') {
+        if (!TIME_RANGE_VALUES.has(value)) throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (key === 'visionary_semantic_on' || key === 'visionary_cross_disc_on') {
+        if (value !== '0' && value !== '1') throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (key === 'visionary_discipline') {
+        if (!window.DISCIPLINES?.[value]) throw new Error('備份資料格式不正確');
+        return;
+    }
+
+    if (!_isValidCategory(value)) throw new Error('備份資料格式不正確');
 }
 
 function collectUserState() {
     const out = {};
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && _isUserStateKey(key)) out[key] = localStorage.getItem(key);
-        }
-    } catch (e) {}
+    for (const key of _storage.keys()) {
+        const value = _storage.get(key);
+        if (_isUserStateKey(key) && value !== null) out[key] = value;
+    }
     return out;
 }
 
-function _storageSummary(state = collectUserState()) {
-    const notes = JSON.parse(state.visionary_notes_v1 || '{}');
-    const tags = JSON.parse(state.visionary_paper_tags_v1 || '{}');
-    const favs = JSON.parse(state.visionary_favorites || '[]');
-    const reads = JSON.parse(state.visionary_read_v1 || '[]');
+function _storageSummary() {
+    const notes = _storage.readJson('visionary_notes_v1', {});
+    const tags = _storage.readJson('visionary_paper_tags_v1', {});
+    const favs = _storage.readJson('visionary_favorites', []);
+    const reads = _storage.readJson('visionary_read_v1', []);
     return {
         favorites: Array.isArray(favs) ? favs.length : 0,
         read: Array.isArray(reads) ? reads.length : 0,
-        notes: notes && typeof notes === 'object' ? Object.keys(notes).length : 0,
-        tagged: tags && typeof tags === 'object' ? Object.keys(tags).length : 0,
+        notes: isPlainObject(notes) ? Object.keys(notes).length : 0,
+        tagged: isPlainObject(tags) ? Object.keys(tags).length : 0,
     };
 }
 
 function updateStorageStatus() {
     const el = document.getElementById('storageStatus');
     if (!el) return;
-    try {
-        const s = _storageSummary();
-        el.textContent = `${s.favorites} 收藏 · ${s.read} 已讀 · ${s.notes} 筆記 · ${s.tagged} 標籤`;
-    } catch (e) {
-        el.textContent = '本機資料可匯出備份';
-    }
+    const s = _storageSummary();
+    el.textContent = `${s.favorites} 收藏 · ${s.read} 已讀 · ${s.notes} 筆記 · ${s.tagged} 標籤`;
 }
 
 function _stateExportPayload(reason = 'manual') {
@@ -292,18 +404,47 @@ function exportUserState() {
     showToast('已匯出個人資料備份');
 }
 
-function _applyImportedUserState(payload) {
-    if (!payload || payload.app !== 'Scholarly' || typeof payload.localStorage !== 'object') {
+function _validateImportedUserState(payload) {
+    if (!isPlainObject(payload) || payload.app !== 'Scholarly' || !isPlainObject(payload.localStorage)) {
         throw new Error('備份格式不正確');
     }
-    let applied = 0;
-    for (const [key, value] of Object.entries(payload.localStorage)) {
-        if (!_isUserStateKey(key) || typeof value !== 'string') continue;
-        localStorage.setItem(key, value);
-        applied += 1;
+    if (payload.version !== USER_STATE_EXPORT_VERSION) {
+        throw new Error('不支援的備份版本');
     }
-    if (!applied) throw new Error('備份檔沒有可匯入的資料');
-    return applied;
+
+    const entries = Object.entries(payload.localStorage);
+    if (!entries.length) throw new Error('備份檔沒有可匯入的資料');
+    if (entries.length > IMPORT_MAX_KEYS) throw new Error(`備份資料超過 ${IMPORT_MAX_KEYS} 筆上限`);
+
+    let totalBytes = 0;
+    for (const [, value] of entries) {
+        if (typeof value !== 'string') throw new Error('備份資料格式不正確');
+        const bytes = new TextEncoder().encode(value).byteLength;
+        if (bytes > IMPORT_MAX_VALUE_BYTES) throw new Error('備份單筆資料容量超過上限');
+        totalBytes += bytes;
+        if (totalBytes > IMPORT_MAX_TOTAL_BYTES) throw new Error('備份總容量超過上限');
+    }
+    for (const [key, value] of entries) _validateImportedValue(key, value);
+    return entries;
+}
+
+function _restoreImportedUserState(snapshot) {
+    for (const [key, value] of snapshot) {
+        if (value === null) _storage.remove(key);
+        else _storage.set(key, value);
+    }
+}
+
+function _applyImportedUserState(payload) {
+    const entries = _validateImportedUserState(payload);
+    const snapshot = entries.map(([key]) => [key, _storage.get(key)]);
+    for (const [key, value] of entries) {
+        if (!_storage.set(key, value)) {
+            _restoreImportedUserState(snapshot);
+            throw new Error('無法寫入本機儲存空間，已還原原有資料');
+        }
+    }
+    return entries.length;
 }
 
 async function importUserStateFile(file) {
@@ -361,24 +502,28 @@ function _ensureActionMenu() {
 }
 
 async function runCardAction(act, paper) {
+    const paperUrl = safeHttpUrl(paper.url);
     if (act === 'bibtex') {
         const ok = await copyText(toBibtex(paper));
         showToast(ok ? '已複製 BibTeX 引用' : '複製失敗，請手動選取');
-    } else if (act === 'link') {
-        const ok = await copyText(paper.url || '');
+    } else if (act === 'link' && paperUrl) {
+        const ok = await copyText(paperUrl);
         showToast(ok ? '已複製論文連結' : '複製失敗');
-    } else if (act === 'share') {
+    } else if (act === 'share' && paperUrl && navigator.share) {
         try {
-            await navigator.share({ title: paper.title || '論文', url: paper.url || '' });
-        } catch (e) { /* 使用者取消分享 */ }
+            await navigator.share({ title: paper.title || '論文', url: paperUrl });
+        } catch (_) { /* 使用者取消分享 */ }
     }
 }
 
 function openCardActionMenu(paper, anchorBtn) {
     const menu = _ensureActionMenu();
+    const paperUrl = safeHttpUrl(paper.url);
     _actionMenuPaper = paper;
+    const linkBtn = menu.querySelector('button[data-act="link"]');
     const shareBtn = menu.querySelector('button[data-act="share"]');
-    if (shareBtn) shareBtn.hidden = !navigator.share;
+    if (linkBtn) linkBtn.hidden = !paperUrl;
+    if (shareBtn) shareBtn.hidden = !paperUrl || !navigator.share;
     menu.classList.remove('hidden');
     const r = anchorBtn.getBoundingClientRect();
     const mw = menu.offsetWidth || 200;
@@ -594,16 +739,14 @@ function renderDisciplineFilters() {
     if (groups.length === 0) return;
 
     const expandedKey = _scopedKey('visionary_topic_groups_open', d.id);
-    let openSet;
-    try {
-        openSet = new Set(JSON.parse(localStorage.getItem(expandedKey) || '[]'));
-    } catch (e) { openSet = new Set(); }
+    const savedOpenGroups = _storage.readJson(expandedKey, []);
+    const openSet = new Set(isStringArray(savedOpenGroups, Number.MAX_SAFE_INTEGER) ? savedOpenGroups : []);
     if (openSet.size === 0 && groups.length > 0) {
         openSet.add(groups[0].name);
     }
 
     const persistOpen = () => {
-        try { localStorage.setItem(expandedKey, JSON.stringify([...openSet])); } catch (e) {}
+        _storage.set(expandedKey, JSON.stringify([...openSet]));
     };
 
     for (const g of groups) {
@@ -956,7 +1099,7 @@ function closeDisciplinePicker() {
 }
 
 function selectDiscipline(id) {
-    const prev = localStorage.getItem('visionary_discipline');
+    const prev = _storage.get('visionary_discipline');
     window.setActiveDiscipline(id);
     if (prev === id) {
         closeDisciplinePicker();
@@ -980,12 +1123,11 @@ function _recentSearchesKey() {
     return _scopedKey('visionary_recent_searches', ACTIVE_DISCIPLINE?.id || '');
 }
 function loadRecentSearches() {
-    try { return JSON.parse(localStorage.getItem(_recentSearchesKey()) || '[]'); }
-    catch (e) { return []; }
+    const searches = _storage.readJson(_recentSearchesKey(), []);
+    return isStringArray(searches, _RECENT_SEARCHES_MAX) ? searches : [];
 }
 function saveRecentSearches(arr) {
-    try { localStorage.setItem(_recentSearchesKey(), JSON.stringify(arr.slice(0, _RECENT_SEARCHES_MAX))); }
-    catch (e) {}
+    _storage.set(_recentSearchesKey(), JSON.stringify(arr.slice(0, _RECENT_SEARCHES_MAX)));
 }
 function pushRecentSearch(q) {
     q = (q || '').trim();
@@ -1044,21 +1186,23 @@ function orRatingTier(rating) {
 
 // ── 收藏夾系統 ─────────────────────────────────────────────────
 const FAVORITES_KEY = 'visionary_favorites';
-let favorites = new Set(JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]'));
+const savedFavorites = _storage.readJson(FAVORITES_KEY, []);
+let favorites = new Set(isStringArray(savedFavorites, Number.MAX_SAFE_INTEGER) ? savedFavorites : []);
 
 // ── 釘選主題系統 ────────────────────────────────────────────────
 // 這些 key 由 applyDiscipline() 動態加上 discipline 後綴
 let PINNED_TOPICS_KEY = 'visionary_pinned_topics';
 
 function loadPinnedTopics() {
-    const saved = JSON.parse(localStorage.getItem(PINNED_TOPICS_KEY) || '[]');
+    const saved = _storage.readJson(PINNED_TOPICS_KEY, []);
+    if (!isStringArray(saved, Number.MAX_SAFE_INTEGER)) return;
     saved.forEach(topic => addPinnedBtn(topic, false));
 }
 
 function savePinnedTopics() {
     const pinnedBtns = document.querySelectorAll('.category-btn[data-pinned="true"]');
     const topics = Array.from(pinnedBtns).map(b => b.dataset.filter);
-    localStorage.setItem(PINNED_TOPICS_KEY, JSON.stringify(topics));
+    _storage.set(PINNED_TOPICS_KEY, JSON.stringify(topics));
     scheduleUserStateBackup('pinned-topics');
 }
 
@@ -1115,12 +1259,13 @@ function deletePinnedBtn(btn) {
 
 // ── 已讀系統 ───────────────────────────────────────────────────
 const READ_KEY = 'visionary_read_v1';
-let readSet = new Set(JSON.parse(localStorage.getItem(READ_KEY) || '[]'));
+const savedReadSet = _storage.readJson(READ_KEY, []);
+let readSet = new Set(isStringArray(savedReadSet, Number.MAX_SAFE_INTEGER) ? savedReadSet : []);
 
 // #6 上次造訪時間：先讀舊值（本次 session 比對基準），再寫入「現在」供下次比對
 const LAST_VISIT_KEY = 'visionary_last_visit_v1';
-const PREV_VISIT_MS = Number(localStorage.getItem(LAST_VISIT_KEY) || 0);
-try { localStorage.setItem(LAST_VISIT_KEY, String(Date.now())); } catch (_) {}
+const PREV_VISIT_MS = Number(_storage.get(LAST_VISIT_KEY) || 0);
+_storage.set(LAST_VISIT_KEY, String(Date.now()));
 
 function newSinceVisitCount() {
     if (!PREV_VISIT_MS || !Array.isArray(allPapers)) return 0;
@@ -1141,7 +1286,7 @@ async function showNewSinceVisit() {
 }
 
 function saveReadSet() {
-    localStorage.setItem(READ_KEY, JSON.stringify([...readSet]));
+    _storage.set(READ_KEY, JSON.stringify([...readSet]));
     scheduleUserStateBackup('read');
 }
 
@@ -1169,11 +1314,11 @@ function toggleRead(url, card) {
 
 // ── 筆記系統 ───────────────────────────────────────────────────
 const NOTES_KEY = 'visionary_notes_v1';
-let notesMap = {};
-try { notesMap = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}'); } catch (e) { }
+let notesMap = _storage.readJson(NOTES_KEY, {});
+if (!_isStringMap(notesMap)) notesMap = {};
 
 function saveNotes() {
-    localStorage.setItem(NOTES_KEY, JSON.stringify(notesMap));
+    _storage.set(NOTES_KEY, JSON.stringify(notesMap));
     scheduleUserStateBackup('notes');
 }
 
@@ -1211,17 +1356,17 @@ function saveNote(url, card) {
 
 
 function saveFavorites() {
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
+    _storage.set(FAVORITES_KEY, JSON.stringify([...favorites]));
     scheduleUserStateBackup('favorites');
 }
 
 // ── 每篇論文自訂標籤 ─────────────────────────────────────────
 const PAPER_TAGS_KEY = 'visionary_paper_tags_v1';
-let paperTags = {};
-try { paperTags = JSON.parse(localStorage.getItem(PAPER_TAGS_KEY) || '{}'); } catch (e) { paperTags = {}; }
+let paperTags = _storage.readJson(PAPER_TAGS_KEY, {});
+if (!_isPaperTagsMap(paperTags)) paperTags = {};
 
 function savePaperTags() {
-    localStorage.setItem(PAPER_TAGS_KEY, JSON.stringify(paperTags));
+    _storage.set(PAPER_TAGS_KEY, JSON.stringify(paperTags));
     scheduleUserStateBackup('paper-tags');
 }
 
@@ -1256,15 +1401,15 @@ function allKnownTags() {
 }
 
 const PAPER_CLICKS_KEY = 'visionary_paper_clicks_v1';
-let paperClicks = {};
-try { paperClicks = JSON.parse(localStorage.getItem(PAPER_CLICKS_KEY) || '{}'); } catch (e) { paperClicks = {}; }
+let paperClicks = _storage.readJson(PAPER_CLICKS_KEY, {});
+if (!isPlainObject(paperClicks)) paperClicks = {};
 
 function getPaperClicks(url) {
     return Math.max(0, Number(paperClicks[url] || 0));
 }
 
 function savePaperClicks() {
-    localStorage.setItem(PAPER_CLICKS_KEY, JSON.stringify(paperClicks));
+    _storage.set(PAPER_CLICKS_KEY, JSON.stringify(paperClicks));
 }
 
 function recordPaperClick(url) {
@@ -1346,6 +1491,57 @@ const papersGrid = document.getElementById('papersGrid');
 const loader = document.getElementById('loader');
 const searchInput = document.getElementById('searchInput');
 const noResults = document.getElementById('noResults');
+const loadError = document.getElementById('loadError');
+const loadErrorText = document.getElementById('loadErrorText');
+const retryLoadBtn = document.getElementById('retryLoadBtn');
+const loadStatus = document.getElementById('loadStatus');
+
+function clearLoadError() {
+    loadError?.classList.add('hidden');
+}
+
+function clearLoadStatus() {
+    if (!loadStatus) return;
+    loadStatus.textContent = '';
+    loadStatus.classList.add('hidden');
+}
+
+function showLoadStatus(message) {
+    if (!loadStatus) return;
+    loadStatus.textContent = message;
+    loadStatus.classList.remove('hidden');
+}
+
+function showLoadError() {
+    if (loadErrorText) loadErrorText.textContent = '目前無法載入論文，請稍後再試。';
+    loadError?.classList.remove('hidden');
+    clearLoadStatus();
+    noResults.classList.add('hidden');
+    papersGrid.classList.add('hidden');
+    loader.classList.add('hidden');
+}
+
+function setPapersBusy(isBusy) {
+    papersGrid.setAttribute('aria-busy', String(isBusy));
+}
+
+async function retryPaperLoad() {
+    clearLoadError();
+    clearLoadStatus();
+    noResults.classList.add('hidden');
+    loader.classList.remove('hidden');
+    setPapersBusy(true);
+    startLoaderMessages();
+    try {
+        await _fetchAndApply(ACTIVE_DISCIPLINE?.id || 'cv');
+    } catch (_) {
+        showLoadError();
+    } finally {
+        stopLoaderMessages();
+        setPapersBusy(false);
+    }
+}
+
 
 let searchDebounceTimer = null;
 
@@ -1503,6 +1699,8 @@ async function _fetchAndApply(disc) {
     const opts = { days: 7, max: PAPER_FETCH_MAX };
     const { data, meta } = await _fetchPaperPayload(disc, opts);
     if ((ACTIVE_DISCIPLINE?.id || 'cv') !== disc) return; // 切過 disc 後丟掉舊回應
+    clearLoadError();
+    clearLoadStatus();
     lastDataAsOf = Number.isFinite(data.as_of) ? data.as_of * 1000 : Date.now();
     lastPaperPayloadMeta = meta;
     allPapers = indexPapers(data.papers || []);
@@ -1573,9 +1771,13 @@ function _readSSRPapers(disc) {
 }
 
 async function fetchPapers() {
-    papersGrid.classList.add('hidden');
+    const hasRenderedPapers = allPapers.length > 0 && !papersGrid.classList.contains('hidden');
+    if (!hasRenderedPapers) papersGrid.classList.add('hidden');
     noResults.classList.add('hidden');
     loader.classList.remove('hidden');
+    clearLoadError();
+    clearLoadStatus();
+    setPapersBusy(true);
     hideLiveRefreshPill();  // 換領域/重載時收起舊的新論文提示
     startLoaderMessages();
 
@@ -1602,22 +1804,24 @@ async function fetchPapers() {
             await filterPapers();
             scheduleBadgeUpdate();
         }
-    } catch (e) { /* IDB 壞了沒關係 */ }
+    } catch (_) { /* IDB 壞了沒關係 */ }
 
     // L2：fetch（SW 對 /api/papers 走 SWR，會立刻回 cache + 背景刷新後 postMessage）
     try {
         await _fetchAndApply(disc);
-    } catch (e) {
-        if (!usedCache) {
-            console.error(e);
-            showToast('獲取論文失敗，請稍後再試。 Error: ' + e.message);
-            loader.classList.add('hidden');
+    } catch (_) {
+        if (usedCache) {
+            showLoadStatus('網路更新失敗，正在顯示快取資料。');
+        } else {
+            showLoadError();
         }
     } finally {
         stopLoaderMessages();
+        setPapersBusy(false);
         if (usedCache || allPapers.length) prewarmExtendedPaperRanges();
     }
 }
+retryLoadBtn?.addEventListener('click', retryPaperLoad);
 
 function _onSWApiUpdated(payload) {
     if (payload?.path !== '/api/papers') return;
@@ -2052,6 +2256,7 @@ function buildCard(paper, index) {
 
     card.style.animationDelay = `${(index % 20) * 0.03}s`;
     card.dataset.url = paper.url;
+    const paperUrl = safeHttpUrl(paper.url);
 
     const isStarred = favorites.has(paper.url);
     const isRead = readSet.has(paper.url);
@@ -2094,9 +2299,16 @@ function buildCard(paper, index) {
 
     // Title / link
     const titleLink = card.querySelector('.paper-title-link');
-    titleLink.href = paper.url;
     titleLink.textContent = paper.title;
-    titleLink.setAttribute('aria-label', (paper.title || '論文') + '（在新分頁開啟）');
+    if (paperUrl) {
+        titleLink.href = paperUrl;
+        titleLink.setAttribute('aria-label', (paper.title || '論文') + '（在新分頁開啟）');
+    } else {
+        const titleText = document.createElement('span');
+        titleText.className = 'paper-title-text';
+        titleText.textContent = paper.title;
+        titleLink.replaceWith(titleText);
+    }
 
     // 我的領域(#14)/全領域熱榜(#20):標出論文來自哪個領域
     if ((currentCategory === 'my_fields' || currentCategory === 'hot') && (paper.field_name || (Array.isArray(paper.fields) && paper.fields.length))) {
@@ -2164,7 +2376,7 @@ function buildCard(paper, index) {
     // GitHub
     const pwcData = getPwcData(paper.url);
     const githubMatch = paper.summary.match(/https?:\/\/github\.com\/[\w\-]+\/[\w\-](?:[\w\-.]*[\w\-])?/i);
-    const githubUrl = pwcData?.github_url || (githubMatch ? githubMatch[0] : null);
+    const githubUrl = safeHttpUrl(pwcData?.github_url || (githubMatch ? githubMatch[0] : null));
     const githubSlot = card.querySelector('.github-slot');
     if (githubUrl && githubSlot) {
         const pwcStars = pwcData?.stars || 0;
@@ -2195,7 +2407,9 @@ function buildCard(paper, index) {
     }
 
     // Paper footer link
-    card.querySelector('.paper-link').href = paper.url;
+    const paperLink = card.querySelector('.paper-link');
+    if (paperUrl) paperLink.href = paperUrl;
+    else paperLink.remove();
 
     return card;
 }
@@ -2290,8 +2504,8 @@ function renderPapers(papers, customTitle) {
 const S2_CACHE_KEY = 's2_citations_v1';
 const S2_TTL = 6 * 3600 * 1000; // 6 小時
 const S2_MAX = 4000;
-let s2Cache = {};
-try { s2Cache = JSON.parse(localStorage.getItem(S2_CACHE_KEY) || '{}'); } catch (e) { }
+let s2Cache = _storage.readJson(S2_CACHE_KEY, {});
+if (!isPlainObject(s2Cache)) s2Cache = {};
 function purgeS2() {
     const keys = Object.keys(s2Cache);
     if (keys.length <= S2_MAX) return;
@@ -2545,8 +2759,8 @@ async function fetchCitationCounts(papers) {
 const PWC_CACHE_KEY = 'pwc_cache_v1';
 const PWC_TTL = 24 * 3600 * 1000; // 24 小時
 const PWC_MAX = 3000;
-let pwcCache = {};
-try { pwcCache = JSON.parse(localStorage.getItem(PWC_CACHE_KEY) || '{}'); } catch(e) {}
+let pwcCache = _storage.readJson(PWC_CACHE_KEY, {});
+if (!isPlainObject(pwcCache)) pwcCache = {};
 function purgePwc() {
     const keys = Object.keys(pwcCache);
     if (keys.length <= PWC_MAX) return;
@@ -3340,17 +3554,19 @@ let DELETED_BUILTIN_KEY = 'visionary_deleted_builtins';
 let RENAMED_BUILTIN_KEY = 'visionary_renamed_builtins';
 
 function loadDeletedBuiltins() {
-    try { return new Set(JSON.parse(localStorage.getItem(DELETED_BUILTIN_KEY) || '[]')); } catch (e) { return new Set(); }
+    const deleted = _storage.readJson(DELETED_BUILTIN_KEY, []);
+    return new Set(isStringArray(deleted, Number.MAX_SAFE_INTEGER) ? deleted : []);
 }
 function saveDeletedBuiltins(s) {
-    localStorage.setItem(DELETED_BUILTIN_KEY, JSON.stringify([...s]));
+    _storage.set(DELETED_BUILTIN_KEY, JSON.stringify([...s]));
     scheduleUserStateBackup('deleted-builtins');
 }
 function loadRenamedBuiltins() {
-    try { return JSON.parse(localStorage.getItem(RENAMED_BUILTIN_KEY) || '{}'); } catch (e) { return {}; }
+    const renamed = _storage.readJson(RENAMED_BUILTIN_KEY, {});
+    return _isStringMap(renamed) ? renamed : {};
 }
 function saveRenamedBuiltins(map) {
-    localStorage.setItem(RENAMED_BUILTIN_KEY, JSON.stringify(map));
+    _storage.set(RENAMED_BUILTIN_KEY, JSON.stringify(map));
     scheduleUserStateBackup('renamed-builtins');
 }
 
@@ -3486,7 +3702,7 @@ function _selectCategory(filter, activeEl) {
     document.querySelectorAll('.conf-item').forEach(b => b.classList.remove('active'));
     if (activeEl) activeEl.classList.add('active');
     currentCategory = filter;
-    localStorage.setItem(LAST_CATEGORY_KEY, filter);
+    _storage.set(LAST_CATEGORY_KEY, filter);
     // 按下 All 一律回到「都沒有篩選」的狀態:清空搜尋框
     if (filter === 'all') {
         const si = document.getElementById('searchInput');
@@ -3573,7 +3789,7 @@ function applyUrlStateLive(s) {
         if (s.range && TIME_RANGE_VALUES.has(s.range)) currentTimeRange = s.range;
         const targetCat = s.cat || 'all';
         currentCategory = targetCat;
-        try { localStorage.setItem(LAST_CATEGORY_KEY, targetCat); } catch (e) {}
+        _storage.set(LAST_CATEGORY_KEY, targetCat);
         document.querySelectorAll('.category-btn, .topic-item, .conf-item').forEach(b => b.classList.remove('active'));
         const catBtn = document.querySelector(
             `.category-btn[data-filter="${CSS.escape(targetCat)}"], .topic-item[data-filter="${CSS.escape(targetCat)}"], .conf-item[data-filter="${CSS.escape(targetCat)}"]`
@@ -3652,7 +3868,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindCategoryBtns();
 
     // 恢復上次的分類（URL cat 優先；找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
-    const savedCategory = _urlState.cat || localStorage.getItem(LAST_CATEGORY_KEY);
+    const savedCategory = _urlState.cat || _storage.get(LAST_CATEGORY_KEY);
     if (savedCategory && savedCategory !== 'all') {
         const isVirtual = savedCategory === 'favorites' || savedCategory === 'top_conf' || savedCategory === 'hf_daily' || savedCategory === 'emerging' || savedCategory === 'popular' || savedCategory === 'reviews' || CONF_FILTERS.has(savedCategory);
         const targetBtn = document.querySelector(
@@ -3669,7 +3885,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             // 該 category 已不存在 (主題被移除/換 discipline) → 重設為 all
             currentCategory = 'all';
-            localStorage.setItem(LAST_CATEGORY_KEY, 'all');
+            _storage.set(LAST_CATEGORY_KEY, 'all');
             const allBtn = document.querySelector('.category-btn[data-filter="all"]');
             if (allBtn) allBtn.classList.add('active');
         }
@@ -3823,7 +4039,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const next = btn.dataset.range;
                 if (!TIME_RANGE_VALUES.has(next) || next === currentTimeRange) return;
                 currentTimeRange = next;
-                try { localStorage.setItem('visionary_time_range_v1', next); } catch (e) {}
+                _storage.set('visionary_time_range_v1', next);
                 scheduleUserStateBackup('time-range');
                 updateTimeRangeUI();
                 await filterPapers();
@@ -3865,12 +4081,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const val = item.dataset.value;
                 if (!SORT_VALUES.has(val)) return;
                 currentSortValue = val;
-                try { localStorage.setItem('visionary_sort_v3', val); } catch (e) {}
+                _storage.set('visionary_sort_v3', val);
                 scheduleUserStateBackup('sort');
                 // 近三月熱門:語意上就是 90 天窗 + 引用排序,自動切到 quarter
                 if (val === 'hot3m' && currentTimeRange !== 'quarter') {
                     currentTimeRange = 'quarter';
-                    try { localStorage.setItem('visionary_time_range_v1', 'quarter'); } catch (e) {}
+                    _storage.set('visionary_time_range_v1', 'quarter');
                     scheduleUserStateBackup('time-range');
                     updateTimeRangeUI();
                 }
@@ -3930,10 +4146,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const crossDiscToggle = document.getElementById('crossDiscToggle');
     window._SEMANTIC_ON = false;
     window._CROSS_DISC_ON = false;
-    try {
-        window._SEMANTIC_ON = localStorage.getItem('visionary_semantic_on') === '1';
-        window._CROSS_DISC_ON = localStorage.getItem('visionary_cross_disc_on') === '1';
-    } catch (e) {}
+    window._SEMANTIC_ON = _storage.get('visionary_semantic_on') === '1';
+    window._CROSS_DISC_ON = _storage.get('visionary_cross_disc_on') === '1';
     function syncSemanticUI() {
         semanticToggle.classList.toggle('active', window._SEMANTIC_ON);
         semanticToggle.setAttribute('aria-pressed', window._SEMANTIC_ON);
@@ -3946,14 +4160,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     semanticToggle.addEventListener('click', () => {
         window._SEMANTIC_ON = !window._SEMANTIC_ON;
-        try { localStorage.setItem('visionary_semantic_on', window._SEMANTIC_ON ? '1' : '0'); } catch (e) {}
+        _storage.set('visionary_semantic_on', window._SEMANTIC_ON ? '1' : '0');
         scheduleUserStateBackup('semantic');
         syncSemanticUI();
         if (window._SEMANTIC_ON) searchInput.focus();
     });
     crossDiscToggle.addEventListener('click', () => {
         window._CROSS_DISC_ON = !window._CROSS_DISC_ON;
-        try { localStorage.setItem('visionary_cross_disc_on', window._CROSS_DISC_ON ? '1' : '0'); } catch (e) {}
+        _storage.set('visionary_cross_disc_on', window._CROSS_DISC_ON ? '1' : '0');
         scheduleUserStateBackup('cross-discipline');
         syncSemanticUI();
     });
@@ -4198,7 +4412,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ── 主題：固定淺色（移除黑夜模式）──
 document.body.classList.add('light-mode');
-try { localStorage.removeItem('visionary_theme'); } catch (_) {}
+_storage.remove('visionary_theme');
 
 // ── 回到頂部 ──────────────────────────────────────────────────
 const backToTopBtn = document.getElementById('backToTopBtn');

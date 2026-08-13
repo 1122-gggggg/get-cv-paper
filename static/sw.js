@@ -1,15 +1,16 @@
-// Visionary Service Worker
+// Scholarly Service Worker
 // 策略:
 //   靜態資源 → stale-while-revalidate
 //   /api/papers, /api/trending → SWR + 背景刷新後 postMessage 通知前端
-//   其他 /api/* → 不快取
-const VERSION = 'v11';
-const STATIC_CACHE = `visionary-static-${VERSION}`;
-const API_CACHE    = `visionary-api-${VERSION}`;
+//   其他路徑 → 由瀏覽器直接連線
+const VERSION = 'v12';
+const STATIC_CACHE = `scholarly-static-${VERSION}`;
+const API_CACHE = `scholarly-api-${VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/static/style.css',
     '/static/washi.css',
+    '/static/app-utils.js',
     '/static/script.js',
     '/static/value-metrics.js',
     '/static/disciplines.js',
@@ -20,61 +21,80 @@ const STATIC_ASSETS = [
 
 const SWR_API_PATHS = ['/api/papers', '/api/trending'];
 
-self.addEventListener('install', (e) => {
-    e.waitUntil(
-        caches.open(STATIC_CACHE).then(c => c.addAll(STATIC_ASSETS)).catch(() => {})
+self.addEventListener('install', (event) => {
+    event.waitUntil(
+        caches.open(STATIC_CACHE).then(cache => cache.addAll(STATIC_ASSETS)).catch(() => {})
     );
     self.skipWaiting();
 });
 
-self.addEventListener('activate', (e) => {
-    e.waitUntil(
+self.addEventListener('activate', (event) => {
+    event.waitUntil(
         caches.keys().then(keys =>
             Promise.all(
-                keys.filter(k => k !== STATIC_CACHE && k !== API_CACHE).map(k => caches.delete(k))
+                keys.filter(key => key !== STATIC_CACHE && key !== API_CACHE).map(key => caches.delete(key))
             )
         )
     );
     self.clients.claim();
 });
 
-async function broadcast(msg) {
+async function broadcast(message) {
     const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' });
-    for (const c of clients) c.postMessage(msg);
+    for (const client of clients) client.postMessage(message);
 }
 
-async function apiSWR(req, url) {
-    const cache = await caches.open(API_CACHE);
-    const cached = await cache.match(req);
+function conditionalRequest(request, cached) {
+    if (!cached) return request;
+    const headers = new Headers(request.headers);
+    const etag = cached.headers.get('ETag');
+    const lastModified = cached.headers.get('Last-Modified');
+    if (etag) headers.set('If-None-Match', etag);
+    else if (lastModified) headers.set('If-Modified-Since', lastModified);
+    return new Request(request, { headers });
+}
 
-    const networkPromise = fetch(req).then(async (resp) => {
-        // 304 (ETag 命中) → 不更新 cache,沿用舊版本
-        if (resp && resp.status === 200) {
-            try {
-                await cache.put(req, resp.clone());
-                broadcast({ type: 'api-updated', path: url.pathname, search: url.search });
-            } catch (err) {
-                // QuotaExceededError → 清掉最舊的一半項目再試一次
-                if (err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message || ''))) {
-                    try {
-                        const keys = await cache.keys();
-                        const drop = Math.max(1, Math.floor(keys.length / 2));
-                        await Promise.all(keys.slice(0, drop).map(k => cache.delete(k)));
-                        await cache.put(req, resp.clone());
-                        broadcast({ type: 'api-updated', path: url.pathname, search: url.search });
-                    } catch (_) { /* give up */ }
-                }
+async function cacheApiResponse(cache, request, response) {
+    try {
+        await cache.put(request, response.clone());
+        return true;
+    } catch (error) {
+        if (!error || (error.name !== 'QuotaExceededError' && !/quota/i.test(error.message || ''))) {
+            return false;
+        }
+        try {
+            const keys = await cache.keys();
+            const drop = Math.max(1, Math.floor(keys.length / 2));
+            await Promise.all(keys.slice(0, drop).map(key => cache.delete(key)));
+            await cache.put(request, response.clone());
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+}
+
+async function apiSWR(request, url, event) {
+    const cache = await caches.open(API_CACHE);
+    const cached = await cache.match(request);
+    const cachedEtag = cached?.headers.get('ETag') || null;
+    const networkRequest = conditionalRequest(request, cached);
+    const networkPromise = fetch(networkRequest).then(async (response) => {
+        if (response?.status === 304 && cached) return cached;
+        if (response?.status === 200) {
+            const stored = await cacheApiResponse(cache, request, response);
+            const nextEtag = response.headers.get('ETag') || null;
+            if (stored && (!cached || cachedEtag !== nextEtag)) {
+                await broadcast({ type: 'api-updated', path: url.pathname, search: url.search });
             }
         }
-        return resp;
+        return response;
     }).catch(() => null);
 
     if (cached) {
-        // 不 await network → 立刻回 cache,網路在背景刷新
-        networkPromise;
+        event.waitUntil(networkPromise);
         return cached;
     }
-    // 沒 cache 才等網路
     const fresh = await networkPromise;
     return fresh || new Response('{"papers":[]}', {
         status: 503,
@@ -82,37 +102,42 @@ async function apiSWR(req, url) {
     });
 }
 
-async function staticSWR(req) {
+async function staticSWR(request, event) {
     const cache = await caches.open(STATIC_CACHE);
-    const cached = await cache.match(req);
-    const headers = {};
+    const cached = await cache.match(request);
+    const networkRequest = conditionalRequest(request, cached);
+    const networkPromise = fetch(networkRequest).then(async (response) => {
+        if (response?.status === 304 && cached) return cached;
+        if (response?.ok) {
+            try {
+                await cache.put(request, response.clone());
+            } catch (_) {}
+        }
+        return response;
+    }).catch((error) => {
+        if (cached) return cached;
+        throw error;
+    });
+
     if (cached) {
-        const etag = cached.headers.get('ETag');
-        const lastMod = cached.headers.get('Last-Modified');
-        if (etag) headers['If-None-Match'] = etag;
-        else if (lastMod) headers['If-Modified-Since'] = lastMod;
+        event.waitUntil(networkPromise);
+        return cached;
     }
-    const fetchPromise = fetch(new Request(req, { headers })).then(resp => {
-        if (resp && resp.status === 304 && cached) return cached;
-        if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});
-        return resp;
-    }).catch(() => cached);
-    return cached || fetchPromise;
+    return networkPromise;
 }
 
-self.addEventListener('fetch', (e) => {
-    const req = e.request;
-    if (req.method !== 'GET') return;
-    const url = new URL(req.url);
+self.addEventListener('fetch', (event) => {
+    const request = event.request;
+    if (request.method !== 'GET') return;
+    const url = new URL(request.url);
     if (url.origin !== location.origin) return;
 
-    if (url.pathname.startsWith('/api/')) {
-        if (SWR_API_PATHS.includes(url.pathname)) {
-            e.respondWith(apiSWR(req, url));
-        }
-        // 其餘 /api/* 不攔截(由 browser 直連)
+    if (SWR_API_PATHS.includes(url.pathname)) {
+        event.respondWith(apiSWR(request, url, event));
         return;
     }
 
-    e.respondWith(staticSWR(req));
+    if (url.pathname === '/' || url.pathname.startsWith('/static/')) {
+        event.respondWith(staticSWR(request, event));
+    }
 });
