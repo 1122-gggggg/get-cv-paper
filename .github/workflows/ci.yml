@@ -1,5 +1,5 @@
-# CI test gate only. Deployment is handled out-of-band on the Oracle Cloud VM
-# (git pull + docker compose up -d --build); Fly.io auto-deploy was removed.
+# CI test gate only. Deployment is on Render (get-cv-paper.onrender.com) via
+# render.yaml Blueprint + GitHub auto-deploy; manual trigger via Render dashboard.
 
 name: CI
 

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: get-cv-paper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: CACHE_DIR
+        value: /data
+      - key: OAI_HARVEST_ENABLED
+        value: "1"
+      - key: OAI_HARVEST_SETS
+        value: cs
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: METRICS_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: BETTERSTACK_TOKEN
+        sync: false
