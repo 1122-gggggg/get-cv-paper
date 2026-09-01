@@ -32,6 +32,19 @@ class SecurityHeaderTests(unittest.TestCase):
         self.assertNotIn("apis.google.com", csp)
 
 
+    def test_vary_and_cache_control_on_api_endpoints(self):
+        r_health = self.client.get("/api/health")
+        self.assertEqual(r_health.status_code, 200)
+        self.assertIn("stale-while-revalidate=60", r_health.headers.get("cache-control", ""))
+
+        r_papers = self.client.get("/api/papers?discipline=cv")
+        self.assertEqual(r_papers.status_code, 200)
+        self.assertIn("Accept-Encoding", r_papers.headers.get("vary", ""))
+        self.assertIn("stale-while-revalidate=60", r_papers.headers.get("cache-control", ""))
+        self.assertIn("stale-if-error=120", r_papers.headers.get("cache-control", ""))
+        self.assertIn("public, max-age=30, stale-while-revalidate=120", r_papers.headers.get("cdn-cache-control", ""))
+        self.assertTrue(r_papers.headers.get("etag"))
+
 class RateLimitTests(unittest.TestCase):
     @staticmethod
     def _client(burst: int, path: str = "/api/x") -> TestClient:

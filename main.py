@@ -313,6 +313,21 @@ def _bounded_int(
     return max(min_value, min(max_value, n))
 
 
+def _bounded_optional_int(
+    value: int | str | None,
+    *,
+    min_value: int = 0,
+    max_value: int = 1_000_000,
+) -> int | None:
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(min_value, min(max_value, n))
+
+
 def _unique_csv(raw: str, *, max_items: int, field_name: str = "ids") -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -719,6 +734,14 @@ class HeadersMiddleware:
                 headers["Cache-Control"] = "public, max-age=300, must-revalidate"
             else:
                 headers["Cache-Control"] = "public, max-age=86400"
+        elif path.startswith("/api/"):
+            if path in ("/api/papers", "/api/feed", "/api/hot", "/api/trending", "/api/emerging", "/api/popular"):
+                vary = headers.get("Vary")
+                if not vary:
+                    headers["Vary"] = "Accept-Encoding"
+                elif "Accept-Encoding" not in vary:
+                    headers["Vary"] = f"{vary}, Accept-Encoding"
+            headers.setdefault("Cache-Control", "public, max-age=60, stale-while-revalidate=60")
         headers.setdefault("X-Content-Type-Options", "nosniff")
         headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         headers.setdefault("X-Frame-Options", "SAMEORIGIN")
@@ -951,6 +974,8 @@ def _slim_paper(p: dict) -> dict:
         out["review_avg"] = p["review_avg"]
     if p.get("review_count"):
         out["review_count"] = p["review_count"]
+    if p.get("view_count"):
+        out["view_count"] = p["view_count"]
     return out
 
 
@@ -1147,6 +1172,8 @@ _PAPERS_SORT_KEYS: dict[str, Callable[[dict], Any]] = {
     "hf": lambda p: p.get("hf_upvotes") or 0,
     "stars": lambda p: p.get("github_stars") or 0,
     "reviews": lambda p: p.get("review_avg") or 0,
+    "views": lambda p: p.get("view_count") or 0,
+    "popularity": lambda p: (p.get("hf_upvotes") or 0) * 3 + (p.get("citation_count") or 0) * 2 + (p.get("github_stars") or 0) + (p.get("view_count") or 0),
 }
 
 
@@ -1188,6 +1215,70 @@ def _filter_papers_by_query(papers: list[dict], query: str) -> list[dict]:
         )).lower()
         if q in hay:
             out.append(p)
+    return out
+
+
+def _filter_papers_by_metrics(
+    papers: list[dict],
+    min_cit: int | None = None,
+    max_cit: int | None = None,
+    min_views: int | None = None,
+    max_views: int | None = None,
+    min_stars: int | None = None,
+    max_stars: int | None = None,
+    min_hf: int | None = None,
+    max_hf: int | None = None,
+    has_code: bool = False,
+    views_map: dict[str, int] | None = None,
+) -> list[dict]:
+    """依指標範圍與程式碼有無過濾論文列表。缺值視為 0。回傳新 list,不動原資料。"""
+    if not papers:
+        return []
+
+    if (min_views is not None or max_views is not None) and views_map is None:
+        try:
+            ids = [_derive_paper_id(p) for p in papers]
+            views_map = _paper_store.views_for_ids(ids)
+        except Exception:
+            views_map = {}
+
+    out: list[dict] = []
+    for p in papers:
+        if has_code and not p.get("github_url"):
+            continue
+
+        if min_cit is not None or max_cit is not None:
+            cit = int(p.get("citation_count") or 0)
+            if min_cit is not None and cit < min_cit:
+                continue
+            if max_cit is not None and cit > max_cit:
+                continue
+
+        if min_stars is not None or max_stars is not None:
+            stars = int(p.get("github_stars") or 0)
+            if min_stars is not None and stars < min_stars:
+                continue
+            if max_stars is not None and stars > max_stars:
+                continue
+
+        if min_hf is not None or max_hf is not None:
+            hf = int(p.get("hf_upvotes") or 0)
+            if min_hf is not None and hf < min_hf:
+                continue
+            if max_hf is not None and hf > max_hf:
+                continue
+
+        if min_views is not None or max_views is not None:
+            v_val = p.get("view_count")
+            if v_val is None and views_map is not None:
+                v_val = views_map.get(_derive_paper_id(p), 0)
+            views = int(v_val or 0)
+            if min_views is not None and views < min_views:
+                continue
+            if max_views is not None and views > max_views:
+                continue
+
+        out.append(p)
     return out
 
 
@@ -1368,6 +1459,15 @@ async def get_papers(
     sort: str = "latest",
     q: Annotated[str, Query(max_length=256)] = "",
     topic: Annotated[str, Query(max_length=64)] = "",
+    min_citations: int | None = None,
+    max_citations: int | None = None,
+    min_views: int | None = None,
+    max_views: int | None = None,
+    min_stars: int | None = None,
+    max_stars: int | None = None,
+    min_hf: int | None = None,
+    max_hf: int | None = None,
+    has_code: bool = False,
 ):
     days = _bounded_int(days, default=7, min_value=1, max_value=_PAPERS_DAYS_MAX)
     max_results = _bounded_int(
@@ -1376,18 +1476,59 @@ async def get_papers(
         min_value=1,
         max_value=_PAPERS_MAX_RESULTS,
     )
+    min_citations = _bounded_optional_int(min_citations)
+    max_citations = _bounded_optional_int(max_citations)
+    min_views = _bounded_optional_int(min_views)
+    max_views = _bounded_optional_int(max_views)
+    min_stars = _bounded_optional_int(min_stars)
+    max_stars = _bounded_optional_int(max_stars)
+    min_hf = _bounded_optional_int(min_hf)
+    max_hf = _bounded_optional_int(max_hf)
+    has_code = bool(has_code)
+
     cache_key, builder = _papers_build_spec(discipline_id, days, max_results, topic=topic)
     body, etag = await _papers_cache.get_or_build(cache_key, builder)
-    # 預設(latest + 無查詢)走快取直出;只有非預設排序或帶查詢時才反序列化轉換,
+    # 預設(latest + 無查詢 + 無指標過濾)走快取直出;只有非預設排序、帶查詢或指標過濾時才反序列化轉換,
     # 讓前端常態請求零額外開銷(cache 存的是 bytes,canonical 已是 latest 序)。
+    # 篩選請求底層復用相同的 papers pool cache_key 以維持 warmup 高命中率,不額外膨脹 cache_key 維度。
     sort = (sort or "latest").lower()
     q = (q or "").strip()
-    needs_transform = q or (sort in _PAPERS_SORT_KEYS and sort != "latest")
+    has_metric_filter = (
+        min_citations is not None
+        or max_citations is not None
+        or min_views is not None
+        or max_views is not None
+        or min_stars is not None
+        or max_stars is not None
+        or min_hf is not None
+        or max_hf is not None
+        or has_code
+    )
+    needs_transform = bool(q or has_metric_filter or (sort in _PAPERS_SORT_KEYS and sort != "latest"))
     if needs_transform:
         payload = _json.loads(body)
         papers = payload.get("papers", [])
         if q:
             papers = _filter_papers_by_query(papers, q)
+        if has_metric_filter:
+            papers = _filter_papers_by_metrics(
+                papers,
+                min_cit=min_citations,
+                max_cit=max_citations,
+                min_views=min_views,
+                max_views=max_views,
+                min_stars=min_stars,
+                max_stars=max_stars,
+                min_hf=min_hf,
+                max_hf=max_hf,
+                has_code=has_code,
+            )
+        if sort in ("views", "popularity") and any(p.get("view_count") is None for p in papers):
+            try:
+                vmap = await asyncio.to_thread(_paper_store.views_for_ids, [_derive_paper_id(p) for p in papers])
+                papers = [{**p, "view_count": vmap.get(_derive_paper_id(p), 0)} if p.get("view_count") is None else p for p in papers]
+            except Exception:
+                pass
         papers = _sort_papers(papers, sort if sort in _PAPERS_SORT_KEYS else "latest")
         payload = {
             **payload,
@@ -1429,6 +1570,15 @@ async def get_combined_feed(
     sort: str = "latest",
     q: Annotated[str, Query(max_length=256)] = "",
     max_results: int = 300,
+    min_citations: int | None = None,
+    max_citations: int | None = None,
+    min_views: int | None = None,
+    max_views: int | None = None,
+    min_stars: int | None = None,
+    max_stars: int | None = None,
+    min_hf: int | None = None,
+    max_hf: int | None = None,
+    has_code: bool = False,
 ):
     """合併「我的領域」feed(#14):多個 discipline 併成單一去重、排序的串流。
 
@@ -1443,6 +1593,15 @@ async def get_combined_feed(
     max_results = _bounded_int(
         max_results, default=300, min_value=1, max_value=_PAPERS_RESPONSE_CAP
     )
+    min_citations = _bounded_optional_int(min_citations)
+    max_citations = _bounded_optional_int(max_citations)
+    min_views = _bounded_optional_int(min_views)
+    max_views = _bounded_optional_int(max_views)
+    min_stars = _bounded_optional_int(min_stars)
+    max_stars = _bounded_optional_int(max_stars)
+    min_hf = _bounded_optional_int(min_hf)
+    max_hf = _bounded_optional_int(max_hf)
+    has_code = bool(has_code)
 
     async def _pool(fid: str) -> list[dict]:
         key, builder = _papers_build_spec(fid, days, _FEED_PER_FIELD_MAX)
@@ -1477,10 +1636,41 @@ async def get_combined_feed(
             index[k] = len(merged)
             merged.append(entry)
 
+    has_metric_filter = (
+        min_citations is not None
+        or max_citations is not None
+        or min_views is not None
+        or max_views is not None
+        or min_stars is not None
+        or max_stars is not None
+        or min_hf is not None
+        or max_hf is not None
+        or has_code
+    )
+    if has_metric_filter:
+        merged = _filter_papers_by_metrics(
+            merged,
+            min_cit=min_citations,
+            max_cit=max_citations,
+            min_views=min_views,
+            max_views=max_views,
+            min_stars=min_stars,
+            max_stars=max_stars,
+            min_hf=min_hf,
+            max_hf=max_hf,
+            has_code=has_code,
+        )
+
     q = (q or "").strip()
     if q:
         merged = _filter_papers_by_query(merged, q)
     sort = (sort or "latest").lower()
+    if sort in ("views", "popularity") and any(p.get("view_count") is None for p in merged):
+        try:
+            vmap = await asyncio.to_thread(_paper_store.views_for_ids, [_derive_paper_id(p) for p in merged])
+            merged = [{**p, "view_count": vmap.get(_derive_paper_id(p), 0)} if p.get("view_count") is None else p for p in merged]
+        except Exception:
+            pass
     merged = _sort_papers(merged, sort if sort in _PAPERS_SORT_KEYS else "latest")
     if len(merged) > max_results:
         merged = merged[:max_results]

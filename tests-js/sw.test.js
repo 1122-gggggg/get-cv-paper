@@ -184,3 +184,36 @@ test('cached static assets register their revalidation with waitUntil', async ()
     const refreshed = await cache.match(request);
     assert.equal(await refreshed.text(), 'fresh');
 });
+
+test('filtered api queries on papers and feed routes match SWR and do not bypass', async () => {
+    const worker = createWorker(async () => new Response('{"papers":[]}', {
+        headers: { ETag: '"filter-1"', 'Content-Type': 'application/json' },
+    }));
+
+    for (const urlPath of [
+        '/api/papers?min_citations=5&min_views=10&sort=popularity',
+        '/api/feed?fields=cs.cv,cs.ai&min_stars=20&has_code=true',
+    ]) {
+        const event = dispatchFetch(worker, urlPath);
+        assert.notEqual(event.responsePromise, undefined, urlPath);
+        const resp = await event.responsePromise;
+        assert.equal(resp.status, 200);
+    }
+});
+
+test('changed API ETags on feed route broadcast update with filter search params', async () => {
+    const worker = createWorker(async () => new Response('{"papers":[]}', { headers: { ETag: '"feed-new"' } }));
+    const search = '?fields=cs.cv&min_citations=10';
+    const request = new Request(`https://scholarly.test/api/feed${search}`);
+    const cache = await worker.caches.open(worker.apiCache);
+    await cache.put(request, new Response('{"papers":[]}', { headers: { ETag: '"feed-old"' } }));
+
+    const event = dispatchFetch(worker, `/api/feed${search}`);
+    await event.responsePromise;
+    assert.equal(event.waitUntilCalls.length, 1);
+    await Promise.all(event.waitUntilCalls);
+    assert.equal(worker.messages.length, 1);
+    assert.equal(worker.messages[0].type, 'api-updated');
+    assert.equal(worker.messages[0].path, '/api/feed');
+    assert.equal(worker.messages[0].search, search);
+});

@@ -133,7 +133,9 @@ def make_etag(payload: bytes) -> str:
     return 'W/"' + hashlib.md5(payload).hexdigest()[:16] + '"'
 
 
-_DEFAULT_CACHE_HEADERS = {"Cache-Control": "public, max-age=60, must-revalidate"}
+_DEFAULT_CACHE_HEADERS = {
+    "Cache-Control": "public, max-age=60, stale-while-revalidate=60, stale-if-error=120",
+}
 
 
 def etag_response(
@@ -144,6 +146,7 @@ def etag_response(
 ) -> Response:
     """Return 304 on If-None-Match match, else a JSON Response with ETag."""
     headers = dict(_DEFAULT_CACHE_HEADERS)
+    headers.setdefault("CDN-Cache-Control", "public, max-age=30, stale-while-revalidate=120")
     if extra_headers:
         headers.update(extra_headers)
     headers["ETag"] = etag

@@ -521,6 +521,7 @@ header {
 /* count-header 是常駐元素(index.html 內);time-range 推到右邊、sort 緊接其後 */
 .count-header > .time-range-wrapper { margin-left: auto; }
 .count-header > .sort-wrapper { margin-left: 0; }
+.count-header > .metrics-filter-bar { margin-left: 0; }
 
 .time-range-wrapper {
     display: inline-flex;
@@ -676,6 +677,134 @@ header {
 
 .sort-item.active span {
     color: rgba(165, 180, 252, 0.45);
+}
+
+/* ── Metrics Filter Bar (指標精確篩選列) ── */
+.metrics-filter-bar {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 3px 8px;
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    background: var(--surface-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.metrics-filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 999px;
+    padding: 1px 6px;
+}
+
+.metrics-filter-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    margin-right: 2px;
+}
+
+.metrics-filter-input {
+    width: 38px;
+    background: transparent;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 2px 3px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.75rem;
+    text-align: center;
+    outline: none;
+    -moz-appearance: textfield;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.metrics-filter-input::-webkit-outer-spin-button,
+.metrics-filter-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.metrics-filter-input:focus {
+    border-color: rgba(99, 102, 241, 0.6);
+    background: rgba(99, 102, 241, 0.08);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.metrics-filter-input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.45;
+    font-size: 0.68rem;
+}
+
+.metrics-filter-sep {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    opacity: 0.6;
+    user-select: none;
+}
+
+.metrics-filter-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.metrics-filter-checkbox-label:hover {
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.metrics-filter-checkbox {
+    accent-color: #6366f1;
+    cursor: pointer;
+    margin: 0;
+}
+
+.metrics-filter-reset {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    font-size: 0.68rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+
+.metrics-filter-reset:hover {
+    background: rgba(239, 68, 68, 0.3);
+    color: #fff;
+}
+
+body.light-mode .metrics-filter-group {
+    background: rgba(79, 70, 229, 0.04);
+    border-color: rgba(79, 70, 229, 0.12);
+}
+
+body.light-mode .metrics-filter-input {
+    border-color: rgba(79, 70, 229, 0.16);
+    color: var(--text-primary);
 }
 
 
@@ -1999,6 +2128,7 @@ body.light-mode .fav-export-btn { color: #0369a1; background: rgba(2, 132, 199, 
     .category-btn { padding: 0.55rem 1rem; font-size: 0.86rem; }
     .glass-select { width: 100%; padding-right: 1rem; }
     .kbd-hint { display: none; }
+    .metrics-filter-bar { width: 100%; border-radius: 12px; }
 }
 
 /* ── Count Header (結果標題列) ── */

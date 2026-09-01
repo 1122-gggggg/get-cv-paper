@@ -73,11 +73,18 @@ function scheduleSave(key, getVal, delay = 800) {
 // ── 預計算 lower-case 欄位以加速搜尋/分類篩選 ─────────────────────
 function indexPapers(papers) {
     for (const p of papers) {
-        if (p._indexed) continue;
-        p._titleLc   = (p.title   || '').toLowerCase();
-        p._summaryLc = (p.summary || '').toLowerCase();
-        p._authorsLc = (p.authors || []).join(' ').toLowerCase();
-        p._indexed = true;
+        if (!p._indexed) {
+            p._titleLc   = (p.title   || '').toLowerCase();
+            p._summaryLc = (p.summary || '').toLowerCase();
+            p._authorsLc = (p.authors || []).join(' ').toLowerCase();
+            p._indexed = true;
+        }
+        if (p._popScore === undefined && typeof getPopularityScore === 'function') {
+            p._popScore = getPopularityScore(p);
+        }
+        if (p._hotScore === undefined && typeof getHotScore === 'function') {
+            p._hotScore = getHotScore(p);
+        }
     }
     return papers;
 }
@@ -621,45 +628,88 @@ function compareNewest(a, b) {
     return paperTimestamp(b) - paperTimestamp(a);
 }
 
+const _scoreMemo = new WeakMap();
+
 function getPopularityScore(paper) {
+    if (paper && typeof paper === 'object') {
+        const cached = _scoreMemo.get(paper)?.popularity ?? paper._popScore;
+        if (cached !== undefined) return cached;
+    }
     const citations = Math.max(0, getCitationCount(paper.url, paper));
     const influential = Math.max(0, getInfluentialCitations(paper.url));
     const hfUpvotes = Math.max(0, paper.hf_upvotes || 0);
     const velocity = Math.max(0, getCitationSpeed(paper));
     const localViews = getPaperClicks(paper.url);
-    return (
+    const score = (
         _logScale(hfUpvotes, 200) * 36 +
         _logScale(velocity, 50) * 24 +
         _logScale(citations, 500) * 22 +
         _logScale(influential, 80) * 12 +
         _logScale(localViews, 12) * 6
     );
+    if (paper && typeof paper === 'object') {
+        let m = _scoreMemo.get(paper);
+        if (!m) { m = {}; _scoreMemo.set(paper, m); }
+        m.popularity = score;
+        paper._popScore = score;
+    }
+    return score;
 }
 
 function getValueScore(paper) {
-    return computeSignal(paper).score || 0;
+    if (paper && typeof paper === 'object') {
+        const cached = _scoreMemo.get(paper)?.value ?? paper._valScore;
+        if (cached !== undefined) return cached;
+    }
+    const score = computeSignal(paper).score || 0;
+    if (paper && typeof paper === 'object') {
+        let m = _scoreMemo.get(paper);
+        if (!m) { m = {}; _scoreMemo.set(paper, m); }
+        m.value = score;
+        paper._valScore = score;
+    }
+    return score;
 }
 
-// ── Hot & New：新鮮度為主、社群/速度為輔 ─────────────────────────
-// 與 popularity/value 不同：那兩個都是滯後訊號(引用要時間累積),對「剛出爐」論文盲視。
-// 這裡讓 recency 主導(指數衰減,~半衰期 7 天),再用 HF buzz / 引用速度 / 有無 code 當加速器。
 function getHotScore(paper) {
+    if (paper && typeof paper === 'object') {
+        const cached = _scoreMemo.get(paper)?.hot ?? paper._hotScore;
+        if (cached !== undefined) return cached;
+    }
     const days = daysSincePublication(paper) || 30;
     const recency = Math.exp(-days / 10);                          // 0..1
     const hf = _logScale(Math.max(0, paper.hf_upvotes || 0), 200); // 社群熱度
     const vel = _logScale(Math.max(0, getCitationSpeed(paper)), 50);
     const cit = _logScale(Math.max(0, getCitationCount(paper.url, paper)), 500);
     const code = paper.github_url ? 1 : 0;
-    return recency * 55 + hf * 22 + vel * 13 + cit * 7 + code * 3;
+    const score = recency * 55 + hf * 22 + vel * 13 + cit * 7 + code * 3;
+    if (paper && typeof paper === 'object') {
+        let m = _scoreMemo.get(paper);
+        if (!m) { m = {}; _scoreMemo.set(paper, m); }
+        m.hot = score;
+        paper._hotScore = score;
+    }
+    return score;
 }
 
 async function prepareMetricData(papers, sortValue = currentSortValue) {
     if (!papers?.length) return;
     if (['hot', 'popularity', 'citations', 'value', 'velocity'].includes(sortValue)) {
         await fetchCitationCounts(papers);
+        for (const p of papers) {
+            delete p._popScore;
+            delete p._hotScore;
+            _scoreMemo.delete(p);
+            p._popScore = getPopularityScore(p);
+            p._hotScore = getHotScore(p);
+        }
     }
     if (sortValue === 'value') {
         await fetchPwcData(papers);
+        for (const p of papers) {
+            delete p._valScore;
+            p._valScore = getValueScore(p);
+        }
     }
 }
 
@@ -667,14 +717,13 @@ function sortPapersByMetric(papers, sortValue = currentSortValue) {
     const sorted = [...papers];
     const tie = (a, b) => compareNewest(a, b);
     if (sortValue === 'hot') {
-        sorted.sort((a, b) => (getHotScore(b) - getHotScore(a)) || tie(a, b));
+        sorted.sort((a, b) => ((b._hotScore ?? getHotScore(b)) - (a._hotScore ?? getHotScore(a))) || tie(a, b));
     } else if (sortValue === 'popularity') {
-        sorted.sort((a, b) => (getPopularityScore(b) - getPopularityScore(a)) || tie(a, b));
+        sorted.sort((a, b) => ((b._popScore ?? getPopularityScore(b)) - (a._popScore ?? getPopularityScore(a))) || tie(a, b));
     } else if (sortValue === 'citations' || sortValue === 'hot3m') {
-        // hot3m = 90 天 pool 已在 papersForCurrentTimeRange 限縮,這裡只負責按引用排序
         sorted.sort((a, b) => (Math.max(0, getCitationCount(b.url, b)) - Math.max(0, getCitationCount(a.url, a))) || tie(a, b));
     } else if (sortValue === 'value') {
-        sorted.sort((a, b) => (getValueScore(b) - getValueScore(a)) || tie(a, b));
+        sorted.sort((a, b) => ((b._valScore ?? getValueScore(b)) - (a._valScore ?? getValueScore(a))) || tie(a, b));
     } else if (sortValue === 'velocity') {
         sorted.sort((a, b) => (getCitationSpeed(b) - getCitationSpeed(a)) || tie(a, b));
     } else if (sortValue === 'hf') {
@@ -3159,6 +3208,9 @@ async function filterPapers() {
                 return tLc.includes(query) || sLc.includes(query) || aLc.includes(query);
             });
         }
+        if (typeof hasActiveMetricsFilters === 'function' && hasActiveMetricsFilters()) {
+            papers = applyMetricsFilter(papers);
+        }
         papers = applyTimeRange(papers);
         await prepareMetricData(papers, sortValue);
         papers = sortPapersByMetric(papers, sortValue);
@@ -3353,6 +3405,17 @@ async function filterPapers() {
         try {
             const days = getTimeRangeMeta().days || 7;
             const params = new URLSearchParams({ fields: fields.join(','), days: String(days), max_results: '300' });
+            if (typeof _metricsFilterState !== 'undefined') {
+                if (_metricsFilterState.min_citations !== null) params.set('min_citations', String(_metricsFilterState.min_citations));
+                if (_metricsFilterState.max_citations !== null) params.set('max_citations', String(_metricsFilterState.max_citations));
+                if (_metricsFilterState.min_views !== null) params.set('min_views', String(_metricsFilterState.min_views));
+                if (_metricsFilterState.max_views !== null) params.set('max_views', String(_metricsFilterState.max_views));
+                if (_metricsFilterState.min_stars !== null) params.set('min_stars', String(_metricsFilterState.min_stars));
+                if (_metricsFilterState.max_stars !== null) params.set('max_stars', String(_metricsFilterState.max_stars));
+                if (_metricsFilterState.min_hf !== null) params.set('min_hf', String(_metricsFilterState.min_hf));
+                if (_metricsFilterState.max_hf !== null) params.set('max_hf', String(_metricsFilterState.max_hf));
+                if (_metricsFilterState.has_code) params.set('has_code', 'true');
+            }
             const res = await fetch(`/api/feed?${params}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
@@ -3371,6 +3434,52 @@ async function filterPapers() {
         return;
     }
 
+    if (typeof hasActiveMetricsFilters === 'function' && hasActiveMetricsFilters()) {
+        const disc = ACTIVE_DISCIPLINE?.id || 'cv';
+        const days = getTimeRangeMeta().days || 7;
+        const params = new URLSearchParams({
+            discipline: disc,
+            days: String(days),
+            max_results: String(PAPER_FETCH_MAX),
+        });
+        if (query) params.set('q', query);
+        if (currentCategory && currentCategory !== 'all' && !SPECIAL_FILTERS.has(currentCategory)) {
+            params.set('topic', currentCategory);
+        }
+        if (currentSortValue) {
+            params.set('sort', currentSortValue);
+        }
+        if (_metricsFilterState.min_citations !== null) params.set('min_citations', String(_metricsFilterState.min_citations));
+        if (_metricsFilterState.max_citations !== null) params.set('max_citations', String(_metricsFilterState.max_citations));
+        if (_metricsFilterState.min_views !== null) params.set('min_views', String(_metricsFilterState.min_views));
+        if (_metricsFilterState.max_views !== null) params.set('max_views', String(_metricsFilterState.max_views));
+        if (_metricsFilterState.min_stars !== null) params.set('min_stars', String(_metricsFilterState.min_stars));
+        if (_metricsFilterState.max_stars !== null) params.set('max_stars', String(_metricsFilterState.max_stars));
+        if (_metricsFilterState.min_hf !== null) params.set('min_hf', String(_metricsFilterState.min_hf));
+        if (_metricsFilterState.max_hf !== null) params.set('max_hf', String(_metricsFilterState.max_hf));
+        if (_metricsFilterState.has_code) params.set('has_code', 'true');
+
+        papersGrid.classList.add('hidden');
+        noResults.classList.add('hidden');
+        loader.classList.remove('hidden');
+        try {
+            const res = await fetch(`/api/papers?${params.toString()}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            let papers = indexPapers(Array.isArray(data.papers) ? data.papers : []);
+            papers = applyTimeRange(papers);
+            await prepareMetricData(papers, sortValue);
+            papers = sortPapersByMetric(papers, sortValue);
+            renderPapers(papers, buildMetricTitle());
+        } catch (e) {
+            loader.classList.add('hidden');
+            showToast('篩選載入失敗：' + e.message);
+        } finally {
+            loader.classList.add('hidden');
+        }
+        return;
+    }
+
     const pool = await papersForCurrentTimeRange();
     let filtered = applyFilter(pool, query);
     filtered = applyTimeRange(filtered);
@@ -3379,7 +3488,6 @@ async function filterPapers() {
     filtered = sortPapersByMetric(filtered, sortValue);
     renderPapers(filtered, buildMetricTitle());
 }
-
 async function filterByTag(tag) {
     if (!tag) return;
     const urls = new Set(Object.keys(paperTags).filter(u => (paperTags[u] || []).includes(tag)));
@@ -3412,6 +3520,9 @@ async function searchAllPapers(query) {
         const data = await res.json();
         if (signal.aborted) return;
         let papers = applyTimeRange(indexPapers(data.papers || []));
+        if (typeof hasActiveMetricsFilters === 'function' && hasActiveMetricsFilters()) {
+            papers = applyMetricsFilter(papers);
+        }
         await prepareMetricData(papers, currentSortValue);
         papers = sortPapersByMetric(papers, currentSortValue);
         renderPapers(papers, `全網搜尋「${query}」（${getTimeRangeMeta().label} · 依${getSortMeta().label}）`);
@@ -3851,6 +3962,180 @@ function showToast(msg) {
     }, 1800);
 }
 
+// ── 指標精確篩選（引用/觀看/星數/HF/Code） ─────────────────────────
+const _metricsFilterState = {
+    min_citations: null,
+    max_citations: null,
+    min_views: null,
+    max_views: null,
+    min_stars: null,
+    max_stars: null,
+    min_hf: null,
+    max_hf: null,
+    has_code: false,
+};
+
+function hasActiveMetricsFilters() {
+    return _metricsFilterState.min_citations !== null
+        || _metricsFilterState.max_citations !== null
+        || _metricsFilterState.min_views !== null
+        || _metricsFilterState.max_views !== null
+        || _metricsFilterState.min_stars !== null
+        || _metricsFilterState.max_stars !== null
+        || _metricsFilterState.min_hf !== null
+        || _metricsFilterState.max_hf !== null
+        || !!_metricsFilterState.has_code;
+}
+
+function readMetricsFiltersFromInputs() {
+    const bar = document.getElementById('metricsFilterBar');
+    if (!bar) return _metricsFilterState;
+
+    const parseVal = (input) => {
+        if (!input || input.value.trim() === '') return null;
+        const n = parseInt(input.value.trim(), 10);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+
+    const minCitEl = bar.querySelector('[data-filter="min_citations"]');
+    const maxCitEl = bar.querySelector('[data-filter="max_citations"]');
+    const minViewsEl = bar.querySelector('[data-filter="min_views"]');
+    const maxViewsEl = bar.querySelector('[data-filter="max_views"]');
+    const minStarsEl = bar.querySelector('[data-filter="min_stars"]');
+    const maxStarsEl = bar.querySelector('[data-filter="max_stars"]');
+    const minHfEl = bar.querySelector('[data-filter="min_hf"]');
+    const maxHfEl = bar.querySelector('[data-filter="max_hf"]');
+    const hasCodeEl = bar.querySelector('[data-filter="has_code"]');
+
+    _metricsFilterState.min_citations = parseVal(minCitEl);
+    _metricsFilterState.max_citations = parseVal(maxCitEl);
+    _metricsFilterState.min_views = parseVal(minViewsEl);
+    _metricsFilterState.max_views = parseVal(maxViewsEl);
+    _metricsFilterState.min_stars = parseVal(minStarsEl);
+    _metricsFilterState.max_stars = parseVal(maxStarsEl);
+    _metricsFilterState.min_hf = parseVal(minHfEl);
+    _metricsFilterState.max_hf = parseVal(maxHfEl);
+    _metricsFilterState.has_code = !!hasCodeEl?.checked;
+
+    const resetBtn = document.getElementById('metricsFilterReset');
+    if (resetBtn) {
+        resetBtn.classList.toggle('hidden', !hasActiveMetricsFilters());
+    }
+
+    return _metricsFilterState;
+}
+
+function syncMetricsInputsFromState() {
+    const bar = document.getElementById('metricsFilterBar');
+    if (!bar) return;
+    const setVal = (sel, val) => {
+        const el = bar.querySelector(sel);
+        if (el) el.value = (val !== null && val !== undefined) ? String(val) : '';
+    };
+    setVal('[data-filter="min_citations"]', _metricsFilterState.min_citations);
+    setVal('[data-filter="max_citations"]', _metricsFilterState.max_citations);
+    setVal('[data-filter="min_views"]', _metricsFilterState.min_views);
+    setVal('[data-filter="max_views"]', _metricsFilterState.max_views);
+    setVal('[data-filter="min_stars"]', _metricsFilterState.min_stars);
+    setVal('[data-filter="max_stars"]', _metricsFilterState.max_stars);
+    setVal('[data-filter="min_hf"]', _metricsFilterState.min_hf);
+    setVal('[data-filter="max_hf"]', _metricsFilterState.max_hf);
+    const hasCodeEl = bar.querySelector('[data-filter="has_code"]');
+    if (hasCodeEl) hasCodeEl.checked = !!_metricsFilterState.has_code;
+
+    const resetBtn = document.getElementById('metricsFilterReset');
+    if (resetBtn) {
+        resetBtn.classList.toggle('hidden', !hasActiveMetricsFilters());
+    }
+}
+
+let _metricsFilterUrlTimer = null;
+function writeMetricsFiltersToURL() {
+    if (_restoringUrlState) return;
+    clearTimeout(_metricsFilterUrlTimer);
+    _metricsFilterUrlTimer = setTimeout(() => {
+        writeUrlState();
+    }, 300);
+}
+
+function applyMetricsFilter(papers) {
+    if (!hasActiveMetricsFilters() || !Array.isArray(papers)) return papers;
+    return papers.filter(p => {
+        if (_metricsFilterState.min_citations !== null) {
+            const cit = (p.citations ?? getCitationCount(p.url, p)) || 0;
+            if (cit < _metricsFilterState.min_citations) return false;
+        }
+        if (_metricsFilterState.max_citations !== null) {
+            const cit = (p.citations ?? getCitationCount(p.url, p)) || 0;
+            if (cit > _metricsFilterState.max_citations) return false;
+        }
+        if (_metricsFilterState.min_views !== null) {
+            const v = (p.views ?? getPaperClicks(p.url)) || 0;
+            if (v < _metricsFilterState.min_views) return false;
+        }
+        if (_metricsFilterState.max_views !== null) {
+            const v = (p.views ?? getPaperClicks(p.url)) || 0;
+            if (v > _metricsFilterState.max_views) return false;
+        }
+        if (_metricsFilterState.min_stars !== null) {
+            const s = p.github_stars || 0;
+            if (s < _metricsFilterState.min_stars) return false;
+        }
+        if (_metricsFilterState.max_stars !== null) {
+            const s = p.github_stars || 0;
+            if (s > _metricsFilterState.max_stars) return false;
+        }
+        if (_metricsFilterState.min_hf !== null) {
+            const h = p.hf_upvotes || 0;
+            if (h < _metricsFilterState.min_hf) return false;
+        }
+        if (_metricsFilterState.max_hf !== null) {
+            const h = p.hf_upvotes || 0;
+            if (h > _metricsFilterState.max_hf) return false;
+        }
+        if (_metricsFilterState.has_code) {
+            if (!p.github_url) return false;
+        }
+        return true;
+    });
+}
+
+let _filterDebounceTimer = null;
+function wireMetricsFilterBar() {
+    const bar = document.getElementById('metricsFilterBar');
+    if (!bar) return;
+
+    const onFilterChange = () => {
+        readMetricsFiltersFromInputs();
+        writeMetricsFiltersToURL();
+        clearTimeout(_filterDebounceTimer);
+        _filterDebounceTimer = setTimeout(() => {
+            fetchAndRender();
+        }, 300);
+    };
+
+    bar.querySelectorAll('input').forEach(input => {
+        input.addEventListener('input', onFilterChange);
+        input.addEventListener('change', onFilterChange);
+    });
+
+    const resetBtn = document.getElementById('metricsFilterReset');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            bar.querySelectorAll('input[type="number"]').forEach(i => { i.value = ''; });
+            const chk = bar.querySelector('input[type="checkbox"]');
+            if (chk) chk.checked = false;
+            readMetricsFiltersFromInputs();
+            writeUrlState();
+            fetchAndRender();
+        });
+    }
+}
+
+async function fetchAndRender() {
+    await filterPapers();
+}
+
 // ── #11 可分享 / 可書籤的 URL 狀態 ───────────────────────────────
 const URL_STATE_DEFAULTS = { cat: 'all', sort: 'hot', range: 'week' };
 let _restoringUrlState = false;
@@ -3858,7 +4143,29 @@ let _restoringUrlState = false;
 function readUrlState() {
     try {
         const p = new URLSearchParams(window.location.search);
-        return { d: p.get('d'), cat: p.get('cat'), q: p.get('q'), sort: p.get('sort'), range: p.get('range') };
+        const parseNum = (k) => {
+            const v = p.get(k);
+            if (v === null || v === '') return null;
+            const n = parseInt(v, 10);
+            return Number.isFinite(n) ? n : null;
+        };
+        const hasCode = p.get('has_code');
+        return {
+            d: p.get('d'),
+            cat: p.get('cat'),
+            q: p.get('q'),
+            sort: p.get('sort'),
+            range: p.get('range'),
+            min_citations: parseNum('min_citations'),
+            max_citations: parseNum('max_citations'),
+            min_views: parseNum('min_views'),
+            max_views: parseNum('max_views'),
+            min_stars: parseNum('min_stars'),
+            max_stars: parseNum('max_stars'),
+            min_hf: parseNum('min_hf'),
+            max_hf: parseNum('max_hf'),
+            has_code: hasCode === 'true' || hasCode === '1',
+        };
     } catch (_error) {
         return {};
     }
@@ -3876,6 +4183,22 @@ function writeUrlState() {
         set('sort', currentSortValue, URL_STATE_DEFAULTS.sort);
         set('range', currentTimeRange, URL_STATE_DEFAULTS.range);
         if (q) p.set('q', q); else p.delete('q');
+
+        const setNum = (k, v) => {
+            if (v !== null && v !== undefined && v !== '') p.set(k, String(v));
+            else p.delete(k);
+        };
+        setNum('min_citations', _metricsFilterState.min_citations);
+        setNum('max_citations', _metricsFilterState.max_citations);
+        setNum('min_views', _metricsFilterState.min_views);
+        setNum('max_views', _metricsFilterState.max_views);
+        setNum('min_stars', _metricsFilterState.min_stars);
+        setNum('max_stars', _metricsFilterState.max_stars);
+        setNum('min_hf', _metricsFilterState.min_hf);
+        setNum('max_hf', _metricsFilterState.max_hf);
+        if (_metricsFilterState.has_code) p.set('has_code', 'true');
+        else p.delete('has_code');
+
         const qs = p.toString();
         window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
     } catch (_error) {}
@@ -3886,6 +4209,17 @@ function applyUrlStateLive(s) {
     try {
         if (s.sort && SORT_VALUES.has(s.sort)) currentSortValue = s.sort;
         if (s.range && TIME_RANGE_VALUES.has(s.range)) currentTimeRange = s.range;
+        _metricsFilterState.min_citations = s.min_citations ?? null;
+        _metricsFilterState.max_citations = s.max_citations ?? null;
+        _metricsFilterState.min_views = s.min_views ?? null;
+        _metricsFilterState.max_views = s.max_views ?? null;
+        _metricsFilterState.min_stars = s.min_stars ?? null;
+        _metricsFilterState.max_stars = s.max_stars ?? null;
+        _metricsFilterState.min_hf = s.min_hf ?? null;
+        _metricsFilterState.max_hf = s.max_hf ?? null;
+        _metricsFilterState.has_code = !!s.has_code;
+        syncMetricsInputsFromState();
+
         const targetCat = s.cat || 'all';
         currentCategory = targetCat;
         _storage.set(LAST_CATEGORY_KEY, targetCat);
@@ -3918,7 +4252,7 @@ function applyUrlStateLive(s) {
         if (si) { si.value = s.q || ''; si.classList.toggle('has-text', !!s.q); }
         if (typeof syncTopConfActiveState === 'function') syncTopConfActiveState();
         if (s.q) { if (window._SEMANTIC_ON) semanticSearchPapers(s.q); else searchAllPapers(s.q); }
-        else filterPapers();
+        else fetchAndRender();
     } finally {
         _restoringUrlState = false;
     }
@@ -3978,6 +4312,18 @@ document.addEventListener('DOMContentLoaded', () => {
     applyBuiltinModifications();
     loadPinnedTopics();
     bindCategoryBtns();
+    // 指標篩選列綁定與狀態恢復
+    wireMetricsFilterBar();
+    if (_urlState.min_citations !== null) _metricsFilterState.min_citations = _urlState.min_citations;
+    if (_urlState.max_citations !== null) _metricsFilterState.max_citations = _urlState.max_citations;
+    if (_urlState.min_views !== null) _metricsFilterState.min_views = _urlState.min_views;
+    if (_urlState.max_views !== null) _metricsFilterState.max_views = _urlState.max_views;
+    if (_urlState.min_stars !== null) _metricsFilterState.min_stars = _urlState.min_stars;
+    if (_urlState.max_stars !== null) _metricsFilterState.max_stars = _urlState.max_stars;
+    if (_urlState.min_hf !== null) _metricsFilterState.min_hf = _urlState.min_hf;
+    if (_urlState.max_hf !== null) _metricsFilterState.max_hf = _urlState.max_hf;
+    if (_urlState.has_code) _metricsFilterState.has_code = true;
+    syncMetricsInputsFromState();
 
     // 恢復上次的分類（URL cat 優先；找不到對應按鈕就 fallback 到 all,避免 stale filter 套用卻沒視覺回饋）
     const savedCategory = _urlState.cat || _storage.get(LAST_CATEGORY_KEY);

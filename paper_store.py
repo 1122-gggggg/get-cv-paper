@@ -119,6 +119,7 @@ class PaperStore:
                 PRIMARY KEY (paper_id, view_date)
             );
             CREATE INDEX IF NOT EXISTS idx_views_date ON paper_views(view_date);
+            CREATE INDEX IF NOT EXISTS idx_views_pid_date ON paper_views(paper_id, view_date);
             CREATE TABLE IF NOT EXISTS oai_state (
                 oai_set TEXT PRIMARY KEY,
                 last_date TEXT NOT NULL,
@@ -469,6 +470,51 @@ class PaperStore:
             p["view_count"] = int(views)
             out.append(p)
         return out
+
+    def views_for_ids(self, ids: list[str], days: int = 7) -> dict[str, int]:
+        """批量查詢 paper_ids 在近 days 天內的 views 總數。"""
+        if not ids:
+            return {}
+        cutoff = self._cutoff(days)
+        out: dict[str, int] = {}
+        unique_ids = [pid for pid in set(ids) if pid]
+        if not unique_ids:
+            return {}
+        try:
+            with self._lock:
+                for i in range(0, len(unique_ids), 900):
+                    chunk = unique_ids[i : i + 900]
+                    placeholders = ",".join("?" * len(chunk))
+                    cur = self._conn.execute(
+                        f"SELECT paper_id, SUM(count) FROM paper_views "
+                        f"WHERE view_date>=? AND paper_id IN ({placeholders}) "
+                        f"GROUP BY paper_id",
+                        [cutoff, *chunk],
+                    )
+                    for pid, cnt in cur.fetchall():
+                        out[pid] = int(cnt or 0)
+        except Exception as e:
+            logger.warning("paper_store: views_for_ids failed: %s", e)
+            return {}
+        return out
+
+    def paper_views_count(self, paper_id: str, days: int = 7) -> int:
+        """單一 paper_id 在近 days 天內的 views 總數。"""
+        if not paper_id:
+            return 0
+        cutoff = self._cutoff(days)
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "SELECT COALESCE(SUM(count), 0) FROM paper_views "
+                    "WHERE view_date>=? AND paper_id=?",
+                    (cutoff, paper_id),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            logger.warning("paper_store: paper_views_count failed for %s: %s", paper_id, e)
+            return 0
 
     def cleanup(self, max_age_days: int = 100, snapshot_age_days: int = 120) -> int:
         cutoff = self._cutoff(max_age_days)

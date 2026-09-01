@@ -33,6 +33,32 @@ class CacheJsonTests(unittest.TestCase):
         self.assertEqual(body, b'{"papers":[{"title":"A","count":1}]}')
 
 
+    def test_etag_response_headers_and_304(self):
+        from starlette.requests import Request
+        from cache import etag_response, make_etag, _DEFAULT_CACHE_HEADERS
+
+        self.assertIn("stale-while-revalidate=60", _DEFAULT_CACHE_HEADERS["Cache-Control"])
+        self.assertIn("stale-if-error=120", _DEFAULT_CACHE_HEADERS["Cache-Control"])
+
+        body = b'{"hello":"world"}'
+        etag = make_etag(body)
+
+        # Regular request
+        req = Request({"type": "http", "method": "GET", "headers": []})
+        resp = etag_response(req, body, etag)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers.get("etag"), etag)
+        self.assertEqual(resp.headers.get("cdn-cache-control"), "public, max-age=30, stale-while-revalidate=120")
+        self.assertIn("stale-while-revalidate=60", resp.headers.get("cache-control", ""))
+        self.assertIn("stale-if-error=120", resp.headers.get("cache-control", ""))
+
+        # 304 match
+        req_304 = Request({"type": "http", "method": "GET", "headers": [(b"if-none-match", etag.encode("utf-8"))]})
+        resp_304 = etag_response(req_304, body, etag)
+        self.assertEqual(resp_304.status_code, 304)
+        self.assertEqual(resp_304.headers.get("etag"), etag)
+        self.assertEqual(resp_304.headers.get("cdn-cache-control"), "public, max-age=30, stale-while-revalidate=120")
+
 class CacheJsonStaleWhileRevalidateTests(unittest.TestCase):
     def setUp(self):
         self._clock = _FakeClock()

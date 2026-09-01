@@ -1,9 +1,9 @@
 // Scholarly Service Worker
 // 策略:
 //   靜態資源 → stale-while-revalidate
-//   /api/papers, /api/trending → SWR + 背景刷新後 postMessage 通知前端
+//   /api/papers, /api/feed, /api/trending → SWR + 背景刷新後 postMessage 通知前端
 //   其他路徑 → 由瀏覽器直接連線
-const VERSION = 'v12';
+const VERSION = 'v13';
 const STATIC_CACHE = `scholarly-static-${VERSION}`;
 const API_CACHE = `scholarly-api-${VERSION}`;
 const STATIC_ASSETS = [
@@ -19,7 +19,7 @@ const STATIC_ASSETS = [
     '/static/og-image.svg',
 ];
 
-const SWR_API_PATHS = ['/api/papers', '/api/trending'];
+const SWR_API_PATHS = ['/api/papers', '/api/feed', '/api/trending'];
 
 self.addEventListener('install', (event) => {
     event.waitUntil(
@@ -80,7 +80,7 @@ async function apiSWR(request, url, event) {
     const cachedEtag = cached?.headers.get('ETag') || null;
     const networkRequest = conditionalRequest(request, cached);
     const reportRefreshFailure = async () => {
-        if (cached && url.pathname === '/api/papers') {
+        if (cached && (url.pathname === '/api/papers' || url.pathname === '/api/feed')) {
             await broadcast({ type: 'api-refresh-failed', path: url.pathname, search: url.search });
         }
     };

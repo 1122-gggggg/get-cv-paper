@@ -201,6 +201,37 @@
                         <button class="sort-item" data-value="hot3m" role="menuitemradio" aria-checked="false">🔥 近三月熱門 <span>Hot 3M</span></button>
                     </div>
                 </div>
+                <div class="metrics-filter-bar" id="metricsFilterBar" aria-label="指標精確篩選">
+                    <div class="metrics-filter-group" title="引用數範圍 (Citations)">
+                        <span class="metrics-filter-label">引用</span>
+                        <input type="number" class="metrics-filter-input" data-filter="min_citations" placeholder="min" min="0" max="100000" aria-label="最小引用數">
+                        <span class="metrics-filter-sep">-</span>
+                        <input type="number" class="metrics-filter-input" data-filter="max_citations" placeholder="max" min="0" max="100000" aria-label="最大引用數">
+                    </div>
+                    <div class="metrics-filter-group" title="觀看數範圍 (Views)">
+                        <span class="metrics-filter-label">觀看</span>
+                        <input type="number" class="metrics-filter-input" data-filter="min_views" placeholder="min" min="0" aria-label="最小觀看數">
+                        <span class="metrics-filter-sep">-</span>
+                        <input type="number" class="metrics-filter-input" data-filter="max_views" placeholder="max" min="0" aria-label="最大觀看數">
+                    </div>
+                    <div class="metrics-filter-group" title="GitHub 星數範圍 (Stars)">
+                        <span class="metrics-filter-label">星數</span>
+                        <input type="number" class="metrics-filter-input" data-filter="min_stars" placeholder="min" min="0" aria-label="最小 GitHub 星數">
+                        <span class="metrics-filter-sep">-</span>
+                        <input type="number" class="metrics-filter-input" data-filter="max_stars" placeholder="max" min="0" aria-label="最大 GitHub 星數">
+                    </div>
+                    <div class="metrics-filter-group" title="HuggingFace 讚數範圍 (HF Upvotes)">
+                        <span class="metrics-filter-label">HF</span>
+                        <input type="number" class="metrics-filter-input" data-filter="min_hf" placeholder="min" min="0" aria-label="最小 HF 讚數">
+                        <span class="metrics-filter-sep">-</span>
+                        <input type="number" class="metrics-filter-input" data-filter="max_hf" placeholder="max" min="0" aria-label="最大 HF 讚數">
+                    </div>
+                    <label class="metrics-filter-checkbox-label" title="僅顯示有開源程式碼的論文">
+                        <input type="checkbox" class="metrics-filter-checkbox" data-filter="has_code" id="filterHasCode" aria-label="僅顯示有開源程式碼">
+                        <span>Code</span>
+                    </label>
+                    <button type="button" class="metrics-filter-reset hidden" id="metricsFilterReset" aria-label="清除所有指標篩選" title="清除篩選">✕</button>
+                </div>
                 <button id="favExportBtn" class="fav-export-btn hidden" title="匯出收藏為 BibTeX">⬇ 匯出 BibTeX</button>
                 <span class="count-meta"></span>
             </div>
