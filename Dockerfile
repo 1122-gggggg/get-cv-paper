@@ -19,7 +19,7 @@ RUN H=$(cat static/app-utils.js static/script.js static/style.css static/discipl
     sed -i "s/const VERSION=[\"'][^\"']*[\"']/const VERSION='$H'/" static/sw.js
 
 # ── Stage 2: runtime ───────────────────────────────────────────
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
